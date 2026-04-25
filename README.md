@@ -2,16 +2,16 @@
 
 This is the repo for **DaoBrew AI** — building in public.
 
-We share the Claude Code skills we use internally to develop DaoBrew. Each skill is a self-contained `.skill` file you can drop into your own Claude Code setup.
+We share the Claude Code skills we use internally to develop DaoBrew. Each skill lives in its own folder with a self-contained `.skill` file plus a short README.
 
 ## Skills
 
 | Skill | Description |
 |---|---|
-| [design-language-translator](./design-language-translator.skill) | Translates plain-language design intent (EN/中文) into professional designer vocabulary. When given an image, also runs an independent design audit and flags 1–3 high-impact issues the user didn't mention. |
-| [bazi-reader](./bazi-reader.skill) | Generates a personalized Bazi (八字 / Chinese Four Pillars) reading from a birth datetime. Useful for gathering perspective on a specific month or date — e.g., the Meta 5/20 layoff window — by analyzing the energetic interaction between your chart and that day's pillar. Also handy as a reference layer for long-term strategy planning around fundraising, launches, hiring, or other key events. |
+| [design-language-translator](./design-language-translator) | Translates plain-language design intent (EN / 中文) into professional designer vocabulary. When given an image, also runs an independent design audit and flags 1–3 high-impact issues the user didn't mention. |
+| [bazi-reader](./bazi-reader) | Generates a personalized Bazi (八字 / Chinese Four Pillars) reading from a birth datetime. Useful for gathering perspective on a specific month or date — e.g., the Meta 5/20 layoff window — by analyzing the energetic interaction between your chart and that day's pillar. Also handy as a reference layer for long-term strategy planning around fundraising, launches, hiring, or other key events. |
 
-<!-- Add new skills above this line. Format: | [name](./name.skill) | one-line description | -->
+<!-- Add new skills above this line. Format: | [name](./folder) | one-line description | -->
 
 ## A note on the bazi-reader
 
@@ -21,10 +21,20 @@ Treat the output as a **reference**, not a verdict. Use it the way you'd use a w
 
 ## Using a skill
 
-1. Download the `.skill` file from this repo.
+1. Open the skill's folder and download its `.skill` file.
 2. Drop it into your Claude Code skills directory (`~/.claude/skills/` or your project's `.claude/skills/`).
 3. Restart Claude Code or reload skills. The skill activates automatically when its trigger phrases appear in conversation.
+
+Each skill folder also has its own README with triggers, install notes, and design principles.
 
 ## About DaoBrew
 
 DaoBrew AI is building agentic tools at the intersection of TCM (Traditional Chinese Medicine) and modern AI. Follow along here as we open-source the tooling that makes the work possible.
+
+## Related: DaoBrew Wellness MCP
+
+We also maintain an open-source MCP server for TCM-grounded wellness tooling:
+
+**[github.com/DaoBrewAI/daobrew-wellness-mcp](https://github.com/DaoBrewAI/daobrew-wellness-mcp)**
+
+The MCP server exposes DaoBrew's wellness primitives — TCM constitution analysis, diet / lifestyle guidance grounded in classical frameworks, and biometric-aware recommendations — as tools any MCP-compatible client (Claude Desktop, Claude Code, Cursor, etc.) can call. Skills in this repo are about workflow; the MCP server is about giving any agent direct, structured access to DaoBrew's domain knowledge. If you're building anything in the health / wellness space and want an opinionated TCM layer, start there.
