@@ -17,6 +17,18 @@ Each skill lives in its own folder with a self-contained `.skill` file and a sho
 
 ---
 
+## 🔌 Plugins
+
+Plugins are multi-skill systems — install the whole folder for the full workflow, or cherry-pick individual skills. See each plugin's README for details.
+
+| Plugin | What it does |
+| :--- | :--- |
+| 🧠 &nbsp;[**10x-engineer**](./10x-engineer) | A complete engineering workflow toolkit — brainstorming, planning, TDD, debugging, code review, and subagent-driven development. Twelve skills that chain together to take you from idea to merged PR. |
+
+<!-- Add new plugins above this line. Format: | emoji [**name**](./folder) | one-line description | -->
+
+---
+
 ## 📌 On the bazi-reader
 
 > **Not a prediction tool.** It does not forecast layoffs, illness, financial outcomes, or any specific life event.

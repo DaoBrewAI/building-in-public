@@ -1,0 +1,50 @@
+{
+  "name": "10x-engineer",
+  "version": "1.0.0",
+  "description": "DaoBrew's curated engineering workflow toolkit for Claude Code — brainstorming, planning, TDD, systematic debugging, subagent-driven development, code review, and verification skills for autonomous multi-hour development sessions.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "10x-engineer",
+    "workflow",
+    "brainstorming",
+    "planning",
+    "tdd",
+    "test-driven-development",
+    "debugging",
+    "systematic-debugging",
+    "subagent",
+    "code-review",
+    "daobrew"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "commands": [
+    "./commands/"
+  ],
+  "agents": [
+    "./agents/code-reviewer.md"
+  ],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  },
+  "credits": {
+    "based_on": "obra/superpowers by Jesse Vincent",
+    "source": "https://github.com/obra/superpowers"
+  }
+}
