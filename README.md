@@ -24,6 +24,7 @@ Plugins are multi-skill systems — install the whole folder for the full workfl
 | Plugin | What it does |
 | :--- | :--- |
 | 🧠 &nbsp;[**10x-engineer**](./10x-engineer) | A complete engineering workflow toolkit — brainstorming, planning, TDD, debugging, code review, and subagent-driven development. Twelve skills that chain together to take you from idea to merged PR. |
+| 📋 &nbsp;[**project-planner**](./project-planner) | Multi-phase project planning and execution framework. Break down large projects into phases, generate detailed plans, track status, and execute task-by-task with build verification and checkpoints. |
 
 <!-- Add new plugins above this line. Format: | emoji [**name**](./folder) | one-line description | -->
 

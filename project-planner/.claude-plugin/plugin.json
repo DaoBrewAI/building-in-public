@@ -1,0 +1,22 @@
+{
+  "name": "project-planner",
+  "version": "1.0.0",
+  "description": "DaoBrew's multi-phase project planning and execution framework for Claude Code. Generates detailed, task-level implementation plans from a master plan, tracks phase status, and executes plans task-by-task with build verification, parallel execution, and checkpoint-based progress tracking.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  },
+  "keywords": [
+    "planning",
+    "implementation",
+    "project-management",
+    "multi-phase",
+    "task-execution",
+    "build-verification",
+    "daobrew"
+  ],
+  "skills": ["./skills/"],
+  "commands": []
+}
