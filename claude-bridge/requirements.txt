@@ -1,0 +1,1 @@
+# No external dependencies — stdlib only (subprocess, sqlite3, uuid, os, time)
