@@ -112,6 +112,7 @@ Then proceed to: **10x-engineer:finishing-a-development-branch**
 ## Red Flags
 
 **Never (both modes):**
+- **Change existing behavior unless absolutely necessary for the current task** — no drive-by refactors, no style cleanups, no "while I'm here" improvements
 - Skip reviews (spec compliance OR code quality)
 - Proceed with unfixed issues
 - Make subagent read plan file (provide full text instead)

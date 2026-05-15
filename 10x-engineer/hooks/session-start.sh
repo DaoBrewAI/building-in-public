@@ -36,7 +36,7 @@ cat <<EOF
 {
   "hookSpecificOutput": {
     "hookEventName": "SessionStart",
-    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Below is the full content of your '10x-engineer:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\n\n${using_superpowers_escaped}</EXTREMELY_IMPORTANT>"
+    "additionalContext": "<EXTREMELY_IMPORTANT>\nYou have superpowers.\n\n**Below is the full content of your '10x-engineer:using-superpowers' skill - your introduction to using skills. For all other skills, use the 'Skill' tool:**\n\n${using_superpowers_escaped}</EXTREMELY_IMPORTANT>\n<EXTREMELY_IMPORTANT>\n## Change Scope Discipline\nDo not change existing behavior unless it is absolutely necessary for the current implementation, fix, or design. No drive-by refactors, no style cleanups, no \"while I'm here\" improvements. Only change what the task demands.\n</EXTREMELY_IMPORTANT>"
   }
 }
 EOF

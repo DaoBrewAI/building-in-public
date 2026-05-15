@@ -44,6 +44,7 @@ Start by understanding the current project context, then ask questions one at a 
 
 ## Key Principles
 
+- **Change scope discipline** — Never propose changes to existing behavior unless absolutely necessary for this task. No drive-by refactors or cleanups. Only change what the task demands.
 - **One question at a time** - Don't overwhelm with multiple questions
 - **Multiple choice preferred** - Easier to answer than open-ended when possible
 - **YAGNI ruthlessly** - Remove unnecessary features from all designs

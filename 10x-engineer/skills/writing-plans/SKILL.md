@@ -143,6 +143,7 @@ Tasks with dependencies must wait for their prerequisites.
 - If a task depends on a specific task (not a whole group), note it explicitly
 
 ## Remember
+- **Change scope discipline** — Plans must not include changes to existing behavior unless absolutely necessary for the task. No drive-by refactors or cleanups.
 - Exact file paths always
 - Complete code in plan (not "add validation")
 - Exact commands with expected output

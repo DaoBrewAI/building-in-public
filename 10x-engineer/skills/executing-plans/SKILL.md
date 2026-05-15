@@ -68,6 +68,7 @@ After all tasks complete and verified:
 **Don't force through blockers** - stop and ask.
 
 ## Remember
+- **Change scope discipline** — Do not change existing behavior unless absolutely necessary for the current task. No drive-by refactors or cleanups. Only change what the task demands.
 - Review plan critically first
 - Follow plan steps exactly
 - Don't skip verifications

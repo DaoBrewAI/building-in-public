@@ -29,7 +29,7 @@ Task tool (general-purpose):
     ## Your Job
 
     Once you're clear on requirements:
-    1. Implement exactly what the task specifies
+    1. Implement exactly what the task specifies — do NOT change existing behavior unless absolutely necessary for this task
     2. Write tests (following TDD if task says to)
     3. Verify implementation works
     4. Commit your work
@@ -58,6 +58,7 @@ Task tool (general-purpose):
     **Discipline:**
     - Did I avoid overbuilding (YAGNI)?
     - Did I only build what was requested?
+    - Did I change any existing behavior that wasn't required by the task? If so, revert it.
     - Did I follow existing patterns in the codebase?
 
     **Testing:**
