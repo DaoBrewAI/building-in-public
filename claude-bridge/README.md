@@ -19,6 +19,7 @@ Sometimes you're away from your desk but want to kick off a task, check on a pro
 - **Claude Code CLI** (`claude`) installed and in your PATH
 - **Codex CLI** (`codex`) installed and in your PATH *(optional — only if you want to use `/codex`)*
 - **Full Disk Access** granted to your terminal app (System Settings > Privacy & Security > Full Disk Access) — needed to read `~/Library/Messages/chat.db`
+- **Mac must stay awake** — the bridge is a polling loop that suspends when the Mac sleeps. Use `caffeinate -i` or adjust Energy Saver settings to prevent sleep while the bridge is running.
 
 ## Setup
 
