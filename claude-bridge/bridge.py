@@ -19,6 +19,38 @@ from config import (
 )
 
 
+# --- Image Conversion ---
+
+CONVERTED_DIR = os.path.join(tempfile.gettempdir(), "claude-bridge-images")
+
+
+def convert_image_if_needed(path, mime_type):
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".heic", ".heif") and mime_type not in ("image/heic", "image/heif"):
+        return path
+
+    os.makedirs(CONVERTED_DIR, exist_ok=True)
+    basename = os.path.splitext(os.path.basename(path))[0]
+    out_path = os.path.join(CONVERTED_DIR, f"{basename}_{hash(path) & 0xFFFFFF:06x}.jpeg")
+
+    if os.path.exists(out_path):
+        return out_path
+
+    try:
+        subprocess.run(
+            ["sips", "-s", "format", "jpeg", "-Z", "2048", path, "--out", out_path],
+            capture_output=True,
+            timeout=15,
+        )
+        if os.path.exists(out_path):
+            print(f"[IMAGE] Converted HEIC to JPEG: {out_path}")
+            return out_path
+    except Exception as e:
+        print(f"[IMAGE] Conversion failed for {path}: {e}")
+
+    return path
+
+
 # --- iMessage Reader ---
 
 
@@ -63,7 +95,8 @@ def poll_new_messages(db_path, senders, last_rowid):
             for filename, mime_type in attachments:
                 path = os.path.expanduser(filename)
                 if os.path.exists(path):
-                    image_tags.append(f"[Image: {path}]")
+                    path = convert_image_if_needed(path, mime_type)
+                    image_tags.append(f"[Attached image: {path} — use your Read tool to view this file]")
 
             if image_tags:
                 parts = image_tags
@@ -168,7 +201,10 @@ def send_imessage(recipient, text, retries=2):
 SYSTEM_PROMPT = (
     "Do not create git worktrees. Work directly on the current branch in the current directory. "
     "Before switching branches, always verify the branch exists with 'git branch --list <name>'. "
-    "Never create new branches unless the user explicitly asks you to create one."
+    "Never create new branches unless the user explicitly asks you to create one. "
+    "When the user's message contains '[Attached image: /path — use your Read tool to view this file]', "
+    "you MUST use the Read tool to view the image at that path before responding. "
+    "The image is a local file on disk. Read it to see its contents."
 )
 
 
