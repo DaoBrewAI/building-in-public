@@ -29,7 +29,19 @@ When all tasks pass, **Finish Branch** verifies tests one final time and present
 
 ## Installation
 
-### Full Plugin (recommended)
+### Global install (recommended)
+
+Run the installer to make every skill, command, the code-reviewer agent, and the session-start hook available in **all** projects via your user-level config (`~/.claude`):
+
+```bash
+./10x-engineer/install.sh
+```
+
+Restart Claude Code (or start a new session) afterward to load them. Re-running is safe — it refreshes the toolkit's files and merges its SessionStart hook into `~/.claude/settings.json` without disturbing your other settings. To target a specific config dir instead of `~/.claude`, pass it as an argument: `./10x-engineer/install.sh /path/to/.claude`.
+
+> **Note:** On Claude Code for the web, `~/.claude` is ephemeral (reclaimed when the container recycles), so a global install there lasts only for the current session. For persistence across web sessions, commit the toolkit under a project's `.claude/` directory, or run the installer on your local machine where `~/.claude` persists.
+
+### Full Plugin
 
 Copy the `10x-engineer/` folder into your Claude Code plugins directory:
 
