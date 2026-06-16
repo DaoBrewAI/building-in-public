@@ -1,8 +1,8 @@
 # building-in-public
 
-> The repo for **DaoBrew AI** — sharing the Claude Code skills we use internally to build at the intersection of TCM and modern AI.
+> The repo for **DaoBrew AI** — sharing agent workflow guides and Claude Code skills we use internally to build at the intersection of TCM and modern AI.
 
-Each skill lives in its own folder with a self-contained `.skill` file and a short README. Drop one into your Claude Code setup and it activates on its trigger phrases.
+Each guide, skill, or plugin lives in its own folder with a short README. Skills also include a self-contained `.skill` file you can drop into your Claude Code setup.
 
 ---
 
@@ -14,6 +14,16 @@ Each skill lives in its own folder with a self-contained `.skill` file and a sho
 | ☯️ &nbsp;[**bazi-reader**](./bazi-reader) | Generates a personalized Bazi (八字) reading from a birth datetime. Useful for reading the energy around a specific date — e.g. the Meta 5/20 layoff window — or as a reference layer for long-horizon planning like fundraising and key launches. |
 
 <!-- Add new skills above this line. Format: | emoji [**name**](./folder) | one-line description | -->
+
+---
+
+## Guides
+
+| Guide | What it covers |
+| :--- | :--- |
+| [**codex-loop-engineering**](./codex-loop-engineering) | How to set up loop engineering with Codex using a durable goal, multi-phase tracker, constraints, verification, handoff state, and git checkpoints. |
+
+<!-- Add new guides above this line. Format: | [**name**](./folder) | one-line description | -->
 
 ---
 
