@@ -21,7 +21,7 @@ Each guide, skill, or plugin lives in its own folder with a short README. Skills
 
 | Guide | What it covers |
 | :--- | :--- |
-| [**codex-loop-engineering**](./codex-loop-engineering) | How to set up loop engineering with Codex using a durable goal, multi-phase tracker, constraints, verification, handoff state, and git checkpoints. |
+| [**codex-loop-engineering**](./codex-loop-engineering) | Installable Codex loop engineering starter with easy setup, goal/tracker/constraints/handoff templates, verification checkpoints, and auto-chain handoff rules. |
 
 <!-- Add new guides above this line. Format: | [**name**](./folder) | one-line description | -->
 
