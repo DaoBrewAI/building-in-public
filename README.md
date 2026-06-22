@@ -10,6 +10,7 @@ Each guide, skill, or plugin lives in its own folder with a short README. Skills
 
 | Skill | What it does |
 | :--- | :--- |
+| 🔁 &nbsp;[**codex-loop-engineering**](./codex-loop-engineering) | Codex skill and installer for repo-local goal/tracker/constraints/handoff loops, checkpoint verification, and verified auto-chain continuation sessions. |
 | 🎨 &nbsp;[**design-language-translator**](./design-language-translator) | Translates plain-language design intent (EN / 中文) into professional designer vocabulary. With an image attached, also runs an independent design audit and flags 1–3 high-impact issues you didn't mention. |
 | ☯️ &nbsp;[**bazi-reader**](./bazi-reader) | Generates a personalized Bazi (八字) reading from a birth datetime. Useful for reading the energy around a specific date — e.g. the Meta 5/20 layoff window — or as a reference layer for long-horizon planning like fundraising and key launches. |
 
@@ -21,7 +22,7 @@ Each guide, skill, or plugin lives in its own folder with a short README. Skills
 
 | Guide | What it covers |
 | :--- | :--- |
-| [**codex-loop-engineering**](./codex-loop-engineering) | Installable Codex loop engineering starter with easy setup, goal/tracker/constraints/handoff templates, verification checkpoints, and auto-chain handoff rules. |
+| [**codex-loop-engineering**](./codex-loop-engineering) | Codex loop engineering operating guide and loop-file installer. |
 
 <!-- Add new guides above this line. Format: | [**name**](./folder) | one-line description | -->
 
@@ -51,6 +52,23 @@ Treat the output as a **reference**, not a verdict. Like a weather forecast befo
 ---
 
 ## 🚀 Using a skill
+
+### Codex skills
+
+For Codex folder skills such as `codex-loop-engineering`:
+
+```bash
+cd /path/to/building-in-public/codex-loop-engineering
+bash install-codex-skill.sh
+```
+
+Restart or reload Codex, then invoke it by name:
+
+```text
+Use $codex-loop-engineering to continue the loop.
+```
+
+### Claude Code `.skill` files
 
 1. Open the skill's folder and download its `.skill` file.
 2. Drop it into your Claude Code skills directory:

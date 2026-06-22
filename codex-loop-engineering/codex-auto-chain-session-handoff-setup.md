@@ -46,6 +46,13 @@ Clone the public repo:
 git clone git@github.com:DaoBrewAI/building-in-public.git
 ```
 
+Install the Codex skill:
+
+```bash
+cd /path/to/building-in-public/codex-loop-engineering
+bash install-codex-skill.sh
+```
+
 From the project repo where Codex should work, run:
 
 ```bash
@@ -228,6 +235,15 @@ If true and the Codex environment supports creating the next session, Codex may 
 
 The handoff is what lets the loop survive context windows, app restarts, or a new Codex thread.
 
+## Where The Policy Lives
+
+Use this stack:
+
+1. **Repo loop files are authoritative.** The current project's `goal.md`, `tracker.md`, `constraints.md`, and `handoff.md` decide what the next session does.
+2. **This starter is the reusable template.** Update `codex-loop-engineering/` when the operating model improves, then reinstall or copy the relevant sections into active projects.
+3. **Memory is advisory.** Memory helps Codex remember Neo's preferences, but it should never be the only source of auto-chain policy.
+4. **A skill can automate the workflow.** A future skill should be a thin executor around the repo files: validate state, run the close-out checklist, create and verify the next thread, and write the verified ID back. It should not replace the repo-local contract.
+
 ## Starting The Codex Goal
 
 If Codex Goals are available, use `/goal` for the durable objective:
@@ -310,6 +326,32 @@ scoped, run verification, update tracker and handoff, commit, and push.
 ```
 
 Important boundary: terminal setup can install the files. Creating the next Codex Desktop session is done by Codex while an active session is running, using the Codex thread tools. It is not a background daemon.
+
+### Continuation Session Health Check
+
+`create_thread` can return before the new Codex thread is fully usable. Treat the returned ID as provisional until it is verified.
+
+After creating a continuation session:
+
+1. Run `list_threads` or `read_thread` for the returned ID.
+2. Rename the thread to the planned phase title with `set_thread_title`.
+3. Run `read_thread` again and confirm:
+   - the thread is visible;
+   - the title is correct;
+   - the first turn exists;
+   - the status is `inProgress` or completed normally;
+   - recent items show the agent started reading the handoff or skill docs.
+4. Only after that, write the thread ID into `tracker.md`, `handoff.md`, and the final response.
+
+If the returned ID cannot be read, cannot be found in `list_threads`, or title updates fail repeatedly:
+
+- do not report it as the next session;
+- do not write the ID into the project docs;
+- mark it as stale if it was already written;
+- create one replacement continuation session;
+- verify the replacement before recording it.
+
+If a visible continuation thread stays `inProgress` without any new items for an unusual amount of time, treat it as possibly wedged. Read the thread status first. If it is unreadable or unopenable, create a replacement from the current repo handoff and update the stale ID out of the docs.
 
 ## Stop Conditions
 
