@@ -76,7 +76,11 @@ Before creating the next session:
 1. Update tracker and handoff first.
 2. Ensure the next checkpoint is specific and scoped.
 3. Build a short continuation prompt that points at the loop files.
-4. Use a fresh project-local Codex thread, not a fork, unless the user explicitly asks for a fork.
+4. Preserve any explicit user-required session settings from the current loop
+   contract, such as model, reasoning effort, service tier, or mode. If the
+   user requires a specific Codex model/thinking setting, pass it explicitly to
+   `create_thread`; do not rely on defaults.
+5. Use a fresh project-local Codex thread, not a fork, unless the user explicitly asks for a fork.
 
 After `create_thread`, treat the returned ID as provisional. Do not record or report it as successful until it passes the health check.
 
@@ -90,6 +94,10 @@ A continuation thread is accepted only after all of these pass:
 4. `read_thread` shows the first turn exists.
 5. The first turn status is `inProgress` or completed normally.
 6. Recent items show the agent started reading the handoff, skill docs, or project files.
+7. Any explicit user-required session settings were applied and recorded, such
+   as `model=gpt-5.5` and `thinking=xhigh` for extra high thinking. If the tool
+   does not expose a requested setting, write that limitation in the handoff and
+   do not claim the setting was verified.
 
 Only then write the ID into `tracker.md`, `handoff.md`, and the final response.
 

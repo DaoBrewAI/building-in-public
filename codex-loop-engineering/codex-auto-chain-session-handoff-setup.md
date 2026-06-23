@@ -306,6 +306,9 @@ Rules:
 - Do not fork.
 - Do not paste long plans into the next Goal.
 - Use a short Goal that points to this handoff file and the tracker.
+- Preserve explicit session settings the user requires, such as model,
+  reasoning effort, service tier, or mode. Pass exposed settings directly to
+  `create_thread`; for example, extra high thinking is `thinking: "xhigh"`.
 - Update tracker and handoff before creating the next session.
 - Commit and push before creating the next session.
 - Stop if a blocker needs human approval, external credentials, or external data.
@@ -341,7 +344,11 @@ After creating a continuation session:
    - the first turn exists;
    - the status is `inProgress` or completed normally;
    - recent items show the agent started reading the handoff or skill docs.
-4. Only after that, write the thread ID into `tracker.md`, `handoff.md`, and the final response.
+4. Confirm explicit user-required session settings were applied. Example:
+   `model: "gpt-5.5"` and `thinking: "xhigh"` for GPT-5.5 extra high. If a
+   requested setting is not exposed by the thread tool, record the limitation in
+   the handoff instead of silently dropping it.
+5. Only after that, write the thread ID into `tracker.md`, `handoff.md`, and the final response.
 
 If the returned ID cannot be read, cannot be found in `list_threads`, or title updates fail repeatedly:
 

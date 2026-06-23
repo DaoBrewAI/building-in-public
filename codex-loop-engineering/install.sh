@@ -159,6 +159,8 @@ If true and the Codex environment supports creating the next session, Codex may 
 - commits and pushes the checkpoint
 - confirms unchecked work remains
 - confirms no blocker needs human approval, credentials, or external data
+- applies any explicit session settings required by this loop, such as model,
+  reasoning effort, service tier, or mode
 
 ## Continuation Session Health Check
 
@@ -167,7 +169,10 @@ A returned thread ID is provisional until verified. After creating the next Code
 1. Confirm `list_threads` or `read_thread` can find the returned ID or exact title.
 2. Rename the thread to the planned checkpoint title.
 3. Confirm `read_thread` shows the first turn exists and is active or completed normally.
-4. Only then record the thread ID in `tracker.md`, `handoff.md`, and the final response.
+4. Confirm any explicit session settings required by this loop were applied. If
+   the tool cannot expose or verify a required setting, record that limitation
+   and do not claim the setting was verified.
+5. Only then record the thread ID in `tracker.md`, `handoff.md`, and the final response.
 
 If the ID is not visible, title updates fail repeatedly, or the thread becomes unreadable/unopenable, do not treat it as the next session. Mark the stale ID in the handoff if needed, create one replacement session, verify it, and record only the verified replacement ID.
 EOF

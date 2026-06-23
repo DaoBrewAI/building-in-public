@@ -152,7 +152,11 @@ When auto-chain creates the next Codex session, a returned thread ID is not enou
 2. `list_threads` or `read_thread` can find that exact ID or exact title.
 3. `set_thread_title` succeeds, or a follow-up `read_thread` confirms the title is already correct.
 4. `read_thread` shows the first turn exists and is either `inProgress` or completed normally.
-5. Only then write the thread ID into `tracker.md`, `handoff.md`, and the final response.
+5. Any explicit user-required session settings were applied and recorded. For
+   example, if the loop requires GPT-5.5 and extra high thinking, call
+   `create_thread` with `model: "gpt-5.5"` and `thinking: "xhigh"` rather than
+   relying on defaults.
+6. Only then write the thread ID into `tracker.md`, `handoff.md`, and the final response.
 
 If the ID cannot be found, the title update fails repeatedly, or the thread is visible but never starts work, do not record it as the next session. Mark it as stale in the handoff, create one replacement session, verify the replacement, and record only the verified thread ID.
 
