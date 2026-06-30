@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_NAME="${PROJECT_NAME:-$(basename "$PWD")}"
 LOOP_DIR="${LOOP_DIR:-docs/loop}"
-AUTO_CHAIN="${AUTO_CHAIN:-false}"
+AUTO_CHAIN="${AUTO_CHAIN:-true}"
 OVERWRITE="${OVERWRITE:-false}"
 
 GOAL_FILE="$LOOP_DIR/goal.md"
@@ -152,15 +152,18 @@ Execute the next unchecked item in `docs/loop/tracker.md`.
 EOF
     printf 'auto_chain_next_session: %s\n\n' "$AUTO_CHAIN"
     cat <<'EOF'
-If true and the Codex environment supports creating the next session, Codex may create a project-local continuation session after it:
+If true and the Codex environment supports creating the next session, Codex must
+attempt to create a verified project-local continuation session after it:
 
 - updates tracker and handoff
 - runs verification
-- commits and pushes the checkpoint
+- commits and pushes only if the project constraints or user request require it
 - confirms unchecked work remains
 - confirms no blocker needs human approval, credentials, or external data
 - applies any explicit session settings required by this loop, such as model,
   reasoning effort, service tier, or mode
+- treats "one checkpoint only" as a boundary for implementation work, not as a
+  reason to skip creating the next session
 
 ## Continuation Session Health Check
 
@@ -210,7 +213,8 @@ First read:
 
 Then execute the next unchecked tracker item. Work in coherent checkpoints.
 After each checkpoint, run verification, update tracker and handoff, inspect the diff,
-commit the checkpoint, and continue only if the next step is still in scope.
+commit only when allowed or required, and create a verified continuation session
+when unchecked work remains and no stop condition fired.
 
 Stop when the goal is verified, a blocker needs human input, or the budget is reached.
 EOF

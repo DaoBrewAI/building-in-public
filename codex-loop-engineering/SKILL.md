@@ -54,6 +54,9 @@ If the user prompt conflicts with loop files, inspect current artifacts before d
 ## Checkpoint Execution
 
 Run exactly one coherent checkpoint unless the loop files explicitly say otherwise.
+This means one implementation/checkpoint slice in the current session. It does
+not mean the project should stop after the checkpoint when unchecked work
+remains.
 
 Default sequence:
 
@@ -63,24 +66,76 @@ Default sequence:
 4. Update tracker and handoff with evidence paths, commands, and remaining work.
 5. Inspect local changes.
 6. Commit/push only if the project constraints or user request require it.
-7. Decide whether to stop, block, or auto-chain.
+7. If unchecked work remains and no stop condition applies, create the next
+   verified continuation session. Do not leave the user to start it manually.
 
 Stop on blockers that need credentials, external data, destructive action, production deploys, or user approval.
 
 ## Auto-Chain Protocol
 
-Auto-chain only when the loop files or user explicitly allow it and unchecked work remains.
+For a loop continuation, delegated loop run, or any session where the user has
+asked Codex to continue a multi-phase repo loop, auto-chain is the default close
+out when unchecked work remains. Do not interpret "one checkpoint only" as "do
+not create the next session."
+
+Create the next session unless one of these is true:
+
+- the tracker has no unchecked work left;
+- the user explicitly says not to create the next session, stop here, or only
+  update the handoff;
+- `constraints.md` or `handoff.md` explicitly disables auto-chain for this loop;
+- the checkpoint is blocked on credentials, external data, destructive action,
+  production deploy, or user approval;
+- required thread-management tools are unavailable after discovery.
+
+If a loop file has `auto_chain_next_session: false`, treat it as a disable only
+when it is fresh and explicit for the current loop. If the user prompt says to
+continue or create the next session, the user prompt wins and the handoff should
+be corrected.
+
+If thread-management tools are not already available, discover them before
+stopping. In Codex Desktop, search for the thread tools first: `create_thread`,
+`set_thread_title`, `list_threads`, and `read_thread`. If discovery or a backend
+handler fails, record the tool/backend failure in the handoff and final answer
+instead of silently ending without a next session.
 
 Before creating the next session:
 
 1. Update tracker and handoff first.
 2. Ensure the next checkpoint is specific and scoped.
-3. Build a short continuation prompt that points at the loop files.
+3. Build a short continuation prompt that points at the loop files and names the
+   exact next unchecked tracker item.
 4. Preserve any explicit user-required session settings from the current loop
    contract, such as model, reasoning effort, service tier, or mode. If the
    user requires a specific Codex model/thinking setting, pass it explicitly to
    `create_thread`; do not rely on defaults.
 5. Use a fresh project-local Codex thread, not a fork, unless the user explicitly asks for a fork.
+
+## Required Tracking
+
+The repo files are the durable source of truth. Track both the completed
+checkpoint and the next session.
+
+Before `create_thread`, write:
+
+- in `tracker.md`: the completed checkbox, the next unchecked item, and any
+  verification evidence the tracker is expected to carry;
+- in `handoff.md`: files changed, commands run, verification result, blockers,
+  current branch/path, next unchecked item, and the exact continuation prompt.
+
+After the new session passes the health check, write in both `tracker.md` and
+`handoff.md` when useful:
+
+- verified continuation thread ID and title;
+- creation date/time if known;
+- requested settings, especially `model`, `thinking`, service tier, and fast
+  mode;
+- health-check evidence: created, titled, found by list/read, first turn exists,
+  status/progress, and whether the next agent started reading loop files;
+- any settings that the tool could not expose or verify.
+
+Never write a returned thread ID as the real next session until health check
+passes. Until then it is provisional.
 
 After `create_thread`, treat the returned ID as provisional. Do not record or report it as successful until it passes the health check.
 
@@ -115,11 +170,12 @@ If a visible continuation appears stuck, inspect it with `read_thread` first. If
 When the user asks to install loop engineering into a project, run from the target repo:
 
 ```bash
-PROJECT_NAME="<name>" LOOP_DIR="docs/loop" AUTO_CHAIN=false \
+PROJECT_NAME="<name>" LOOP_DIR="docs/loop" AUTO_CHAIN=true \
   bash <skill-dir>/install.sh
 ```
 
-Use `AUTO_CHAIN=true` only when the user explicitly wants follow-on sessions created automatically.
+Use `AUTO_CHAIN=false` only when the user explicitly wants a one-shot loop that
+must not create follow-on sessions.
 
 ## Install This Skill
 

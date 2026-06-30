@@ -64,9 +64,13 @@ Optional settings:
 ```bash
 PROJECT_NAME="My Project" \
 LOOP_DIR="docs/loop" \
-AUTO_CHAIN=false \
+AUTO_CHAIN=true \
 bash /path/to/building-in-public/codex-loop-engineering/install.sh
 ```
+
+`AUTO_CHAIN=true` is the default for multi-phase loop work. Set
+`AUTO_CHAIN=false` only when you explicitly want a one-shot loop that must not
+create a follow-on Codex session.
 
 The installer creates:
 
@@ -75,7 +79,7 @@ The installer creates:
 | `docs/loop/goal.md` | The durable objective, done criteria, non-goals, and read-first context. |
 | `docs/loop/tracker.md` | The multi-phase plan Codex updates after each checkpoint. |
 | `docs/loop/constraints.md` | Product, engineering, safety, budget, and git boundaries. |
-| `docs/loop/handoff.md` | The current state, last verification, blockers, and optional auto-chain permission. |
+| `docs/loop/handoff.md` | The current state, last verification, blockers, continuation policy, and verified next-session record. |
 
 ## Quick Health Check
 
@@ -103,7 +107,8 @@ First read:
 
 Then execute the next unchecked tracker item. Work in coherent checkpoints.
 After each checkpoint, run verification, update tracker and handoff, inspect the
-diff, commit the checkpoint, and continue only if the next step is still in scope.
+diff, commit only when allowed or required, and create a verified continuation
+session when unchecked work remains and no stop condition fired.
 
 Stop when the goal is verified, a blocker needs human input, or the budget is reached.
 ```
@@ -135,7 +140,8 @@ The skill should do the boring ceremony:
 - execute only the next unchecked checkpoint;
 - run the verification named in the tracker;
 - update tracker and handoff;
-- create the next continuation only when auto-chain is enabled;
+- create the next verified continuation when unchecked work remains and
+  auto-chain is not disabled;
 - verify the new thread before reporting it.
 
 That keeps the project state inspectable in the repo while making the day-to-day user command as small as:
@@ -146,7 +152,10 @@ Continue the loop.
 
 ## Continuation Session Verification
 
-When auto-chain creates the next Codex session, a returned thread ID is not enough. Treat session creation as successful only after all of these pass:
+For multi-phase loop work, creating the next Codex session is part of the close
+out when unchecked work remains, unless the loop or user explicitly disables it.
+A returned thread ID is not enough. Treat session creation as successful only
+after all of these pass:
 
 1. `create_thread` returns a thread ID.
 2. `list_threads` or `read_thread` can find that exact ID or exact title.

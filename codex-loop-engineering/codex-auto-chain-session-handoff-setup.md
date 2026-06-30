@@ -64,9 +64,13 @@ Optional settings:
 ```bash
 PROJECT_NAME="My Project" \
 LOOP_DIR="docs/loop" \
-AUTO_CHAIN=false \
+AUTO_CHAIN=true \
 bash /path/to/building-in-public/codex-loop-engineering/install.sh
 ```
+
+`AUTO_CHAIN=true` is the default for multi-phase loop work. Use
+`AUTO_CHAIN=false` only for one-shot loops that must not create a follow-on
+Codex session.
 
 If files already exist, the installer skips them. To regenerate the files, run:
 
@@ -222,15 +226,18 @@ Execute the next unchecked item in `docs/loop/tracker.md`.
 
 ## Auto-Chain Permission
 
-auto_chain_next_session: false
+auto_chain_next_session: true
 
-If true and the Codex environment supports creating the next session, Codex may create a project-local continuation session after it:
+If true and the Codex environment supports creating the next session, Codex must
+attempt to create a verified project-local continuation session after it:
 
 - updates tracker and handoff
 - runs verification
-- commits and pushes the checkpoint
+- commits and pushes only if the project constraints or user request require it
 - confirms unchecked work remains
 - confirms no blocker needs human approval, credentials, or external data
+- treats "one checkpoint only" as an implementation boundary, not as a reason to
+  skip creating the next session
 ````
 
 The handoff is what lets the loop survive context windows, app restarts, or a new Codex thread.
@@ -288,14 +295,18 @@ Each Codex checkpoint should close with the same routine:
 5. Update `docs/loop/handoff.md` with the next step, last verification, and blockers.
 6. Run `git diff --check`.
 7. Inspect the diff.
-8. Commit the checkpoint.
-9. Continue only if unchecked work remains and no stop condition fired.
+8. Commit only when allowed or required by the current project.
+9. If unchecked work remains and no stop condition fired, create and verify the
+   next continuation session before closing.
 
 ## Auto-Chain Sessions
 
-Auto-chain is optional. It is useful for long multi-phase work where one Codex session should create the next continuation session after a clean checkpoint.
+For long multi-phase work, auto-chain is the default close-out: one Codex
+session should create the next verified continuation session after a clean
+checkpoint when unchecked work remains. Disable it only when the user or loop
+explicitly says to stop after the checkpoint.
 
-Enable it in `docs/loop/handoff.md`:
+Record the policy in `docs/loop/handoff.md`:
 
 ```md
 ## Auto-Chain Permission
@@ -310,8 +321,10 @@ Rules:
   reasoning effort, service tier, or mode. Pass exposed settings directly to
   `create_thread`; for example, extra high thinking is `thinking: "xhigh"`.
 - Update tracker and handoff before creating the next session.
-- Commit and push before creating the next session.
+- Commit and push only when the project constraints or user request require it.
 - Stop if a blocker needs human approval, external credentials, or external data.
+- Treat "one checkpoint only" as one implementation slice, not as permission to
+  skip creating the next session.
 ```
 
 Use a short continuation goal:
@@ -325,7 +338,8 @@ First read:
 - docs/loop/constraints.md
 
 Then execute the next unchecked loop exactly as documented there. Keep the commit
-scoped, run verification, update tracker and handoff, commit, and push.
+scoped if commits are allowed, run verification, update tracker and handoff, and
+create the next verified continuation if unchecked work remains.
 ```
 
 Important boundary: terminal setup can install the files. Creating the next Codex Desktop session is done by Codex while an active session is running, using the Codex thread tools. It is not a background daemon.
