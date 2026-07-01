@@ -4,10 +4,10 @@
 
 This setup lets a multi-phase Codex project continue across checkpoints and sessions without pasting long plans into each new prompt. It gives Codex a durable goal, a tracker, constraints, verification surfaces, and a handoff file.
 
-The core loop is:
+The core loop can be linear or a dependency graph:
 
 ```text
-read state -> execute next checkpoint -> verify -> update state -> commit -> continue or stop
+read state -> execute ready checkpoint(s) -> verify -> update state -> commit -> continue or stop
 ```
 
 ## What This Is For
@@ -126,17 +126,41 @@ A strong goal is narrow enough to audit, but broad enough for Codex to choose th
 
 ## File 2: Tracker
 
-`docs/loop/tracker.md` is the multi-phase plan and dashboard.
+`docs/loop/tracker.md` is the multi-phase plan and dashboard. It defaults to a
+linear loop, but can become a DAG when the task naturally has independent lanes.
 
 ```md
 # Loop Tracker
 
 ## Status Legend
 
-- [ ] not started
-- [~] in progress
-- [x] complete
-- [!] blocked
+- `[ ]` not started
+- `[~]` in progress
+- `[x]` complete
+- `[!]` blocked
+
+## Execution Model
+
+Default: linear. Execute the next unchecked checkpoint.
+
+Use a dependency graph / DAG only when the user context or project plan clearly
+shows independent lanes. If the DAG shape is uncertain, ask the user before
+opening parallel sessions.
+
+## Checkpoint Checklist
+
+- [ ] Phase 1: Map current state.
+- [ ] Phase 2: Implement first coherent slice.
+- [ ] Phase 3: Harden edge cases.
+- [ ] Phase 4: Final review and docs.
+
+## Dependency Graph
+
+For a linear loop:
+
+    Phase 1 -> Phase 2 -> Phase 3 -> Phase 4
+
+For a DAG loop, list parallel-safe lanes and predecessor-gated lanes explicitly.
 
 ## Phases
 
@@ -214,6 +238,13 @@ Constraints are the guardrails that let Codex keep moving without constant human
 
 Execute the next unchecked item in `docs/loop/tracker.md`.
 
+## Execution Model
+
+Default to the linear next unchecked checkpoint. If the tracker/handoff or user
+context clearly shows independent lanes, use a DAG: open only lanes whose
+dependencies are satisfied and that do not already have verified active or
+completed threads. If unsure, ask before opening parallel sessions.
+
 ## Commands Already Run
 
 ```bash
@@ -238,6 +269,12 @@ attempt to create a verified project-local continuation session after it:
 - confirms no blocker needs human approval, credentials, or external data
 - treats "one checkpoint only" as an implementation boundary, not as a reason to
   skip creating the next session
+
+For DAG loops, auto-chain only to ready lanes:
+
+- do not create duplicate sessions for lanes that already have verified thread IDs
+- do not create predecessor-gated successors until all dependencies are complete
+- stop and ask the user when the dependency direction is unclear
 ````
 
 The handoff is what lets the loop survive context windows, app restarts, or a new Codex thread.

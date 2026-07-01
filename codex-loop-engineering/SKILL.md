@@ -1,6 +1,6 @@
 ---
 name: codex-loop-engineering
-description: Repo-first Codex loop execution and continuation management. Use when the user asks Codex to continue a loop, run the next checkpoint, install or repair docs/loop goal/tracker/constraints/handoff files, auto-chain the next Codex session, diagnose stuck/dead continuation threads, or make long-running Codex work smoother with verified handoff and thread health checks.
+description: Repo-first Codex loop execution and continuation management. Use when the user asks Codex to continue a loop, run the next checkpoint, install or repair docs/loop goal/tracker/constraints/handoff files, auto-chain the next Codex session, coordinate DAG/parallel checkpoint lanes, diagnose stuck/dead continuation threads, or make long-running Codex work smoother with verified handoff and thread health checks.
 ---
 
 # Codex Loop Engineering
@@ -71,6 +71,37 @@ Default sequence:
 
 Stop on blockers that need credentials, external data, destructive action, production deploys, or user approval.
 
+## Linear vs DAG Execution
+
+Default to a linear checkpoint loop when the tracker presents one next
+unchecked item and the later work depends on its result.
+
+Use a dependency graph / DAG model when the user context, tracker, or handoff
+shows independent lanes. Common signals:
+
+- the user explicitly says phases can run in parallel or are not linearly
+  dependent;
+- multiple unchecked checkpoints are research, audit, QA, or file-disjoint
+  implementation lanes that can produce evidence without waiting on each other;
+- one lane is a product/strategy verdict while another is a source audit,
+  competitor scan, test sweep, or cleanup that does not need that verdict;
+- the tracker already contains dependency language such as "waits for",
+  "depends on", "parallel-safe", "ready", or "blocked by".
+
+When the DAG shape is clear, update `tracker.md` and `handoff.md` before
+creating sessions:
+
+1. Add an explicit dependency graph or "Auto-Chain Rules" section.
+2. Mark active lanes and predecessor-gated lanes separately.
+3. Record that a lane may create a successor only when all predecessor lanes are
+   complete and no verified thread already exists for that successor.
+4. Create verified continuation sessions for every currently ready independent
+   lane, not for gated lanes.
+
+When the DAG shape is not clear, ask the user before opening parallel sessions.
+Do not guess dependency direction for product, billing, deployment, data
+migration, or user-approval steps.
+
 ## Auto-Chain Protocol
 
 For a loop continuation, delegated loop run, or any session where the user has
@@ -103,13 +134,21 @@ Before creating the next session:
 
 1. Update tracker and handoff first.
 2. Ensure the next checkpoint is specific and scoped.
-3. Build a short continuation prompt that points at the loop files and names the
-   exact next unchecked tracker item.
-4. Preserve any explicit user-required session settings from the current loop
+3. For a linear loop, build a short continuation prompt that points at the loop
+   files and names the exact next unchecked tracker item.
+4. For a DAG loop, compute the ready set: unchecked lanes whose dependencies
+   are complete and that do not already have verified active/completed threads.
+   Build one scoped prompt per ready lane and do not create gated successors.
+5. Preserve any explicit user-required session settings from the current loop
    contract, such as model, reasoning effort, service tier, or mode. If the
    user requires a specific Codex model/thinking setting, pass it explicitly to
    `create_thread`; do not rely on defaults.
-5. Use a fresh project-local Codex thread, not a fork, unless the user explicitly asks for a fork.
+6. Use a fresh project-local Codex thread, not a fork, unless the user explicitly asks for a fork.
+
+If a DAG lane completes but its successors are still waiting on other lanes,
+update the tracker/handoff with the artifact and stop or continue monitoring
+active lanes. Do not create a duplicate thread for an active lane just because
+unchecked work remains.
 
 ## Required Tracking
 

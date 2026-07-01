@@ -1,4 +1,4 @@
 interface:
   display_name: "Codex Loop Engineering"
-  short_description: "Repo-first Codex continuation loops"
-  default_prompt: "Use $codex-loop-engineering to continue the next repo-local loop checkpoint."
+  short_description: "Repo-first Codex loops and DAG lanes"
+  default_prompt: "Use $codex-loop-engineering to continue the next repo-local loop checkpoint or ready DAG lane."

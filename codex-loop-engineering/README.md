@@ -13,7 +13,9 @@ It gives you a simple way to turn a project repo into a Codex loop:
 goal -> tracker -> constraints -> handoff -> verify -> commit -> continue or stop
 ```
 
-It is for long-running work where Codex should keep state in files instead of relying on a giant chat prompt.
+The loop can be linear, or a dependency graph when independent lanes can run in
+parallel. It is for long-running work where Codex should keep state in files
+instead of relying on a giant chat prompt.
 
 ## Install The Skill
 
@@ -77,7 +79,7 @@ The installer creates:
 | File | Purpose |
 | --- | --- |
 | `docs/loop/goal.md` | The durable objective, done criteria, non-goals, and read-first context. |
-| `docs/loop/tracker.md` | The multi-phase plan Codex updates after each checkpoint. |
+| `docs/loop/tracker.md` | The multi-phase plan or DAG Codex updates after each checkpoint. |
 | `docs/loop/constraints.md` | Product, engineering, safety, budget, and git boundaries. |
 | `docs/loop/handoff.md` | The current state, last verification, blockers, continuation policy, and verified next-session record. |
 
@@ -138,10 +140,13 @@ The skill should do the boring ceremony:
 - detect the loop directory;
 - read `goal.md`, `tracker.md`, `constraints.md`, and `handoff.md`;
 - execute only the next unchecked checkpoint;
+- switch to a DAG only when the context clearly shows independent lanes, and
+  ask the user when dependency direction is uncertain;
 - run the verification named in the tracker;
 - update tracker and handoff;
 - create the next verified continuation when unchecked work remains and
-  auto-chain is not disabled;
+  auto-chain is not disabled, or create all currently ready DAG lanes when they
+  are independent and ungated;
 - verify the new thread before reporting it.
 
 That keeps the project state inspectable in the repo while making the day-to-day user command as small as:
