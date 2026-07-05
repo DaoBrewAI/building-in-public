@@ -1,150 +1,216 @@
 ---
 name: finding-your-unknowns
-description: Surfaces and classifies a user's task unknowns before and during non-trivial coding work. Use when a task has meaningful uncertainty: unfamiliar codebase or module, ambiguous bug report, architecture / data-model / API / UX decision, taste-heavy work, or long-horizon multi-file implementation. Starts from the user's goal shape ("what final good looks like"), hypothesis, and project context, then chooses a scaled mode. For medium diagnostics, keeps output compact: goal frame, ranked hypotheses, decisive discriminators, down-ranked blindspots, and deferred questions. For large builds, maps known knowns / known unknowns / unknown knowns / unknown unknowns and resolves each with the lightest move. Toolbox, not ceremony. Skips trivial edits.
+description: Surfaces and classifies task unknowns before and during non-trivial Codex coding work. Use when the user asks to find unknowns, map known knowns / known unknowns / unknown knowns / unknown unknowns, investigate an ambiguous bug, work in an unfamiliar codebase, make an architecture / data-model / API / UX decision, build a taste-heavy surface, or run a repo-loop checkpoint that may derail on hidden constraints. Starts from the active Codex Goal or an inferred goal frame, keeps medium diagnostics compact with ranked hypotheses, decisive discriminators, down-ranked blindspots, and deferred questions, and integrates with codex-loop-engineering by carrying unresolved assumptions into docs/loop/handoff.md. Skip trivial edits.
 ---
 
 # Finding Your Unknowns
 
-The prompt, skills, and context you give the agent are the *map*; the actual project, constraints, and behavior are the *territory*. Every unknown the agent hits mid-task becomes a best-guess decision, and best-guess decisions compound on long tasks into rework risk.
+Use this skill to keep Codex from turning early uncertainty into confident
+guesses. The prompt, skills, and visible context are the map; the actual
+project, constraints, runtime behavior, and user's taste are the territory.
 
-This skill is a **toolbox** for surfacing what the user does not know they do not know — not a checklist to run every time. Pick the lightest technique that fits the task.
+This is a toolbox, not ceremony. Pick one scaled mode and stay inside it unless
+the task clearly changes shape.
 
-## The four quadrants
+## First Move In Codex
 
-Classify every open item into one quadrant. Each is closed by a different lightweight move.
+Anchor the target state before broad discovery.
+
+1. If a Codex Goal is active or the user invoked `/Goal`, treat that goal as the
+   primary known known: final state, acceptance evidence, non-goals, and budget.
+   Do not create a new Goal unless the user explicitly asked for one.
+2. If the repo has `docs/loop/{goal,tracker,constraints,handoff}.md`, or the user
+   also invokes `$codex-loop-engineering`, read the loop files first. Treat:
+   - `goal.md` as the goal frame,
+   - `tracker.md` as the current checkpoint boundary,
+   - `constraints.md` as hard guardrails,
+   - `handoff.md` as prior unresolved unknowns and continuation context.
+3. If no Goal or loop files exist, infer a one-paragraph Goal frame and mark it
+   as inferred. Ask for correction only when the missing answer would change
+   architecture, data model, API shape, UX flow, dependencies, or an irreversible
+   choice.
+
+## The Four Quadrants
+
+Classify open items by how they should be resolved.
 
 | Quadrant | What it is | How to close it |
 |---|---|---|
-| **Known knowns** | Facts stated in the prompt or already visible in the codebase | Keep them explicit and referenceable. |
-| **Known unknowns** | Questions the user knows are open | Ask a focused question — prioritize answers that change architecture, data model, API shape, UX flow, dependencies, or an irreversible choice. |
-| **Unknown knowns** | Things the user knows implicitly (taste, product intuition, "I'll know it when I see it") but can't specify cold | Show concrete options: intervention lists, prototypes, API/interface sketches, comparable code, tradeoff cards. Recognition beats specification. |
-| **Unknown unknowns** | Things the user hasn't considered at all — the dangerous category | Blindspot pass grounded in the actual repo: read the relevant files, docs, tests, schemas; only then enumerate what's likely to bite. |
+| Known knowns | Facts stated by the user, active Goal, loop files, or visible code | Keep explicit and referenceable. |
+| Known unknowns | Questions the user or repo already names | Ask focused questions with concrete options. |
+| Unknown knowns | Taste, product intuition, or "I'll know it when I see it" knowledge | Show options: scope lists, interface sketches, comparable code, prototypes, tradeoff cards. |
+| Unknown unknowns | Constraints nobody named yet | Run a repo-grounded blindspot pass before building. |
 
-## Pick exactly one mode
+## Pick Exactly One Mode
 
-Choose the mode before discovery. This is binding; do not silently upgrade a medium task into the full workflow.
-
-- **Trivial edit**: one-line fix, rename, copy tweak, or mechanical change with an obvious correct answer. **Skip this skill entirely.**
-- **Medium diagnostic / read-only investigation**: default for ambiguous bugs, unfamiliar modules, and root-cause hunts. Do **not** create `implementation-notes.md`, full quadrant tables, prototypes, plan mode, explainers, quizzes, or fresh-session handoffs. Output only:
-  1. goal frame: what "done" looks like and what evidence would prove it,
+- **Trivial edit**: one-line fix, rename, copy tweak, or mechanical change with
+  an obvious correct answer. Skip this skill.
+- **Medium diagnostic / read-only investigation**: default for ambiguous bugs,
+  unfamiliar modules, and root-cause hunts. Do not create
+  `implementation-notes.md`, full quadrant tables, prototypes, fresh-session
+  handoffs, or broad plans. Return only:
+  1. Goal frame: what done looks like and what evidence would prove it,
   2. up to 3 ranked hypotheses,
   3. one decisive discriminator per hypothesis,
-  4. up to 3 repo-grounded blindspots, with likely-by-design and roadmap gaps down-ranked,
-  5. up to 4 architecture-changing questions with concrete options, or deferred questions if the user cannot answer live.
-  Keep discovery output compact unless the user asks for the full map.
-- **Large build**: multi-file implementation, new subsystem, irreversible data/API decision, or taste-heavy product surface. Use the full workflow: starting point, scan, Unknowns Map, resolving moves, plan, implementation notes, explainer / quiz, and possible fresh-session handoff.
+  4. up to 3 repo-grounded blindspots, with likely-by-design and roadmap gaps
+     down-ranked,
+  5. up to 4 architecture-changing questions, or deferred questions if the user
+     cannot answer live.
+- **Large build / loop checkpoint**: multi-file implementation, new subsystem,
+  irreversible data/API decision, taste-heavy product surface, or a long-running
+  repo loop. Use the full workflow: Goal frame, project scan, Unknowns Map,
+  resolving moves, plan, implementation notes, and handoff.
 
-## Unknown-discovery pass
+The selected mode is binding. Do not silently upgrade a medium diagnostic into
+the full workflow.
 
-Run only the moves allowed by the selected mode.
+## Discovery Workflow
 
-### 1. Start with the goal and the user's starting point
+### 1. Capture The Starting Point
 
-Before touching the code, anchor the target state, then capture the user's own frame:
+Record only the fields that matter for the selected mode:
 
-- **Goal shape** — what the final thing should look like, and what evidence would prove it works.
-- **Current hypothesis** — what they'd try if forced to guess.
-- **Experience** — how well they know this problem and this codebase.
-- **Already known** — facts and constraints they can state cleanly.
-- **Suspicions** — things they think but haven't verified.
-- **"Good" looks like** — the shape of a successful outcome, in their words.
+- Goal shape and acceptance evidence.
+- Current user or agent hypothesis.
+- User familiarity with the problem/codebase, if known.
+- Already known facts and constraints.
+- Suspicions not yet verified.
+- What "good" should feel like, when taste or UX is involved.
 
-If any of these are missing and the task isn't trivial, ask.
+Use `request_user_input` only when it is available and the answer is
+architecture-shaping. Otherwise ask in chat with concrete options. In autonomous
+runs, write deferred questions and continue only under conservative reversible
+defaults.
 
-- **In Claude Code:** use **AskUserQuestion** with 2–4 concrete options per question.
-- **Otherwise:** ask in normal chat, presenting concrete options rather than open-ended prompts.
+### 2. Inspect The Real Project
 
-### 2. Inspect the real project
+Skim the relevant surface before inventing questions or blindspots:
 
-Skim (don't deep-read) the actual surface relevant to the goal shape: directory structure, public interfaces, adjacent tests, READMEs / ADRs / config, existing patterns for similar work. Every downstream move — questions, blindspot pass, brainstorm — is grounded in what actually exists rather than textbook generalities.
+- directory structure for the affected area,
+- public interfaces, types, schemas, APIs,
+- adjacent tests and fixtures,
+- README / ADR / config files,
+- existing patterns for similar work.
 
-### 3. For diagnostics: rank hypotheses first
+Every question, hypothesis, and blindspot must tie back to a file, behavior,
+constraint, or explicit user decision.
 
-For bug reports and read-only investigations, prefer a hypothesis map over a full quadrant inventory:
+### 3. Medium Diagnostics: Rank Hypotheses First
+
+For bugs and read-only investigations, prefer a hypothesis map over a full
+quadrant inventory.
 
 | Rank | Hypothesis | Evidence | Decisive discriminator | What would change my mind | Status |
 |---|---|---|---|---|---|
 
-Do not collapse to one root cause until the discriminators have been checked. This is the skill's main advantage over generic due diligence: keep several plausible branches alive, then kill them cheaply.
+Do not collapse to one root cause until the discriminators have been checked.
+This is the skill's main differentiator over generic "assumptions / not checked"
+lists.
 
-### 4. For large builds: draft a small Unknowns Map
+Before presenting blindspots, classify and down-rank them:
 
-A compact table where every open item is tagged with a quadrant and a resolving move. Something like:
+- `bug-likely`: contradicts tests, docs, schemas, call-site expectations, or
+  observed behavior.
+- `architecture risk`: plausible hidden coupling or invariant; needs verification.
+- `likely by design`: repeated pattern, named abstraction, docs/tests encode it,
+  or no caller expects the missing behavior.
+- `roadmap gap`: not implemented yet, but no current code path requires it.
+
+### 4. Large Builds: Draft A Small Unknowns Map
+
+Use a compact table. Include only items whose answers change architecture, data
+model, API/interface shape, UX flow, dependencies, or irreversible choices.
 
 | Item | Quadrant | Evidence | Why it matters | Resolving move | Owner | Status |
 |---|---|---|---|---|---|---|
-| Session cascade on user delete | known unknown | `users` FK on `sessions` | irreversible in prod | ask user (3 options) | user | open |
-| Preferred error-modal shape | unknown known | UX call | user-facing, taste | show 3 variants | prototype | open |
-| Middleware invariants | unknown unknown | `middleware/*` uninspected | can break existing flows | blindspot pass | agent | open |
-| Runtime is Node 22 | known known | `package.json` | governs deps | note & move on | — | done |
 
-Prioritize items whose answers change architecture, data model, API/interface shape, UX flow, dependencies, or an irreversible choice. Skip items whose answer wouldn't change what you build.
+Resolve cheapest first:
 
-### 5. Resolve, cheapest first
+- Known knowns: note and reference.
+- Known unknowns: ask a focused question with 2-4 concrete options.
+- Unknown knowns: show concrete options, prototypes, comparable code, or
+  tradeoff cards.
+- Unknown unknowns: blindspot pass grounded in specific repo files.
 
-Pick the lightest per-quadrant technique. See `templates/techniques.md` for prompt shapes, templates, and worked examples.
+Read `templates/techniques.md` only when you need example prompts or per-quadrant
+templates.
 
-- **Known knowns** → note and reference.
-- **Known unknowns** → focused question(s) with concrete options.
-- **Unknown knowns** → show options. Match the medium to what's being decided (see below).
-- **Unknown unknowns** → blindspot pass grounded in specific files.
+### 5. Plan After The Unknowns Are Small Enough
 
-**Brainstorming has more than one mode.** Reach for the right one:
+Use `update_plan` when a plan is useful, with at most one `in_progress` item.
+Weight the plan toward parts expensive to change late: data models, type or API
+interfaces, user-facing flows, migrations, and dependencies. Keep mechanical
+steps brief.
 
-- **Concept / scope brainstorm** — enumerate intervention points from cheapest to most ambitious (a "10 options" list). Best when the *shape of the fix* is uncertain.
-- **Codebase-search brainstorm** — search the repo for existing patterns and comparable implementations before designing.
-- **Prototype / artifact brainstorm** — 3–5 *meaningfully different* directions when the blocker is visual, interactive, or taste-heavy.
+If a user answer is still needed but no live user is available, add a Deferred
+Questions table:
 
-### 6. Plan only after the map is resolved enough
+| Question | Options | Default if unanswered | Why it matters | What would change |
+|---|---|---|---|---|
 
-Write the plan when remaining unknowns are small enough to absorb during the build. Weight it toward parts most expensive to change late — data models, type/interface shapes, user-facing surface. Skim the mechanical parts.
+Proceed only when the default is reversible. If no reversible default exists,
+stop at findings.
 
-- **In Claude Code:** use **plan mode / ExitPlanMode**.
-- **Otherwise:** write the plan as a message or a `plan.md` and get explicit user approval.
+## Codex Loop Engineering Integration
 
-## The specificity dial
+When this skill runs inside a `$codex-loop-engineering` project:
 
-Being too specific is as bad as being too vague.
+1. Do not replace the loop contract. The loop files stay authoritative.
+2. Treat the current unchecked tracker item as the task boundary for the
+   Unknowns Map.
+3. Keep medium diagnostics inline in the response or `handoff.md`; do not create
+   extra files.
+4. For large builds, create or update `implementation-notes.md` near the loop
+   files unless the repo has a stronger convention. Link it from
+   `docs/loop/handoff.md`.
+5. If discovery changes the checkpoint sequence, update `tracker.md` before
+   implementing.
+6. Before any continuation session, write unresolved assumptions, deferred
+   questions, selected defaults, and the distilled post-discovery prompt into
+   `docs/loop/handoff.md`.
+7. If unresolved architecture-shaping questions remain, mark the loop blocked
+   instead of auto-chaining into implementation.
 
-- **Too specific** → the agent follows instructions rigidly even when changing course would obviously be better.
-- **Too vague** → the agent fills gaps with industry defaults that don't fit *this* task.
+The clean continuation prompt should name both skills when both are needed:
 
-Set the dial only *after* resolving the map: be concrete where you have real knowledge, deliberately open where the model's judgment should win, and say so.
+```text
+Use $codex-loop-engineering and $finding-your-unknowns.
+First read docs/loop/goal.md, tracker.md, constraints.md, handoff.md, then
+continue the next unchecked tracker item under the unresolved assumptions listed
+in handoff.md.
+```
 
-## During implementation (medium and large builds)
+## During Implementation
 
-- **Keep `implementation-notes.md` live for large builds and implementation work** (start from `templates/implementation-notes.md`). Do not create it for medium read-only diagnostics.
-- **On surprises**: if the deviation is reversible, pick the conservative option, log it, and keep working. If it changes architecture or product behavior, stop and confirm.
-- **Capture surprises that mattered** — those are the unknown unknowns the map missed, and they feed the next attempt.
-- **Keep the prompt separated from codebase context** so recovery from wrong turns stays cheap.
+- Keep `implementation-notes.md` live for large builds and implementation work.
+  Start from `templates/implementation-notes.md`. Do not create it for medium
+  read-only diagnostics.
+- On reversible surprises, choose the conservative option, log the deviation,
+  and keep working.
+- On surprises that change architecture or product behavior, stop and confirm.
+- Keep prompt/spec context separate from codebase observations so a fresh session
+  can inherit the distilled signal instead of the whole discovery transcript.
 
-## Hand off to a fresh implementation session (large builds)
+## Output Contracts
 
-Discovery bloats context. For a large build, once the map is resolved and the plan is approved, hand off to a fresh session with a lean bundle:
+For medium diagnostics, output only:
 
-- the **distilled prompt** (post-discovery, specificity dial set)
-- the **selected artifacts** (chosen prototype, sample data, chosen intervention range)
-- the **references** to read first (specific files, docs)
-- the **approved plan**
-- `implementation-notes.md` seeded with starting point, surviving open questions, and blindspot findings
+1. Goal frame.
+2. Ranked hypotheses and discriminators.
+3. Down-ranked blindspots.
+4. Deferred questions or concrete user questions.
+5. Final root-cause confidence after discriminators are checked.
 
-This starts the implementation agent with concentrated signal — not the meandering discovery transcript.
+For large builds or loop checkpoints, output:
 
-## After implementation (large builds)
+1. Goal frame.
+2. Unknowns Map.
+3. Resolved decisions and defaults.
+4. Plan.
+5. Implementation notes path, if created.
+6. Handoff updates, if inside a loop.
 
-- **Explainer** — bundle the winning artifact, plan, and notes into one short summary doc. Say which unknowns were resolved and how.
-- **Comprehension quiz before merge** — for a change the user must truly own, generate a short HTML (or plain-text) report of what changed and why, then **quiz the user on it.** Recognition is one more cheap catch for a lurking unknown before it ships.
+## Guiding Principle
 
-## Claude Code features vs. normal-chat fallbacks
-
-Treat these as *available when running inside Claude Code*, not as requirements. Fall back cleanly elsewhere.
-
-- **AskUserQuestion** → focused questions with concrete options. Fallback: paste the same options in chat and ask the user to pick.
-- **Goal mode (`/goal`, `Goal`, or equivalent)** → capture "what final good looks like" and the acceptance evidence before exploration. Fallback: write a one-line `Goal frame` yourself, mark it as inferred, and ask the user to correct it when available.
-- **No live user available** → emit a `Deferred Questions` table: `Question | Options | Default assumption if unanswered | Why it matters | What would change`. Continue only under the most conservative reversible default. If no reversible default exists, stop at findings.
-- **Plan mode / ExitPlanMode** → produce and review a plan without writing code. Fallback: a `plan.md` or a chat message the user explicitly approves.
-- **Artifacts / HTML files** → use *when* the decision is visual or interactive (design variants, UX flows, dashboard shapes). For non-visual comparison (API shape, interface signatures, tradeoff summary), plain text or code snippets are the right medium — don't force HTML.
-
-## Guiding principle
-
-Prefer cheap discovery before expensive implementation. The win is not more process; it is fewer wrong turns.
+Prefer cheap discovery before expensive implementation. The win is not more
+process; it is fewer wrong turns.

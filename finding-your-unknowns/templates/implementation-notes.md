@@ -1,90 +1,92 @@
-# Implementation Notes — <task name>
+# Implementation Notes - <task name>
 
-> Use this file for large builds or implementation work. For medium read-only
-> diagnostics, do not create this file; inline the compact
-> hypothesis/discriminator report instead.
+Use this file for large builds or implementation work. Do not create it for
+medium read-only diagnostics; inline the compact hypothesis report instead.
 
-> A living log kept **during** the build. Its job: make sure a later attempt, a
-> teammate, or a fresh session inherits what this session learned instead of
-> re-hitting the same walls. Append as you go — do not wait until the end.
+Keep this file live while building. Its job is to let a later Codex session,
+teammate, or continuation loop inherit what this session learned.
 
-## User starting point
-<!-- Captured before touching the code or drafting the Unknowns Map. Feeds
-     the rest of the file. -->
+## Goal Frame
 
-- **Goal shape (what final good looks like):**
-- **Acceptance evidence (what proves it works):**
+- **Goal source:** active Codex Goal / `docs/loop/goal.md` / inferred from prompt
+- **Done looks like:**
+- **Acceptance evidence:**
 - **Out of scope:**
 - **Current hypothesis:**
-- **Experience with this problem / codebase:**
-- **Already known (facts, constraints they can state cleanly):**
-- **Suspicions (unverified):**
-- **"Good" looks like:**
+- **Known constraints:**
+- **Suspicions not yet verified:**
+- **Taste / "good" signal, if relevant:**
 
-## Starting context (post-scan)
-<!-- The clean prompt, kept separate from codebase context. -->
+## Loop Context
 
-- **Goal (one sentence):**
-- **Prompt (separate from codebase context):**
+Fill this when running with `$codex-loop-engineering`.
+
+- **Loop files read:** `goal.md`, `tracker.md`, `constraints.md`, `handoff.md`
+- **Current tracker item:**
+- **Hard constraints from `constraints.md`:**
+- **Prior unknowns from `handoff.md`:**
+- **Handoff section updated:**
+
+## Project Scan
+
 - **Files / docs / tests scanned:**
-- **References gathered (comparable code, docs, diagrams, external):**
+- **Comparable code found:**
+- **Relevant interfaces / schemas / APIs:**
+- **Existing invariants or conventions:**
 
 ## Unknowns Map
-<!-- Every open item, tagged with a quadrant. Resolve in blast-radius order —
-     answers that change architecture / data model / API / UX / dependencies /
-     irreversible choices first. -->
+
+Include only unknowns whose answers change architecture, data model, API shape,
+UX flow, dependencies, or irreversible choices.
 
 | Item | Quadrant | Evidence | Why it matters | Resolving move | Owner | Status |
 |---|---|---|---|---|---|---|
 |  |  |  |  |  |  |  |
 
-## Open questions
-<!-- Known unknowns still live at the start. Cross them off as the interview /
-     prototypes / blindspot pass answer them. Architecture-shaping questions
-     go at the top. -->
+## Deferred Questions
 
-- [ ]
-- [ ]
+Use when the user cannot answer live.
 
-## Blindspot findings
-<!-- Output of the blindspot pass. Conventions, coupling, and hidden
-     constraints the prompt never named. Tie each finding to a specific file,
-     behavior, or dependency. Highest-value rows in this file. -->
+| Question | Options | Default if unanswered | Why it matters | What would change |
+|---|---|---|---|---|
+|  |  |  |  |  |
 
--
--
+## Blindspot Findings
 
-## Artifacts / references carried into implementation
-<!-- The lean bundle to carry into a fresh implementation session, if this is
-     a large build. Only what's needed — no discovery transcript. -->
+Classify before presenting. Do not call likely-by-design or roadmap-gap items
+bugs.
 
-- **Distilled prompt (post-discovery, specificity dial set):**
-- **Selected artifacts (chosen prototype, sample data, chosen intervention range):**
-- **References to read first (files / docs / diagrams):**
-- **Plan (link or paste):**
+| Finding | Class | Evidence | Follow-up |
+|---|---|---|---|
+|  | bug-likely / architecture risk / likely by design / roadmap gap |  |  |
 
-## Decision log
-<!-- Each real decision AND its reasoning, in order. "Chose X over Y because
-     Z" lets a later reader reevaluate when Z changes. -->
+## Plan
+
+- **Plan status:** proposed / approved / revised
+- **Data or API decisions:**
+- **User-facing decisions:**
+- **Verification required:**
+
+## Decision Log
 
 | # | Decision | Why | Alternatives rejected | Reversibility |
-|---|----------|-----|-----------------------|----------------|
-| 1 |          |     |                       |                |
+|---|---|---|---|---|
+| 1 |  |  |  |  |
 
-## Deviations from the plan
-<!-- Unexpected surprises. If reversible: conservative option, logged, keep
-     working. If it changes architecture or product behavior: stop and confirm. -->
+## Deviations
+
+Log surprises as they happen.
 
 - **Surprise:**
-  - What I expected:
-  - What was actually true:
-  - Conservative choice made:
-  - Follow-up needed / revisit if:
+  - Expected:
+  - Actual:
+  - Conservative choice:
+  - Follow-up:
 
-## Handoff summary (post-implementation)
-<!-- Fill at the end. Feeds the explainer and the pre-merge quiz. -->
+## Handoff Summary
 
 - **What changed and why:**
-- **What unknowns were resolved and how:**
-- **What's still open / risky:**
-- **What the next person should read first:**
+- **Unknowns resolved and how:**
+- **Unresolved assumptions to carry forward:**
+- **What the next Codex session should read first:**
+- **Continuation prompt, if any:**

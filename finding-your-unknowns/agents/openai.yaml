@@ -1,0 +1,7 @@
+interface:
+  display_name: "Finding Your Unknowns"
+  short_description: "Surface task unknowns before coding"
+  default_prompt: "Use $finding-your-unknowns to map the unknowns, hypotheses, and decisive checks before implementing this task."
+
+policy:
+  allow_implicit_invocation: true

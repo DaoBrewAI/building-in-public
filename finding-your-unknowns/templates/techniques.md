@@ -1,267 +1,191 @@
-# Techniques — per-quadrant playbook and workflow templates
+# Techniques - per-quadrant playbook
 
-Expanded guidance for each move in `SKILL.md`. Toolbox, not a checklist — pull only the section you need for the current task.
+Load this file only when `SKILL.md` says a concrete technique is needed. Do not
+run every section.
 
----
+## 0. Establish The Goal Frame
 
-## 0. Establish the goal and user's starting point
+Use the active Codex Goal or `docs/loop/goal.md` when present. Otherwise infer
+the goal frame and mark it as inferred.
 
-Capture the goal shape plus the five starting-point fields from `SKILL.md`. If live asking is unavailable, infer them from the prompt and mark each inferred field as an assumption.
+```markdown
+## Goal frame
+- Done looks like:
+- Evidence that proves it:
+- Out of scope:
+- Current hypothesis:
+- Known constraints:
+- Suspicions not yet verified:
+```
 
-**Goal frame:** what final good looks like, what evidence would prove it, and what would still be out of scope.
+If live clarification is possible, ask only questions that change architecture,
+data model, API shape, UX flow, dependencies, or irreversible choices. In Codex
+Plan mode, use `request_user_input` if available. Otherwise ask in chat with
+2-4 concrete options.
 
-**In Claude Code:** `AskUserQuestion`, 2–4 concrete options per question.
-
-**Normal-chat fallback:**
-> Before we dig in:
-> (a) what should the final good result look like, and what evidence would prove it?
-> (b) what's your current hypothesis for the fix?
-> (c) how well do you know this codebase — first time, occasional, deep?
-> (d) what constraints are you sure of?
-> (e) what do you suspect but haven't verified?
-
-**Autonomous fallback:** do not block. Write:
+Autonomous fallback:
 
 | Field | Inferred value | Confidence | Would ask if live |
 |---|---|---|---|
 
----
+## 1. Project Scan
 
-## 1. Project scan — inspect the real surface
+Ground everything downstream in the real project:
 
-Ground everything downstream in what actually exists. Skim, don't deep-read.
+- affected directory structure,
+- public interfaces, types, schemas,
+- adjacent tests and fixtures,
+- README / ADR / config,
+- existing implementations that resemble the requested work.
 
-What to look at:
-- directory structure of the affected area
-- public interfaces, types, schemas
-- adjacent tests (they codify invariants)
-- READMEs, ADRs, config
-- existing patterns for similar work
+Do not invent generic blindspots before reading code.
 
-**Do not invent generic blindspots before looking at the code.** Textbook blindspots waste the user's time; grounded ones save it.
+## 2. Medium Diagnostic Contract
 
----
+Use this for ambiguous bugs, root-cause hunts, and read-only investigations.
+Return exactly these sections unless the user asks for more:
 
-## 2. Large-build Unknowns Map
-
-Use this table for large builds. For medium diagnostics, skip this section and use `2a. Medium diagnostic contract` instead. The table is compact: every open item is tagged with a quadrant and a resolving move.
-
-| Item | Quadrant | Evidence | Why it matters | Resolving move | Owner | Status |
-|---|---|---|---|---|---|---|
-
-- **Owner** = who resolves it: agent / user / reference / prototype.
-- **Prioritize** items whose answer changes architecture, data model, API/interface shape, UX flow, dependencies, or an irreversible choice.
-- **Skip** items whose answer wouldn't change what you build.
-
-Update as items resolve. This *is* the state of the discovery phase.
-
----
-
-## 2a. Medium diagnostic contract
-
-Use this instead of a full Unknowns Map for ambiguous bugs, root-cause hunts, and read-only investigations.
-
-Return exactly these sections:
-
-1. **Goal frame** — inferred or user-stated final state, acceptance evidence, and out-of-scope boundary.
-2. **Ranked hypotheses** — max 3 rows.
-3. **Decisive discriminators** — one test/check per hypothesis.
-4. **Blindspots** — max 3 rows, each classified as bug-likely / architecture risk / likely by design / roadmap gap.
-5. **Deferred questions** — max 4 architecture-changing questions with options, when no live user answer is available.
+1. Goal frame.
+2. Ranked hypotheses, max 3.
+3. Decisive discriminators, one per hypothesis.
+4. Blindspots, max 3 after down-ranking.
+5. Deferred questions, max 4 if no live user answer is available.
 
 Template:
 
 | Rank | Hypothesis | Evidence | Decisive discriminator | What would change my mind | Status |
 |---|---|---|---|---|---|
 
-Do not include full quadrant tables, `implementation-notes.md`, plan mode, prototypes, explainers, or quizzes unless the user asks or the task becomes a large build.
+Do not include full quadrant tables, prototypes, implementation notes, or loop
+handoffs for medium diagnostics unless the task becomes a large build.
 
----
+## 3. Large-Build Unknowns Map
 
-## 3. Close KNOWN KNOWNS — keep them explicit
+Use this for multi-file builds, irreversible API/data decisions, taste-heavy
+work, or repo-loop checkpoints with real ambiguity.
 
-Facts stated in the prompt or already visible in the codebase. The failure mode is losing them, not discovering them.
+| Item | Quadrant | Evidence | Why it matters | Resolving move | Owner | Status |
+|---|---|---|---|---|---|---|
 
-- Restate them in the plan and `implementation-notes.md`.
-- Reference them in prompts to hold context.
+Owner means agent / user / reference / prototype. Skip anything whose answer
+would not change the build.
 
-**Examples:**
-- "Runtime is Node 22." (from `package.json`)
-- "Sessions live in `sessions` table with 30-day TTL." (from schema)
-- "We support only Postgres 15+." (from ADR)
+## 4. Known Knowns
 
----
+Known knowns are facts from the prompt, active Goal, loop files, code, tests, or
+docs. The failure mode is losing them.
 
-## 4. Close KNOWN UNKNOWNS — focused questions
+Examples:
 
-Ask only questions whose answer would change:
-- architecture / module boundaries
-- data model / persistence
-- API / interface shape
-- UX flow
-- dependencies (adding a library, changing a runtime)
-- an irreversible choice (migration, public contract)
+- Runtime is Node 22 from `package.json`.
+- The checkpoint is "fix flaky import" from `docs/loop/tracker.md`.
+- The constraint says no schema migration in this phase.
 
-Skip anything cosmetic or reversible.
+Carry these into the plan, notes, or handoff.
 
-**In Claude Code:** `AskUserQuestion`, 2–4 concrete options per question.
+## 5. Known Unknowns
 
-**Normal-chat fallback template:**
-> Two decisions that would change the design — pick one for each.
-> 1. Deletes: (a) cascade to children, (b) soft-delete, (c) block if referenced.
-> 2. Session store: (a) DB table, (b) signed cookie, (c) Redis.
+Ask only questions whose answer would change the build.
 
-**Example of a question worth asking:**
-> Multi-tenant isolation: (a) schema-per-tenant, (b) row-level with `tenant_id`, or (c) shared tables with app-level filtering? This choice cascades into every query.
+Good:
 
-**Example of a question NOT worth asking:**
-> What color should the button be? (Cosmetic, reversible — pick a reasonable default and move on.)
+```text
+Session deletion behavior:
+a) cascade child rows
+b) soft-delete sessions
+c) block deletion while referenced
 
-A few decisive questions beat a long questionnaire.
+This changes the migration and API contract.
+```
 
----
+Bad:
 
-## 5. Close UNKNOWN KNOWNS — show, don't ask
+```text
+What color should the button be?
+```
 
-The user knows implicitly but can't specify cold. Recognition beats specification. Pick the medium by what's being decided.
+Cosmetic and reversible questions should be handled with a reasonable default.
 
-### 5a. Concept / scope brainstorm — intervention options
+## 6. Unknown Knowns
 
-For "where do we intervene?" questions. Enumerate cheapest to most ambitious.
+The user often recognizes the right answer faster than they can specify it.
+Show options.
 
-**Template — "10 intervention points, cheapest to most ambitious":**
-> 10 ways to address <symptom>, ordered from cheapest to most ambitious. For each: what it takes, what it costs, what it doesn't fix.
-> 1. Change one config value.
-> 2. Add a feature flag around existing behavior.
-> 3. Patch the specific call site.
-> 4. Add a small helper and switch a few callers.
-> 5. Introduce a new abstraction limited to this area.
-> 6. Refactor the module.
-> 7. Rewrite the module.
-> 8. Extract a service.
-> 9. Change the schema/contract and migrate callers.
-> 10. Rebuild the subsystem.
+### Scope brainstorm
 
-Have the user pick a range ("options 2–4 look right; skip 6+"). That range becomes the scope.
+Use when the shape of the fix is uncertain.
 
-### 5b. Codebase-search brainstorm
+```text
+10 intervention points, cheapest to most ambitious.
+For each: what it takes, what it costs, and what it does not fix.
+```
 
-Before designing something new, search the repo for existing patterns and comparable implementations. Present 3–5 hits and ask which behavior to match.
+### Codebase-search brainstorm
 
-**Template:**
-> Here are 3 places we already do something like <X> — read the linked functions and pick which behavior this new code should match, or say "none of these, do it differently."
-> 1. `path/a.ts:fn` — behavior A
-> 2. `path/b.ts:fn` — behavior B
-> 3. `path/c.ts:fn` — behavior C
+Use when the repo likely already has a pattern.
 
-### 5c. Prototype variants — when recognition/taste is the blocker
+```text
+Here are 3 places we already do something like <X>.
+Pick which behavior to match, or say none.
+```
 
-**Only** reach for prototype variants when the blocker is visual, interactive, or taste-heavy. Otherwise it's overkill and slower than sketches.
+### Prototype or artifact variants
 
-Generate **3–5 meaningfully different** directions — not variations on one idea. The spread is the point; it covers the space the user hasn't articulated.
+Use only when the blocker is visual, interactive, or taste-heavy. Create 3-5
+meaningfully different directions. For API or architecture decisions, use
+interface sketches or tradeoff cards instead of HTML.
 
-**Visual / interactive (right medium: HTML):**
-- Self-contained HTML **Artifacts** (Claude Code) or standalone `.html` files.
-- Radically different bets: e.g., dense-data table, calendar-first, kanban, timeline, chat-thread. Not five color palettes.
-- Build toward the direction the user picks.
+## 7. Unknown Unknowns
 
-**API / interface shape (right medium: plain text):**
-- Side-by-side signature or schema sketches — TypeScript interfaces, OpenAPI stubs, function signatures, table schemas.
-- Compact. Don't render these as HTML.
+You cannot list blindspots from pure imagination. Read the relevant surface,
+then enumerate what the prompt did not name.
 
-**Approach / architecture (right medium: comparable code + tradeoff card):**
-- Comparable-code pointers ("here are three existing patterns; which should this match?").
-- Tradeoff cards: choice vs. cost vs. benefit vs. reversibility, in a small table.
+Blindspot prompt:
 
----
+```text
+Before implementing <X>, read <specific files/tests/docs>.
+Then list constraints, conventions, coupling, invariants, edge cases, or ripple
+effects I may be missing. Tie every finding to a file, behavior, dependency, or
+unanswered product decision.
+```
 
-## 6. Close UNKNOWN UNKNOWNS — blindspot pass
+Down-rank before presenting:
 
-The dangerous quadrant. You cannot list your own blind spots — enumerate against the real project.
+- `bug-likely`: contradicts tests, docs, schemas, call-site expectations, or
+  observed behavior.
+- `architecture risk`: plausible hidden coupling or invariant; needs checking.
+- `likely by design`: repeated pattern, named abstraction, docs/tests encode it,
+  or no caller expects the missing behavior.
+- `roadmap gap`: not built yet, but no current code path requires it.
 
-**Template (files must be read first):**
-> I'm about to <do X>. BEFORE writing anything:
-> 1. Read: <specific files, tests, docs, schemas>.
-> 2. Then tell me what I'm not considering — existing conventions, coupling, hidden constraints, invariants, edge cases, places this will ripple.
-> 3. Tie every finding to a specific file, behavior, dependency, or unanswered product decision. No generic textbook blindspots.
+Likely-by-design and roadmap-gap items are assumptions to verify, not bug claims.
 
-**Concrete example (unfamiliar auth code):**
-> Adding a new auth provider. First read `src/auth/`, `middleware/session*`, and the tests in `test/auth/`. Then: what should I be aware of — token refresh, provider registration order, existing session assumptions, test fixture patterns? Tie each finding to a specific file.
+## 8. Codex Loop Handoff Snippet
 
-**Down-rank before presenting:** candidate blindspots are not automatically bugs. Classify each one:
+When paired with `$codex-loop-engineering`, put this compact block in
+`docs/loop/handoff.md` before continuation:
 
-- **Bug-likely** — contradicts tests, docs, schemas, call-site expectations, or observed behavior.
-- **Architecture risk** — plausible hidden coupling or invariant; needs verification.
-- **Likely by design** — repeated pattern, named abstraction, docs/tests encode it, or no caller expects the missing behavior.
-- **Roadmap gap** — not implemented yet, but no current code path requires it.
+```markdown
+## Unknowns carried forward
+- Goal frame:
+- Resolved decisions:
+- Conservative defaults:
+- Deferred questions:
+- Blindspots:
+- Distilled continuation prompt:
+```
 
-Present `likely by design` and `roadmap gap` as assumptions to verify, not as bugs. In medium diagnostics, show at most 3 blindspots after down-ranking.
+If any deferred question changes architecture, data model, API shape, UX flow, or
+an irreversible choice and has no reversible default, mark the loop blocked.
 
-**After the pass:** present the list, confirm with the user if available, record it in the notes only for large builds / implementation work. If it surfaces an architecture-shaping unknown, route it back to the map (as a new question or a prototype item). Do NOT proceed to the plan yet.
+## 9. Implementation Notes
 
----
+Use `templates/implementation-notes.md` for large builds and implementation work.
+Do not create it for medium read-only diagnostics.
 
-## 7. References — read before you design
+## 10. Explainer And Quiz
 
-Prefer **source code** where behavior matters. Other media are useful for other purposes.
-
-- **Source code** — behavior, edge cases, conventions.
-- **Docs / ADRs** — intent, historical decisions, invariants.
-- **Diagrams** — component relationships, data flow.
-- **Screenshots** — end-user state (not behavior).
-- **Websites / external references** — patterns, competitor behavior, standards.
-
-**Template:**
-> What's the closest existing thing to what you want — in this repo, another repo, a doc, a diagram, or a product? Point me at it; I'll read it before designing.
-
-Read the reference *before* designing so you don't silently default to industry-generic.
-
----
-
-## 8. Plan — after the map is resolved enough
-
-Write the plan when remaining unknowns are small enough to absorb during the build.
-
-**In Claude Code:** `plan mode` / `ExitPlanMode`.
-
-**Fallback:** write the plan as a message or a `plan.md` and get explicit user approval.
-
-**Weight the plan** toward parts most expensive to change late:
-- data models
-- type / interface shapes
-- user-facing surface
-
-Skim the mechanical parts. Set the specificity dial: concrete where the map is closed, deliberately open where the model's judgment should win.
-
----
-
-## 9. Seed and maintain the implementation notes
-
-Use `templates/implementation-notes.md` only for large builds or implementation work. Do not create it for medium read-only diagnostics. Fill user starting point, starting context, Unknowns Map, and blindspot findings before the first line of real code. Append decisions and deviations as they happen.
-
----
-
-## 10. Hand off to a fresh implementation session (large builds)
-
-Once the map is resolved and the plan is approved, start a fresh session for implementation. Carry a lean bundle:
-
-- distilled prompt (post-discovery, specificity dial set)
-- selected artifacts (chosen prototype, sample data, chosen intervention range)
-- references (which files/docs to read first)
-- the approved plan
-- `implementation-notes.md` seeded with starting point, surviving open questions, and blindspot findings
-
-Discovery transcripts bloat context and dilute signal. A clean start with the concentrated bundle keeps the implementation agent focused.
-
----
-
-## 11. After implementation
-
-- **Explainer.** Bundle the winning artifact, plan, and notes into one short summary doc — handoff and review surface. Include which unknowns were resolved and how.
-- **Comprehension quiz before merge.** For a change the user must truly own, generate a short HTML (or plain-text) report of what changed and why, then quiz the user on it. Recognition is one more cheap catch for a lurking unknown.
-
----
-
-## Guiding principle
-
-> Every explainer, brainstorm, interview, prototype, and reference is a cheap way to find out what you didn't know before it gets expensive to fix.
+For changes the user must truly own, create a short explainer after
+implementation: what changed, which unknowns were resolved, what remains risky,
+and what to verify before merge. Use HTML only when the artifact is visual or
+interactive; otherwise plain Markdown is enough.
