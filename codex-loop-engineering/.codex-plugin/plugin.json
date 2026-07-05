@@ -1,0 +1,40 @@
+{
+  "name": "codex-loop-engineering",
+  "version": "0.1.0+codex.local-20260701-000000",
+  "description": "Repo-first Codex loop execution, handoff, tracker, and verified continuation management for long-running work across projects.",
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  },
+  "homepage": "https://github.com/DaoBrewAI/building-in-public/tree/main/codex-loop-engineering",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "loop-engineering",
+    "handoff",
+    "continuation",
+    "tracker",
+    "long-running-work",
+    "daobrew"
+  ],
+  "skills": "./",
+  "interface": {
+    "displayName": "Codex Loop Engineering",
+    "shortDescription": "Repo-first Codex loops and verified handoffs.",
+    "longDescription": "A global Codex workflow skill for long-running repo work. It uses durable docs/loop files for goals, trackers, constraints, and handoffs; supports linear checkpoints or DAG-ready lanes; and verifies continuation sessions before recording them.",
+    "developerName": "DaoBrew AI",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/DaoBrewAI/building-in-public",
+    "defaultPrompt": [
+      "Use $codex-loop-engineering to continue the loop.",
+      "Install docs/loop files in this repo.",
+      "Diagnose the current loop handoff."
+    ],
+    "brandColor": "#D3B155"
+  }
+}

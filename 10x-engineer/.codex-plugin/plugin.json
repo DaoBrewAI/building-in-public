@@ -1,0 +1,43 @@
+{
+  "name": "10x-engineer",
+  "version": "1.0.0+codex.local-20260701-000000",
+  "description": "DaoBrew's curated engineering workflow toolkit for Codex: brainstorming, planning, TDD, debugging, subagent development, code review, and verification skills.",
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  },
+  "homepage": "https://github.com/DaoBrewAI/building-in-public/tree/main/10x-engineer",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "10x-engineer",
+    "workflow",
+    "brainstorming",
+    "planning",
+    "tdd",
+    "debugging",
+    "subagent",
+    "code-review",
+    "verification",
+    "daobrew"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "10x Engineer",
+    "shortDescription": "Disciplined engineering workflows for Codex.",
+    "longDescription": "A Codex adaptation of DaoBrew's Claude Code 10x-engineer toolkit. It installs the skill workflow layer for brainstorming, implementation planning, TDD, systematic debugging, subagent-driven development, code review, branch finishing, and verification. Claude-specific commands, agents, and hooks remain in the source package for Claude Code but are intentionally omitted from the Codex manifest.",
+    "developerName": "DaoBrew AI",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/DaoBrewAI/building-in-public",
+    "defaultPrompt": [
+      "Brainstorm and shape this feature before coding.",
+      "Write a bite-sized implementation plan.",
+      "Execute this plan with verification checkpoints."
+    ],
+    "brandColor": "#D3B155"
+  }
+}

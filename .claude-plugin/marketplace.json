@@ -1,0 +1,29 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "building-in-public",
+  "description": "DaoBrew's building-in-public plugins and skills",
+  "owner": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  },
+  "plugins": [
+    {
+      "name": "10x-engineer",
+      "description": "DaoBrew's curated engineering workflow toolkit for Claude Code \u2014 brainstorming, planning, TDD, systematic debugging, subagent-driven development, code review, and verification skills for autonomous multi-hour development sessions.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./10x-engineer"
+    },
+    {
+      "name": "codex-loop-engineering",
+      "description": "Repo-first Codex loop execution, handoff, tracker, and verified continuation management for long-running work across projects.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./codex-loop-engineering"
+    }
+  ]
+}
