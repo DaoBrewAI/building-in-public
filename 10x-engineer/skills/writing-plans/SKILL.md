@@ -26,7 +26,7 @@ Before I start, would you like to:
 Which do you prefer?
 ```
 
-**If user chooses Review (Option 1):** Proceed normally. After saving the plan, present the Execution Handoff options and wait for feedback.
+**If user chooses Review (Option 1):** Proceed normally. After saving the plan, present the Review Companion (see below) together with the Execution Handoff options and wait for feedback.
 
 **If user chooses Auto-execute (Option 2):** Immediately ask which execution approach:
 
@@ -41,6 +41,22 @@ Auto-execute selected. Which execution approach?
 Remember both choices. After saving the plan, skip the review pause and immediately invoke the chosen execution skill.
 
 **Save plans to:** `docs/plans/` in the current working directory as `YYYY-MM-DD-<feature-name>.md`
+
+## Review Companion (HTML) — Required
+
+Every plan produces TWO artifacts: the detailed markdown plan (what gets executed) and an HTML **review companion** (what the human reads before execution — review only).
+
+After saving the detailed plan, generate the companion and render it (Artifact tool if available; otherwise save to `docs/plans/YYYY-MM-DD-<feature-name>-review.html` and tell the user to open it).
+
+**Ordering rule — lead with what the human is most likely to tweak:**
+1. **Data model changes** — schemas, tables, stored formats, state shapes
+2. **New type interfaces / contracts** — public APIs, signatures, protocols, events
+3. **Anything user-facing** — UI, CLI flags, messages, behavior changes
+4. Bury **mechanical work** (refactors, wiring, test scaffolding) at the bottom in a compact/collapsed section labeled as trusted — the human doesn't need to review it.
+
+For each leading item show: the decision made, 1–2 realistic alternatives, and a likely-tweak vs settled marker. Keep it a 2-minute scan, not a second copy of the plan.
+
+The companion is REVIEW-ONLY: execution always follows the detailed markdown plan. If review feedback changes a decision, update the markdown plan first, then regenerate the companion.
 
 ## Bite-Sized Task Granularity
 
