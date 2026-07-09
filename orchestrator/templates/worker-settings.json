@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ORC_WORKTREE='{{WORKTREE}}' ORC_TASK_DIR='{{TASK_DIR}}' '{{GUARD_SCRIPT}}'"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "10x-engineer",
-      "description": "DaoBrew's curated engineering workflow toolkit for Claude Code \u2014 brainstorming, planning, TDD, systematic debugging, subagent-driven development, code review, and verification skills for autonomous multi-hour development sessions.",
+      "description": "DaoBrew's curated engineering workflow toolkit for Claude Code — brainstorming, planning, TDD, systematic debugging, subagent-driven development, code review, and verification skills for autonomous multi-hour development sessions.",
       "author": {
         "name": "DaoBrew AI"
       },
@@ -24,6 +24,15 @@
       },
       "category": "development",
       "source": "./codex-loop-engineering"
+    },
+    {
+      "name": "orchestrator",
+      "description": "Mission-control orchestration for Claude Code — one main session brainstorms, decomposes, spawns real headless worker sessions in guarded git worktrees, mediates their questions, integrates their work, and is the single writer of memory.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./orchestrator"
     }
   ]
 }
