@@ -1,0 +1,38 @@
+{
+  "name": "orchestrator",
+  "version": "0.1.0",
+  "description": "Mission-control orchestration for Claude Code — one main session brainstorms the ask, decomposes it into tasks, spawns real headless worker sessions in guarded git worktrees, mediates their questions, integrates and reviews their work, and is the single writer of memory. All state lives on disk in a .orchestrator/ hub so any fresh session can resume supervision.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "orchestrator",
+    "multi-session",
+    "worker-sessions",
+    "worktrees",
+    "mission-control",
+    "mediation",
+    "daobrew"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "commands": [
+    "./commands/"
+  ],
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/context-watch.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}
