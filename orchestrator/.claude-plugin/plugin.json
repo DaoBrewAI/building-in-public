@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
-  "version": "0.1.0",
-  "description": "Mission-control orchestration for Claude Code — one main session brainstorms the ask, decomposes it into tasks, spawns real headless worker sessions in guarded git worktrees, mediates their questions, integrates and reviews their work, and is the single writer of memory. All state lives on disk in a .orchestrator/ hub so any fresh session can resume supervision.",
+  "version": "0.2.0",
+  "description": "Mission-control orchestration for Claude Code — one coordinator session brainstorms each ask, then launches ONE autonomous headless session per mission that plans, executes, and self-reviews in guarded git worktrees; the coordinator stays free for other work, mediates blocked questions, and does light acceptance + merge. All state lives on disk in a .orchestrator/ hub so any fresh session can resume.",
   "repository": "https://github.com/DaoBrewAI/building-in-public",
   "license": "MIT",
   "keywords": [

@@ -1,9 +1,13 @@
-# Report — {{TASK_ID}}: {{TITLE}}
+# Report — {{MISSION_SLUG}}: {{TITLE}}
 
-- **Branch:** {{BRANCH}}
-- **Commits:** {{git log --oneline main..HEAD}}
-- **Tests:** {{command run + raw pass/fail counts — paste real output, no summaries like "all passing"}}
-- **Files changed:** {{git diff main...HEAD --stat}}
+- **Branches:** {{per repo: branch + git log --oneline <base>..HEAD}}
+- **Files changed:** {{per repo: git diff <base>...HEAD --stat}}
+
+## Code review
+{{verdict from requesting-code-review + each finding and how it was resolved — paste the actual verdict, no summaries}}
+
+## Verification
+{{commands run + raw pass/fail output per repo — paste real output, never "all passing"}}
 
 ## Deviations from the brief
 {{anything done differently than specified, and why — "none" if none}}

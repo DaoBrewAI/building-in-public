@@ -17,13 +17,18 @@ TRANSCRIPT="$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty')"
 HUB=""
 DIR="$CWD"
 while [[ "$DIR" != "/" ]]; do
-  if [[ -f "$DIR/.orchestrator/MISSION.md" ]]; then HUB="$DIR/.orchestrator"; break; fi
+  if [[ -d "$DIR/.orchestrator" ]]; then HUB="$DIR/.orchestrator"; break; fi
   DIR="$(dirname "$DIR")"
 done
 [[ -n "$HUB" ]] || exit 0
 
-# Only during an active mission, and only once per mission.
-grep -q '^\- \*\*Phase:\*\* complete' "$HUB/MISSION.md" && exit 0
+# Only while missions are active, and only once per orchestrator context.
+ACTIVE=0
+if ls "$HUB"/missions/*/state >/dev/null 2>&1; then ACTIVE=1; fi
+if [[ -f "$HUB/MISSION.md" ]]; then
+  if ! grep -q '^\- \*\*Phase:\*\* complete' "$HUB/MISSION.md"; then ACTIVE=1; fi   # v0.1 layout
+fi
+[[ "$ACTIVE" -eq 1 ]] || exit 0
 MARKER="$HUB/.carryover-notified"
 [[ -f "$MARKER" ]] && exit 0
 
@@ -42,6 +47,6 @@ PCT=$(( USED * 100 / BUDGET ))
 (( PCT >= THRESHOLD_PCT )) || exit 0
 
 touch "$MARKER"
-jq -n --arg reason "[orchestrator context-watch] Main-session context is at ${PCT}% (threshold ${THRESHOLD_PCT}%). Execute the Carryover section of orchestrator:orchestrating NOW: write ${HUB}/CARRYOVER.md from the template, update MISSION.md, then tell the user: \"Context at ${THRESHOLD_PCT}% — open a new session and run /orchestrate to continue. Workers are unaffected.\" Do not start new work." \
+jq -n --arg reason "[orchestrator context-watch] Main-session context is at ${PCT}% (threshold ${THRESHOLD_PCT}%). Execute the Carryover section of orchestrator:orchestrating NOW: write ${HUB}/CARRYOVER.md from the template, update MISSION.md, then tell the user: \"Context at ${THRESHOLD_PCT}% — open a new session and run /orchestrate to continue. Missions are unaffected.\" Do not start new work." \
   '{decision: "block", reason: $reason}'
 exit 0

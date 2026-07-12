@@ -1,5 +1,5 @@
 ---
-description: "Start or resume an orchestrated mission: brainstorm the ask into a design, decompose into tasks, spawn guarded headless worker sessions, mediate their questions, integrate and review their work. Bare /orchestrate resumes an in-flight mission from the hub."
+description: "Start or resume orchestrated missions: brainstorm the ask into a design, launch an autonomous headless session that plans/executes/self-reviews it, stay free to coordinate; mediate its questions and accept+merge its work. Bare /orchestrate resumes in-flight missions from the hub."
 disable-model-invocation: true
 ---
 

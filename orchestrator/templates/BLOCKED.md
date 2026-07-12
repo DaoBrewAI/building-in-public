@@ -1,4 +1,4 @@
-# BLOCKED {{N}} — {{TASK_ID}}
+# BLOCKED {{N}} — {{MISSION_SLUG}}
 
 **What I was doing:**
 {{one or two lines}}

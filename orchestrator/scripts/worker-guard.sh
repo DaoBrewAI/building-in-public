@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# PreToolUse guard for orchestrator worker sessions.
-# Written into each worktree's .claude/settings.json by the orchestrator with
-# ORC_WORKTREE and ORC_TASK_DIR set. Blocks branch-moving/publishing git verbs
-# and any write outside the worktree + the worker's own hub task directory.
+# PreToolUse guard for orchestrator mission sessions.
+# Env (set by the hook command written into the PRIMARY worktree's settings):
+#   ORC_WORKTREES   colon-separated absolute worktree roots (one per repo)
+#   ORC_MISSION_DIR the mission's hub directory (also writable)
+# Blocks branch-moving/publishing git verbs and any write outside the fence.
 # Hooks fire even under --dangerously-skip-permissions, so this is the fence.
 
 set -euo pipefail
+trap 'exit 2' ERR
 
 INPUT="$(cat)"
 TOOL="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty')"
@@ -21,33 +23,43 @@ deny() {
   exit 0
 }
 
-WT="${ORC_WORKTREE:?ORC_WORKTREE not set}"
-TD="${ORC_TASK_DIR:?ORC_TASK_DIR not set}"
+if [[ -z "${ORC_WORKTREES:-}" || -z "${ORC_MISSION_DIR:-}" ]]; then
+  deny "[orchestrator guard] misconfigured: ORC_WORKTREES / ORC_MISSION_DIR not set. Blocking defensively — tell the orchestrator via a BLOCKED file."
+fi
+WTS="$ORC_WORKTREES"
+MD="$ORC_MISSION_DIR"
 
 case "$TOOL" in
   Bash)
     CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
     if printf '%s' "$CMD" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|merge|rebase|push)\b'; then
-      deny "[orchestrator guard] git checkout/switch/merge/rebase/push are forbidden for workers. Commit on your branch only; the orchestrator integrates. If you believe you need this, write a BLOCKED file instead."
+      deny "[orchestrator guard] git checkout/switch/merge/rebase/push are forbidden for mission sessions. Commit on your mission branches only; the orchestrator integrates. If you believe you need this, write a BLOCKED file instead."
     fi
     if printf '%s' "$CMD" | grep -qE '\bgit\b[^|;&]*\bworktree\b'; then
-      deny "[orchestrator guard] workers must not manage worktrees. Write a BLOCKED file if your workspace looks wrong."
+      deny "[orchestrator guard] mission sessions must not manage worktrees. Write a BLOCKED file if your workspace looks wrong."
     fi
     ;;
   Write|Edit|NotebookEdit)
     FP="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')"
-    [[ -n "$FP" ]] || deny "[orchestrator guard] could not determine target path; blocked defensively."
+    if [[ -z "$FP" ]]; then
+      deny "[orchestrator guard] could not determine target path; blocked defensively."
+    fi
     case "$FP" in
-      *"/../"*|*"/.."|"../"*|"..") deny "[orchestrator guard] paths containing '..' are blocked. Use absolute paths inside your worktree." ;;
+      *"/../"*|*"/.."|"../"*|"..") deny "[orchestrator guard] paths containing '..' are blocked. Use absolute paths inside your worktrees." ;;
     esac
-    # Relative paths resolve against the worker's cwd, which is the worktree.
+    # Relative paths resolve against the session cwd, which is the primary worktree.
     if [[ "$FP" != /* ]]; then
       exit 0
     fi
-    if [[ "$FP" == "$WT"/* || "$FP" == "$TD"/* ]]; then
+    OLDIFS="$IFS"; IFS=':'
+    for ROOT in $WTS; do
+      if [[ -n "$ROOT" && "$FP" == "$ROOT"/* ]]; then IFS="$OLDIFS"; exit 0; fi
+    done
+    IFS="$OLDIFS"
+    if [[ "$FP" == "$MD"/* ]]; then
       exit 0
     fi
-    deny "[orchestrator guard] write outside your sandbox blocked: $FP. You may only write inside $WT and $TD. This includes all CLAUDE.md / memory files — the orchestrator owns memory."
+    deny "[orchestrator guard] write outside your sandbox blocked: $FP. You may only write inside your mission worktrees ($WTS) and $MD. This includes all CLAUDE.md / memory files — the orchestrator owns memory."
     ;;
 esac
 

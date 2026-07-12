@@ -1,104 +1,90 @@
 ---
 name: orchestrating
-description: Run an orchestrated mission - brainstorm the ask, decompose into tasks, spawn guarded headless worker sessions, mediate their questions, integrate and review their work, write memory once. Use when the user runs /orchestrate or asks to orchestrate work across sessions/repos.
+description: Run orchestrated missions - brainstorm the ask, provision guarded worktrees, launch ONE autonomous headless session per mission that plans, executes, and self-reviews, then stay free as a coordinator; mediate blocks and accept/merge on wake. Use when the user runs /orchestrate or asks to orchestrate work across sessions/repos.
 ---
 
-# Orchestrating a Mission
+# Orchestrating Missions
 
-You are the **orchestrator**: the single session the user talks to. Workers are real headless `claude -p` sessions you spawn, supervise, and integrate. You are the only writer of shared memory. All supervision state lives on disk in the hub — treat your own context as disposable.
+You are the **orchestrator**: a coordinator session. Each mission is ONE real headless `claude -p` session that owns the whole delivery pipeline (plan → execute → self code-review → verify → commit → report). You brainstorm, provision, launch — then you are **free**: chat, code, or launch other missions. You re-engage only when a mission's process exits (blocked / review / crash). You are the only writer of shared memory.
 
-**Constants** (override only if MISSION.md says otherwise):
-- `MAX_WORKERS = 2` concurrent, and **at most 1 running task per repo**
-- Worker model: `--model claude-opus-4-8 --effort xhigh` — always, regardless of your own model
-- Branch naming: `orc/<mission-slug>/T<ID>-<task-slug>`
+**Constants** (fixed by the plugin — the spawn script hardcodes the model spec):
+- Mission model: `--model claude-opus-4-8 --effort xhigh` — always, regardless of your own model
+- Branch naming: `orc/<mission-slug>` in every involved repo
+- **Max 1 running mission per repo** — overlapping missions wait in `pending`
 
 ## Hub resolution
 
-The hub is `<dir>/.orchestrator/` where `<dir>` is the nearest ancestor of cwd containing `.orchestrator/`, else cwd (create it on first mission: copy `${CLAUDE_PLUGIN_ROOT}/templates/MISSION.md`, `TASKS.md` and create `designs/ tasks/ archive/`). Call it `$HUB` below. Never hardcode paths.
+The hub is `<dir>/.orchestrator/` where `<dir>` is the nearest ancestor of cwd containing `.orchestrator/`, else cwd (create on first use: `missions/`, `archive/`, empty `DECISIONS.md` and `MEMORY.md`). Call it `$HUB`. Never hardcode paths.
 
 ## Phase 0 — Resume check (always first)
 
-If `$HUB/MISSION.md` exists with `Phase:` ≠ `complete`:
-1. Read MISSION.md, TASKS.md, CARRYOVER.md (if present), and every `tasks/*/state`.
-2. Reconcile against reality: do the branches exist (`git -C <repo> branch --list 'orc/*'`)? Are `running` workers actually alive (their spawn process, or try `claude -p --resume <id>` only when needed)? Any `BLOCKED-n.md` without a matching `ANSWER-n.md`?
-3. Summarize mission state to the user in 5 lines or fewer, delete CARRYOVER.md, and continue from the recorded phase.
-
-Workers whose sessions died: respawn from the unchanged `brief.md` with an addendum "salvage what exists on branch X — run `git log` first."
+1. **Old layout?** If `$HUB/MISSION.md` exists at the hub root with `Phase:` ≠ `complete`, a v0.1 per-task mission is in flight. Do not mix layouts: offer the user to finish it under the old rules (this plugin's git history has them) or archive it manually.
+2. Delete `$HUB/.carryover-notified` if present — you are a fresh context.
+3. For each `$HUB/missions/*/`: read `state` and MISSION.md; reconcile against reality — is the session alive (check `pgrep -f <session-id>` with the id from `session.txt`; the id appears in the claude process args — when uncertain, treat as ALIVE and wait, never double-spawn into the same worktrees; a repeat `pgrep` that comes up empty again (optionally: no new Heartbeats in report.md) confirms death), do the branches/worktrees in `worktrees.txt` exist, is there a `BLOCKED-n.md` without a matching `ANSWER-n.md`? Summarize all missions to the user in ≤5 lines, delete CARRYOVER.md if present, then handle any `blocked`/`review` states (phases 5/6). Missions whose sessions died: respawn per the Phase 4 crash path with the salvage message "salvage what exists on the mission branches — run `git log` first."
 
 ## Phase 1 — Brainstorm
 
-Invoke `10x-engineer:brainstorming` on the ask. This is the user's last unstructured conversation of the mission — everything after goes through mediation. Save the validated design to `$HUB/designs/<date>-<slug>.md`. Create MISSION.md from the template (`Phase: designed`).
+Invoke `10x-engineer:brainstorming` on the ask. This is the user's last unstructured conversation about THIS mission — later corrections travel as ANSWER files. Create `$HUB/missions/<date>-<slug>/`, save the validated design as `design.md`, create `MISSION.md` from the template (`Phase: pending`), write `pending` to `state`. The mission slug includes the date prefix (`<date>-<slug>`) and must be unique across missions/ AND archive/ — branches are `orc/<mission-slug>`, so a reused slug collides at worktree add.
 
-## Phase 2 — Decompose
+## Phase 2 — Provision
 
-Split the design into tasks. Each task = **one repo, one branch, one testable outcome**, ideally under ~2h of work. Record dependency edges (a consumer task depends on its producer task — this is how cross-repo coordination works; the consumer isn't spawned until the producer merges). Refuse to schedule into non-git directories (`git -C <dir> rev-parse` fails → tell the user).
+1. List every repo the design touches. `git -C <repo> rev-parse` must succeed — refuse non-git directories (tell the user).
+2. **Repo conflict check:** if any of those repos appears in another mission whose state is `running`, `blocked`, or `review` → leave this mission `pending`, tell the user it's queued, and launch it automatically when the conflicting mission archives (or enters `failed` — Phase 6f launches it at state-change).
+3. Per repo: `git -C <repo> worktree add <umbrella>/.worktrees/<mission-slug>/<repo-name> -b orc/<mission-slug>` (`<umbrella>` = the hub's parent directory — the `<dir>` from Hub resolution) and append a line to `$MISSION_DIR/worktrees.txt`: `<abs worktree>\t<branch>\t<base sha>\t<abs repo>` (base sha = `git -C <repo> rev-parse HEAD` at creation). Tab-separated, one line per repo. Mirror the same rows into MISSION.md's table.
+4. The FIRST repo (the design's center of gravity) is the **primary**; its worktree is the session cwd. If the primary repo already tracks `.claude/settings.json`, stop and tell the user — planting the mission hooks would mask the repo's own settings for the whole mission. Write the hooks into the **primary worktree only** (hooks load from the session's cwd): copy `${CLAUDE_PLUGIN_ROOT}/templates/worker-settings.json` to `<primary>/.claude/settings.json`, replacing `{{WORKTREES}}` with the colon-joined absolute worktree paths, `{{MISSION_DIR}}` with the absolute mission dir, `{{GUARD_SCRIPT}}` with `${CLAUDE_PLUGIN_ROOT}/scripts/worker-guard.sh`, and `{{GATE_SCRIPT}}` with `${CLAUDE_PLUGIN_ROOT}/scripts/pipeline-gate.sh`. Then validate the written file: `jq .` must parse it, `grep -F '{{'` must find nothing left unsubstituted, and both script paths must exist and be executable — a malformed settings file fails OPEN (hooks silently absent), so fix it before launching.
+5. Copy `${CLAUDE_PLUGIN_ROOT}/templates/report.md` into the mission dir, filling only `{{MISSION_SLUG}}` and `{{TITLE}}` — deliberately leave the section placeholders for the worker to fill (the gate keys on them). Write `brief.md` from `${CLAUDE_PLUGIN_ROOT}/templates/brief.md`, filling every `{{PLACEHOLDER}}`. The context digest is curated: binding DECISIONS rulings, reference files/patterns, test commands per repo — never "read the whole repo." Briefs are **immutable after launch** (sole exception: the Phase 4 respawn addendum); corrections travel as ANSWER files.
 
-Write TASKS.md with columns `ID | Title | Repo | Branch | Scope | State | Depends on | Notes`. **Scope** = the declared file/module boundary plus links to the task's `brief.md` and (once it exists) `plan.md`. Regenerate `board.html` (see below). Show the board to the user for a **one-shot confirm**, then go hands-off.
+## Phase 3 — Launch
 
-## Phase 3 — Brief
+Write `running` to `state` BEFORE spawning (a fast worker can write `blocked` first and be clobbered), then spawn via Bash with `run_in_background: true`:
 
-For each task, create `$HUB/tasks/T<ID>-<slug>/` and write `brief.md` from `${CLAUDE_PLUGIN_ROOT}/templates/brief.md`, filling every `{{PLACEHOLDER}}`. The **context digest** is curated: paste the relevant design excerpts, relevant DECISIONS.md rulings, and pointers to reference files/patterns — never "read the whole design doc." Write `pending` to the `state` file. Briefs are **immutable after spawn**; corrections travel as ANSWER files.
+`${CLAUDE_PLUGIN_ROOT}/scripts/spawn-worker.sh --mission-dir <mission-dir> --worktree <primary> [--worktree <other>]...`
 
-## Phase 4 — Spawn
+Update MISSION.md `Phase:` and board.html. Tell the user the mission is off and you're available. **You are now free — behave like a normal session until a wake.**
 
-For each `pending` task whose dependencies are all `done`, while fewer than MAX_WORKERS are running and its repo has no running task:
+## Phase 4 — Wake handling (event-driven)
 
-1. Create the worktree + branch yourself:
-   `git -C <repo> worktree add <umbrella>/.worktrees/T<ID>-<slug> -b orc/<mission-slug>/T<ID>-<slug>`
-2. Write the guard: copy `${CLAUDE_PLUGIN_ROOT}/templates/worker-settings.json` to `<worktree>/.claude/settings.json`, replacing `{{GUARD_SCRIPT}}` with `${CLAUDE_PLUGIN_ROOT}/scripts/worker-guard.sh`, `{{WORKTREE}}` with the absolute worktree path, and `{{TASK_DIR}}` with the absolute task dir.
-3. Spawn via Bash with `run_in_background: true`:
-   `${CLAUDE_PLUGIN_ROOT}/scripts/spawn-worker.sh --task-dir <task-dir> --worktree <worktree>`
-   The script pre-assigns a session UUID (saved to `session.txt` before launch) and runs the worker with the mandated model/effort/permissions. Save the background shell ID in `session.txt` too.
-4. Set state to `running`; update TASKS.md + board.html.
+The background spawn process exiting wakes you, even mid-conversation about something else — finish your sentence, then handle it. Read that mission's `state`:
 
-## Phase 5 — Monitor loop
+- `blocked` → Phase 5.
+- `review` → Phase 6.
+- State/Phase already `failed` → one-line note to the user; never Phases 5/6.
+- Process exited but state still `running` → crash: inspect `worker-output-*.json` / `worker-stderr.log` and the worktrees, then respawn = `spawn-worker.sh … --resume "<salvage message>"` against the recorded session id (as in Phase 5 — headless transcripts usually survive a process crash). Only if the resume itself errors: append a clearly-marked `## Respawn addendum (<date>)` section to brief.md with the salvage note — the ONLY sanctioned brief mutation, logged in DECISIONS.md — then spawn fresh. At each crash wake, append a `crash: <date>` line to MISSION.md's Notes section (orchestrator-owned, survives carryover); 2 such lines → Phase 6f.
 
-You are woken when a background spawn process exits (headless workers exit at every turn end — this is normal, not a crash). On each wake, read all `tasks/*/state`:
+If multiple missions have exited, handle one wake fully (through its state + board update) before the next. Update MISSION.md + board.html on **every** state transition.
 
-- `blocked` → Phase 6.
-- `review` → Phase 7.
-- Process exited but state still `running` → protocol violation or crash: inspect the worker's `worker-output-*.json` and worktree; salvage commits or reset + respawn (2 deaths on one task → escalate to user).
-- After any integration, loop back to Phase 4 to spawn newly unblocked tasks.
+## Phase 5 — Mediate
 
-Update TASKS.md + board.html on **every** state transition. If all tasks are `done` → Phase 8.
+Invoke `orchestrator:orchestrator-mediation` for the triage rules. Write `ANSWER-<n>.md` next to the BLOCKED file, append the ruling to `$HUB/DECISIONS.md` (`## D-<seq> (<mission-slug>, <date>) — <question> / <answer> / decided-by: orchestrator|user`), write `running` back to `state` BEFORE resuming (a fast worker can write `blocked` first and be clobbered), then resume:
 
-## Phase 6 — Mediate
+`${CLAUDE_PLUGIN_ROOT}/scripts/spawn-worker.sh --mission-dir <mission-dir> --worktree <primary> [--worktree <other>]... --resume "Read ANSWER-<n>.md in your mission directory and continue."`
 
-Invoke `orchestrator:orchestrator-mediation` for the triage rules. Outcome: write `ANSWER-<n>.md` next to the BLOCKED file, append the ruling to DECISIONS.md (`## D-<seq> (T<ID>, <date>) — <question> / <answer> / decided-by: orchestrator|user`), then resume the worker:
+## Phase 6 — Accept & merge (light acceptance, ~2 minutes — you do NOT re-review the code)
 
-`${CLAUDE_PLUGIN_ROOT}/scripts/spawn-worker.sh --task-dir <task-dir> --worktree <worktree> --resume "Read ANSWER-<n>.md in your task directory and continue."`
+1. **Artifacts:** `plan.md` exists; `report.md` has `## Code review` with a real verdict and `## Verification` with real test output. Missing → resume the session naming exactly what's absent (`spawn-worker.sh … --resume`, as in Phase 5); also delete `$MISSION_DIR/.gate-blocks` when bouncing, so the gate's block budget is fresh for the retry; do NOT merge.
+2. **Fence:** per `worktrees.txt` line, `git -C <worktree> diff <base>...HEAD --stat` stays within the design's declared scope; branch names match; the diff must not include `.claude/settings.json` (the planted hooks) — if a worker committed it, bounce the mission to remove it before merge (`spawn-worker.sh … --resume`, as in Phase 5).
+3. **Merge:** per repo in dependency order (worktrees.txt order, primary first, unless the design says otherwise): first the preconditions — `git -C <repo> status --porcelain` must be empty AND the checked-out branch must be the repo's default branch (main or master, whichever exists; if both, prefer the branch `origin/HEAD` points at, else main); these are the USER'S live checkouts, so if dirty or on another branch, do not touch it — tell the user what's in the way and wait for their go-ahead. Then `git -C <repo> merge --no-ff --no-commit orc/<mission-slug>` → run that repo's test suite against the merged working tree → PASS: `git commit` (the merge commit); FAIL: `git merge --abort` (main untouched), resume the mission session with the failing output (`spawn-worker.sh … --resume`, as in Phase 5 — its context is intact). Repos already committed in this cycle stay merged (they passed their own suites) — note them in the eventual report. 2 failed acceptance cycles → Phase 6f.
+4. **Cleanup — nothing temporary outlives the mission:** first delete the planted `<primary>/.claude/settings.json` (and the `.claude/` dir if now empty), then per `worktrees.txt`: `git -C <repo> worktree remove <worktree>` (if it still refuses over stray files, `git worktree remove --force` is safe post-merge) and `git -C <repo> branch -d orc/<mission-slug>`; remove the now-empty `.worktrees/<mission-slug>/`.
+5. **Report** to the user: what shipped per repo, decisions made on their behalf (DECISIONS.md), test results, follow-ups from the report.
+6. **Memory, exactly once per mission:** append learnings to `$HUB/MEMORY.md` as `## M-<seq> · ttl:<durable|mission> · <date>`; prune this mission's `ttl:mission` entries; mirror `ttl:durable` learnings into your global auto-memory.
+7. Set state + MISSION.md `Phase:` to `accepted`, move the mission dir into `$HUB/archive/`, delete `$HUB/.carryover-notified` (a future 65% warning may fire again), regenerate board.html, then launch any `pending` mission this unblocked (Phase 2 conflict check).
 
-Set state back to `running`.
+## Phase 6f — Failed
 
-## Phase 7 — Integrate & review
-
-1. Read `report.md`. Verify guards: branch matches TASKS.md; `git -C <worktree> diff main...HEAD --stat` stays inside the declared Scope; nothing in the hub changed outside the worker's task dir.
-2. Run `10x-engineer:requesting-code-review` against the branch, and the repo's test suite.
-3. **Pass** → merge to the repo's main in dependency order, re-run tests post-merge, set state `done`, prune `ttl:task-T<ID>` entries from MEMORY.md, `git worktree remove` + delete branch.
-4. **Fail** → resume the same worker session with the findings (its context is intact). Two failed review cycles → escalate to the user with the review verdicts.
-
-## Phase 8 — Report & memory
-
-1. Consolidated report to the user: what shipped per repo, decisions made on their behalf (from DECISIONS.md), test results, open follow-ups.
-2. Memory, exactly once:
-   - Append learnings to `$HUB/MEMORY.md` as `## M-<seq> · ttl:<durable|mission|task-T<ID>> · <date>` entries.
-   - Prune all `ttl:mission` and remaining `ttl:task-*` entries.
-   - **Mirror `ttl:durable` learnings into your global auto-memory** (your normal memory directory + MEMORY.md index) so solo sessions benefit.
-3. Set `Phase: complete`; move `designs/<this design>`, `tasks/`, and a copy of MISSION/TASKS/DECISIONS into `$HUB/archive/<date>-<mission-slug>/`.
+Entered on 2 crash deaths, 2 failed acceptance cycles, or the user saying to kill a mission. On a user-kill the session is still RUNNING: first terminate the process (find it via `pgrep -f <session-id>` as in Phase 0, then kill it) before setting `failed`. Set state + MISSION.md `Phase:` to `failed`, notify the user with what exists (branches, worktrees, the report so far), and launch any `pending` mission this unblocked (Phase 2 conflict check) — don't wait for archive. `failed` does NOT count as a conflict in the Phase 2 repo-conflict check (branch names are per-slug, so a new mission on the same repo is safe). Keep worktrees/branches for salvage until the user decides; on their go-ahead, clean up as in Phase 6 step 4 and archive the mission dir.
 
 ## board.html
 
-After every TASKS.md change, regenerate `$HUB/board.html` from `${CLAUDE_PLUGIN_ROOT}/templates/board.html`: one row per task inserted at `<!-- ROWS -->` following the commented row shape in the template (state pill classes: `pending running blocked review done failed`; relative links to each task's brief.md / plan.md / report.md). It is a read-only view for the user — TASKS.md stays the source of truth.
+On every mission state change, regenerate `$HUB/board.html` from `${CLAUDE_PLUGIN_ROOT}/templates/board.html`: one row per mission at `<!-- ROWS -->` following the commented row shape (pill classes: `pending running blocked review accepted failed`; links into `missions/<slug>/`). Missions archive at acceptance, so accepted rows normally drop off the board in the same regeneration; if you choose to list recently archived missions, point their links at `archive/<date>-<slug>/` instead of `missions/<slug>/`.
 
 ## Carryover (context ≥ 65%)
 
-When the context-watch hook tells you the threshold is crossed (it fires once per mission):
-1. Write `$HUB/CARRYOVER.md` from the template: phase, per-task states + session IDs, unanswered BLOCKEDs, in-flight decisions, exact next actions, anything that exists only in your context.
-2. Update MISSION.md, then tell the user exactly: **"Context at 65% — open a new session and run `/orchestrate` to continue. Workers are unaffected."** Then stop supervising; do not start new work.
+When the context-watch hook fires: write `$HUB/CARRYOVER.md` from the template (mission list + states + session ids, unanswered BLOCKEDs, anything in-context-only), update each MISSION.md, then tell the user exactly: **"Context at 65% — open a new session and run `/orchestrate` to continue. Missions are unaffected."** Then stop supervising; do not start new work. Wakes arriving after the 65% notice get one line to the user ("mission X exited, state S — handle it from the new session"); do not run Phases 5/6 here.
 
 ## Non-negotiables
 
-- Workers never talk to the user; you never forward a worker's raw output as a question — triage first.
-- You never edit files inside a worker's worktree while it runs; corrections go through ANSWER files.
-- Only you write MEMORY.md, DECISIONS.md, TASKS.md, board.html — and MEMORY.md only at integration (pruning) and Phase 8 (writing).
+- Mission sessions never talk to the user; you never forward a session's raw output as a question — triage first.
+- You never edit files inside a mission's worktrees while it runs; corrections go through ANSWER files.
+- Only you write MEMORY.md, DECISIONS.md, board.html.
 - Escalate to the user only for: scope changes, user-visible behavior, cost, or data. Everything else you decide and log.
+- The pipeline's entry point is `10x-engineer:writing-plans` with subagent-driven execution — the chain (execute → review → verify) cascades from the skills themselves. The Stop-hook gate and your acceptance are backstops, not the driver.

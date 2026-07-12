@@ -6,7 +6,17 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ORC_WORKTREE='{{WORKTREE}}' ORC_TASK_DIR='{{TASK_DIR}}' '{{GUARD_SCRIPT}}'"
+            "command": "ORC_WORKTREES='{{WORKTREES}}' ORC_MISSION_DIR='{{MISSION_DIR}}' '{{GUARD_SCRIPT}}'"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "ORC_WORKTREES='{{WORKTREES}}' ORC_MISSION_DIR='{{MISSION_DIR}}' '{{GATE_SCRIPT}}'"
           }
         ]
       }

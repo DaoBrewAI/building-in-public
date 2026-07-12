@@ -1,11 +1,14 @@
 # Mission: {{MISSION_SLUG}}
 
 - **Ask:** {{ONE_LINE_ASK}}
-- **Design:** designs/{{DESIGN_FILE}}
-- **Phase:** designed <!-- designed | briefing | executing | integrating | complete -->
+- **Phase:** pending <!-- pending | running | blocked | review | accepted | failed -->
 - **Started:** {{DATE}}
-- **Max workers:** 2 (max 1 per repo)
-- **Worker spec:** claude-opus-4-8 · effort xhigh · dangerously-skip-permissions (guarded)
+- **Design:** ./design.md · **Brief:** ./brief.md · **Plan:** ./plan.md · **Report:** ./report.md
+- **Session spec:** claude-opus-4-8 · effort xhigh · dangerously-skip-permissions (guarded)
+
+## Repos & worktrees
+| Repo | Worktree | Branch | Base SHA |
+|------|----------|--------|----------|
 
 ## Notes
-<!-- anything a fresh orchestrator session must know that isn't on the board -->
+<!-- anything a fresh orchestrator session must know that isn't on disk elsewhere -->
