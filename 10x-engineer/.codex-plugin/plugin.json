@@ -1,7 +1,7 @@
 {
   "name": "10x-engineer",
-  "version": "1.0.0+codex.local-20260701-000000",
-  "description": "DaoBrew's curated engineering workflow toolkit for Codex: brainstorming, planning, TDD, debugging, subagent development, code review, and verification skills.",
+  "version": "1.1.0",
+  "description": "DaoBrew's Codex-native engineering workflow toolkit: brainstorming, planning, TDD, debugging, agent-driven development, review, verification, status truth, and change walkthroughs.",
   "author": {
     "name": "DaoBrew AI",
     "url": "https://github.com/DaoBrewAI"
@@ -25,7 +25,7 @@
   "interface": {
     "displayName": "10x Engineer",
     "shortDescription": "Disciplined engineering workflows for Codex.",
-    "longDescription": "A Codex adaptation of DaoBrew's Claude Code 10x-engineer toolkit. It installs the skill workflow layer for brainstorming, implementation planning, TDD, systematic debugging, subagent-driven development, code review, branch finishing, and verification. Claude-specific commands, agents, and hooks remain in the source package for Claude Code but are intentionally omitted from the Codex manifest.",
+    "longDescription": "A Codex-native adaptation of DaoBrew's 10x-engineer toolkit. It provides host-correct workflows for brainstorming, implementation planning, TDD, systematic debugging, agent-driven development, code review, branch finishing, verification, evidence-backed status, and post-run understanding transfer. The original Claude Code package remains intact beside this Codex skill tree.",
     "developerName": "DaoBrew AI",
     "category": "Productivity",
     "capabilities": [

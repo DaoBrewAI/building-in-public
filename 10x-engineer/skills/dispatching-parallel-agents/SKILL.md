@@ -43,12 +43,9 @@ Each agent gets:
 
 ### 3. Dispatch in Parallel
 
-```
-Task("Fix agent-tool-abort.test.ts failures")
-Task("Fix batch-completion-behavior.test.ts failures")
-Task("Fix tool-approval-race-conditions.test.ts failures")
-// All three run concurrently
-```
+Use `spawn_agent` once per domain before waiting, so all independent tasks run
+concurrently. Give each agent a stable task name, the minimum required context,
+and explicit file ownership.
 
 ### 4. Review and Integrate
 
@@ -58,15 +55,16 @@ When agents return:
 - Run full test suite
 - Integrate all changes
 
-## Team Mode (4+ Tasks or Need Coordination)
+## Coordinated Mode (4+ Tasks or Dependencies)
 
-When Teams is available and you have many independent tasks or need inter-agent communication:
+When Codex collaboration tools are available and you have many independent
+tasks or need inter-agent communication:
 
-1. TeamCreate with description
-2. TaskCreate for each task with dependencies
-3. Spawn implementer teammates (max 4-5)
-4. Monitor and coordinate via SendMessage
-5. Shutdown when all tasks complete
+1. Model dependencies and file ownership in `update_plan`.
+2. Spawn only the currently unblocked tasks, up to the available concurrency.
+3. Use `send_message` for non-blocking guidance and `followup_task` for another turn.
+4. Use `wait_agent` or `list_agents` to collect status.
+5. Stop or close agents when their bounded task is complete.
 
 ## Agent Prompt Structure
 

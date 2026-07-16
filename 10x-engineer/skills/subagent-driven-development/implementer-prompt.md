@@ -3,7 +3,7 @@
 Use this template when dispatching an implementer subagent.
 
 ```
-Task tool (general-purpose):
+Codex `spawn_agent` (worker or default agent):
   description: "Implement Task N: [task name]"
   prompt: |
     You are implementing Task N: [task name]
@@ -32,7 +32,9 @@ Task tool (general-purpose):
     1. Implement exactly what the task specifies — do NOT change existing behavior unless absolutely necessary for this task
     2. Write tests (following TDD if task says to)
     3. Verify implementation works
-    4. Commit your work
+    4. Commit your work, unless the parent task explicitly says commits are
+       brokered. In brokered mode, do not run `git commit`; report the files
+       and proposed commit message as a commit checkpoint.
     5. Self-review (see below)
     6. Report back
 

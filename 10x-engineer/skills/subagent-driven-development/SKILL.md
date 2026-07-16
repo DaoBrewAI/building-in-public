@@ -9,42 +9,50 @@ Execute plan by dispatching fresh subagent per task, with two-stage review after
 
 **Core principle:** Fresh subagent per task + two-stage review (spec then quality) = high quality, fast iteration
 
-## Teams Availability Check
+## Collaboration Availability Check
 
-Before starting execution, check if the Teams feature is available. Teams enables a **pipelined mode** where multiple implementers work concurrently while a dedicated reviewer handles completed work.
+Before starting execution, check whether Codex exposes collaboration tools such
+as `spawn_agent`, `send_message`, and `wait_agent`. They enable a **pipelined
+mode** where multiple implementers work concurrently while dedicated reviewers
+inspect completed work.
 
-**How to check:** Attempt to use `TeamCreate`. If it's not in your available tools, fall back to Sequential Mode.
+**How to check:** Inspect the available tools. If agent spawning is unavailable,
+fall back to root-agent execution with the same spec and quality review gates.
 
 ## Sequential Mode (Original / Fallback)
 
-Use when Teams isn't available, tasks are tightly coupled, or you have only 1-2 tasks.
+Use when collaboration tools are unavailable, tasks are tightly coupled, or you have only 1-2 tasks.
 
 ### The Process
 
-1. Read plan, extract all tasks with full text, note context, create TodoWrite
+1. Read the plan, extract every task with full text, note context, and mirror it in `update_plan`.
 2. For each task:
    - Dispatch implementer subagent (./implementer-prompt.md)
    - If implementer asks questions -> answer, provide context, re-dispatch
-   - Implementer implements, tests, commits, self-reviews
+   - Implementer implements, tests, commits, self-reviews. If the invoking
+     context specifies brokered commits, it records a commit checkpoint and
+     leaves the working tree uncommitted instead.
    - Dispatch spec reviewer subagent (./spec-reviewer-prompt.md)
    - If spec review fails -> implementer fixes, re-review
    - Dispatch code quality reviewer subagent (./code-quality-reviewer-prompt.md)
    - If quality review fails -> implementer fixes, re-review
-   - Mark task complete in TodoWrite
+   - Mark the task complete in `update_plan`.
 3. After all tasks: Dispatch final code reviewer for entire implementation
 4. Use 10x-engineer:finishing-a-development-branch
 
-## Team-Pipelined Mode (3+ Parallelizable Tasks)
+## Agent-Pipelined Mode (3+ Parallelizable Tasks)
 
-When Teams is available and the plan has 3+ tasks that can be worked on concurrently, use pipelined execution: multiple implementer teammates work in parallel while you coordinate reviews.
+When collaboration tools are available and the plan has 3+ tasks that can be
+worked on concurrently, use pipelined execution: multiple bounded implementer
+agents work in parallel while you coordinate reviews.
 
 ### Architecture
 
 ```
 +---------------------------------------------+
-|            You (Team Lead)                   |
+|          You (Coordinator)                   |
 |  - Creates team + task list from plan        |
-|  - Assigns tasks via TaskUpdate              |
+|  - Owns the plan and file boundaries         |
 |  - Reviews completed work (spec + quality)   |
 |  - Sends feedback via SendMessage            |
 |  - Shuts down team when all tasks pass       |
@@ -60,48 +68,34 @@ When Teams is available and the plan has 3+ tasks that can be worked on concurre
 
 ### Setup
 
-```
-1. TeamCreate(team_name="implement-feature", description="Execute plan: [feature name]")
+1. Parse the dependency table and place all tasks in `update_plan`.
+2. Assign disjoint file ownership to every task in the same parallel group.
+3. Call `spawn_agent` once for each currently unblocked task before waiting,
+   up to the available concurrency limit. Include the full task text and the
+   `./implementer-prompt.md` instructions in each prompt.
+4. Record every returned agent id. Use `send_message` for course corrections,
+   `followup_task` for another bounded turn, and `wait_agent` to collect results.
 
-2. For each task in plan:
-   TaskCreate(
-     subject="Task N: [name]",
-     description="[FULL task text from plan, not a reference]",
-     activeForm="Implementing [name]"
-   )
-
-3. Set dependencies from plan:
-   TaskUpdate(taskId="4", addBlockedBy=["1", "2"])  // Task 4 needs 1 and 2 done first
-
-4. Spawn implementer teammates (one per parallelizable task, max 4):
-   Task(name="implementer-1", team_name="implement-feature", subagent_type="general-purpose",
-        prompt="[Use ./implementer-prompt.md template with team additions]")
-   Task(name="implementer-2", ...)
-```
-
-### Team Lead Review Workflow
+### Coordinator Review Workflow
 
 As team lead, when a teammate reports completion:
 
 1. **Spec review** -- Dispatch a spec reviewer subagent (./spec-reviewer-prompt.md) for the completed task
-2. **If spec fails** -- `SendMessage` the implementer teammate with specific issues to fix
+2. **If spec fails** -- use `send_message` or `followup_task` to give the implementer specific issues to fix
 3. **If spec passes** -- Dispatch code quality reviewer (./code-quality-reviewer-prompt.md)
-4. **If quality fails** -- `SendMessage` the implementer with issues
+4. **If quality fails** -- send the implementer the concrete issues
 5. **If quality passes** -- Task is truly done. Check if any blocked tasks are now unblocked.
 
 This pipelines the work: while you review Task 1, implementers are working on Tasks 2 and 3.
 
 ### Shutdown
 
-When all tasks are reviewed and approved:
-```
-SendMessage(type="shutdown_request", recipient="implementer-1", content="All tasks complete")
-// ... for each teammate
-// After all acknowledge:
-TeamDelete()
-```
+When all tasks are reviewed and approved, interrupt any still-running bounded
+agent, collect final statuses with `list_agents`, and leave no orphaned work.
 
-Then proceed to: **10x-engineer:finishing-a-development-branch**
+Then proceed to: **10x-engineer:finishing-a-development-branch**. In a
+brokered-commit workflow, skip branch finishing and return the reviewed,
+verified working tree to the outer orchestrator for its trusted commit step.
 
 ## Prompt Templates
 
@@ -121,9 +115,9 @@ Then proceed to: **10x-engineer:finishing-a-development-branch**
 - **Start code quality review before spec compliance passes**
 
 **Sequential mode only:**
-- Dispatch multiple implementation subagents in parallel (use Team-Pipelined instead)
+- Dispatch multiple implementation subagents in parallel (use Agent-Pipelined instead)
 
-**Team-Pipelined mode only:**
+**Agent-Pipelined mode only:**
 - Spawn more than 4-5 teammates (diminishing returns, coordination overhead)
 - Let teammates work on tasks that edit the same files (conflict risk)
 - Skip shutdown protocol (teammates keep running)

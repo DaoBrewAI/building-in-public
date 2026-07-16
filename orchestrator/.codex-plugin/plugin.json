@@ -1,0 +1,40 @@
+{
+  "name": "orchestrator",
+  "version": "0.2.0",
+  "description": "Mission-control orchestration for Codex using guarded worktrees, persistent mission state, mediated blocking decisions, and resumable codex exec workers.",
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  },
+  "homepage": "https://github.com/DaoBrewAI/building-in-public/tree/main/orchestrator",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "orchestrator",
+    "codex",
+    "multi-session",
+    "worktrees",
+    "mission-control",
+    "mediation",
+    "daobrew"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Orchestrator",
+    "shortDescription": "Guarded autonomous Codex missions.",
+    "longDescription": "A Codex-native mission coordinator that turns validated designs into isolated git worktrees, launches one resumable codex exec worker per mission, mediates only material blockers, verifies artifacts and tests, and keeps durable state in a repo-local .orchestrator hub.",
+    "developerName": "DaoBrew AI",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/DaoBrewAI/building-in-public",
+    "defaultPrompt": [
+      "Orchestrate this implementation as a guarded mission.",
+      "Resume and reconcile my active missions.",
+      "Show the mission board and mediate blockers."
+    ],
+    "brandColor": "#D3B155"
+  }
+}

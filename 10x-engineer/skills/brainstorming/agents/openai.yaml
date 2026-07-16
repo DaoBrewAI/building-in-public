@@ -1,0 +1,4 @@
+interface:
+  display_name: "Brainstorming"
+  short_description: "Codex workflow for Brainstorming."
+  default_prompt: "Use $brainstorming to guide this task."

@@ -15,6 +15,14 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 ## Execution Preference (Ask First)
 
+First inspect the invoking context. If it explicitly records both an execution
+preference and an execution approach as already approved, honor those choices
+without asking again. This is the non-interactive path for an orchestrated
+worker that cannot talk to the end user. Record the inherited choices in the
+plan. If the context also specifies **brokered commits**, replace each Commit
+step with a **Commit checkpoint** that lists the files and proposed message;
+do not run `git commit` because the trusted outer workflow owns Git metadata.
+
 **Before writing the plan, ask the user:**
 
 ```
@@ -34,7 +42,7 @@ Which do you prefer?
 Auto-execute selected. Which execution approach?
 
 1. Subagent-Driven (this session, sequential)
-2. Team-Driven (this session, parallel)
+2. Agent-Driven (this session, parallel)
 3. Parallel Session (separate)
 ```
 
@@ -46,7 +54,9 @@ Remember both choices. After saving the plan, skip the review pause and immediat
 
 Every plan produces TWO artifacts: the detailed markdown plan (what gets executed) and an HTML **review companion** (what the human reads before execution — review only).
 
-After saving the detailed plan, generate the companion and render it (Artifact tool if available; otherwise save to `docs/plans/YYYY-MM-DD-<feature-name>-review.html` and tell the user to open it).
+After saving the detailed plan, generate the companion with the
+`visualize:visualize` skill when available; otherwise save it to
+`docs/plans/YYYY-MM-DD-<feature-name>-review.html` and tell the user to open it.
 
 **Ordering rule — lead with what the human is most likely to tweak:**
 1. **Data model changes** — schemas, tables, stored formats, state shapes
@@ -74,7 +84,7 @@ The companion is REVIEW-ONLY: execution always follows the detailed markdown pla
 ```markdown
 # [Feature Name] Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use 10x-engineer:executing-plans to implement this plan task-by-task.
+> **For Codex:** REQUIRED SKILL: Use 10x-engineer:executing-plans to implement this plan task-by-task.
 
 **Goal:** [One sentence describing what this builds]
 
@@ -163,8 +173,9 @@ Tasks with dependencies must wait for their prerequisites.
 - Exact file paths always
 - Complete code in plan (not "add validation")
 - Exact commands with expected output
-- Reference relevant skills with @ syntax
-- DRY, YAGNI, TDD, frequent commits
+- Reference relevant skills by their exact catalog name or `$skill-name` invocation syntax.
+- DRY, YAGNI, TDD, frequent commits (or frequent commit checkpoints when the
+  invoking workflow explicitly uses brokered commits)
 - Include dependency table for plans with 3+ tasks
 
 ## Execution Handoff
@@ -175,7 +186,7 @@ After saving the plan, offer execution choice:
 
 **1. Subagent-Driven (this session, sequential)** - I dispatch fresh subagent per task sequentially, review between tasks, fast iteration
 
-**2. Team-Driven (this session, parallel)** - I create a team with multiple implementer teammates working concurrently on independent tasks, with pipelined reviews. *Requires TeamCreate tool availability.*
+**2. Agent-Driven (this session, parallel)** - I spawn bounded implementer agents for independent tasks, with pipelined reviews. *Requires Codex collaboration tools.*
 
 **3. Parallel Session (separate)** - Open new session with executing-plans, batch execution with checkpoints
 
@@ -186,12 +197,12 @@ After saving the plan, offer execution choice:
 - Stay in this session
 - Fresh subagent per task + code review
 
-**If Team-Driven chosen:**
-- First check if `TeamCreate` tool is available
-- If available: **REQUIRED SUB-SKILL:** Use 10x-engineer:subagent-driven-development (Team-Pipelined Mode)
-- If NOT available: Inform user and fall back to Subagent-Driven (sequential)
-- Use dependency table to set `addBlockedBy` relationships in TaskCreate
-- Use "Files Touched" column to avoid assigning conflicting tasks to same teammate
+**If Agent-Driven chosen:**
+- First check whether `spawn_agent`, `send_message`, and `wait_agent` are available.
+- If available: **REQUIRED SKILL:** Use 10x-engineer:subagent-driven-development (Agent-Pipelined Mode).
+- If unavailable: inform the user and fall back to root-agent or sequential execution.
+- Use the dependency table and `update_plan` to release only unblocked tasks.
+- Use the "Files Touched" column to avoid assigning conflicting tasks concurrently.
 
 **If Parallel Session chosen:**
 - Guide them to open new session in worktree

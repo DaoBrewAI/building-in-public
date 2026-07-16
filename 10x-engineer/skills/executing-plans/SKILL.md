@@ -19,7 +19,7 @@ Load plan, review critically, execute tasks in batches, report for review betwee
 1. Read plan file
 2. Review critically - identify any questions or concerns about the plan
 3. If concerns: Raise them with your human partner before starting
-4. If no concerns: Create TodoWrite and proceed
+4. If no concerns: mirror the task list in `update_plan` and proceed
 
 ### Step 1.5: Create Implementation Notes
 Create `implementation-notes.md` next to the plan file (e.g. `docs/plans/YYYY-MM-DD-<feature>-implementation-notes.md`) with three headings: `## Progress`, `## Deviations`, `## Surprises & Learnings`. Keep it updated as you work — one line per completed task under Progress. This file is the memory of the run; the change-walkthrough skill reads it at the end.

@@ -35,10 +35,21 @@ Plugins are multi-skill systems — install the whole folder for the full workfl
 
 | Plugin | What it does |
 | :--- | :--- |
-| 🧠 &nbsp;[**10x-engineer**](./10x-engineer) | A complete engineering workflow toolkit — brainstorming, planning, TDD, debugging, code review, and subagent-driven development. Twelve skills that chain together to take you from idea to merged PR. |
+| 🧠 &nbsp;[**10x-engineer**](./10x-engineer) | Dual-host Codex/Claude workflow toolkit with 15 skills for brainstorming, planning, TDD, debugging, agent-driven development, review, verification, and evidence-backed handoff. |
+| 🎛️ &nbsp;[**orchestrator**](./orchestrator) | Codex/Claude mission control: guarded worktrees, one resumable autonomous session per mission, blocker mediation, verified acceptance, and disk-first recovery. |
 | 📋 &nbsp;[**project-planner**](./project-planner) | Multi-phase project planning and execution framework. Break down large projects into phases, generate detailed plans, track status, and execute task-by-task with build verification and checkpoints. |
 
 <!-- Add new plugins above this line. Format: | emoji [**name**](./folder) | one-line description | -->
+
+Install the Codex-native plugins from this repository:
+
+```bash
+codex plugin marketplace add DaoBrewAI/building-in-public --ref main
+codex plugin add 10x-engineer@building-in-public
+codex plugin add orchestrator@building-in-public
+```
+
+Start a new Codex task after installation so the bundled skills are discovered.
 
 ---
 

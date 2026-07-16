@@ -14,7 +14,7 @@
     "daobrew"
   ],
   "skills": [
-    "./skills/"
+    "./claude-skills/"
   ],
   "commands": [
     "./commands/"

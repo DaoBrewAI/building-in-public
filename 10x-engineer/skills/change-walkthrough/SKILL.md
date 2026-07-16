@@ -18,7 +18,9 @@ The human is about to own code they didn't watch being written. Produce a report
 
 ## Step 2 — Write the HTML report
 
-Render via the Artifact tool when available; otherwise save `docs/plans/YYYY-MM-DD-<feature>-walkthrough.html` and tell the user to open it. Sections, in order:
+Use the `visualize:visualize` skill when available; otherwise save
+`docs/plans/YYYY-MM-DD-<feature>-walkthrough.html` and tell the user to open it.
+Sections, in order:
 
 1. **Context** — the problem this change solves and what triggered it, in plain language
 2. **Intuition** — the mental model: how the pieces fit, the one diagram or metaphor that makes the design click; what you'd sketch at a whiteboard for a teammate
