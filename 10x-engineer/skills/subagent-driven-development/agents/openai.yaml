@@ -1,0 +1,4 @@
+interface:
+  display_name: "Subagent Driven Development"
+  short_description: "Codex workflow for Subagent Driven Development."
+  default_prompt: "Use $subagent-driven-development to guide this task."

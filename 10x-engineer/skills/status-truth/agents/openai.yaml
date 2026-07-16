@@ -1,0 +1,4 @@
+interface:
+  display_name: "Status Truth"
+  short_description: "Codex workflow for Status Truth."
+  default_prompt: "Use $status-truth to guide this task."

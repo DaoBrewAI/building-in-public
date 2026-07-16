@@ -1,0 +1,4 @@
+interface:
+  display_name: "Change Walkthrough"
+  short_description: "Codex workflow for Change Walkthrough."
+  default_prompt: "Use $change-walkthrough to guide this task."

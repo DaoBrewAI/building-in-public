@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrator Mediation"
+  short_description: "Codex workflow for Orchestrator Mediation."
+  default_prompt: "Use $orchestrator-mediation to guide this task."

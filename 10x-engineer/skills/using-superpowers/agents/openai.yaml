@@ -1,0 +1,4 @@
+interface:
+  display_name: "Using Superpowers"
+  short_description: "Codex workflow for Using Superpowers."
+  default_prompt: "Use $using-superpowers to guide this task."

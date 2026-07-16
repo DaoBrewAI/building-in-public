@@ -1,96 +1,125 @@
 # Orchestrator
 
-Mission-control orchestration for Claude Code. You talk to **one coordinator session** (the session you talk to — called "the orchestrator" below); it brainstorms each ask into a design, then launches **ONE autonomous headless `claude -p` session per mission** that plans, executes, and self-reviews in guarded git worktrees. The orchestrator stays **free for other work**, mediates blocked questions, does light acceptance + merge, and is the **only writer of persistent memory**. All state lives on disk in a `.orchestrator/` hub so any fresh session can resume.
+Mission-control orchestration for Codex and Claude Code. One coordinator turns
+an ask into a validated design, provisions isolated git worktrees, launches one
+autonomous agent session per mission, mediates material blockers, verifies the
+result, and integrates it. Durable state lives in a repo-local `.orchestrator/`
+hub so a fresh task can reconstruct every mission.
 
-Built to fix two problems with juggling many Claude Code sessions:
-1. Losing context when hopping between windows.
-2. Parallel sessions corrupting each other's memory.
+## Codex installation
 
-## Install
+Install both the execution workflow and the orchestrator:
 
-Local (this machine — a `local-dev` marketplace manifest already exists at `~/.claude/plugins/local/`):
-
+```bash
+codex plugin marketplace add DaoBrewAI/building-in-public --ref main
+codex plugin add 10x-engineer@building-in-public
+codex plugin add orchestrator@building-in-public
 ```
-/plugin marketplace add ~/.claude/plugins/local
-/plugin install orchestrator@local-dev
+
+Start a new Codex task, open the umbrella folder that contains your repos, and
+ask:
+
+```text
+Use $orchestrating to add retry logic to the cuff sync and update the endpoint schema.
 ```
 
-Or per-session: `claude --plugin-dir ~/.claude/plugins/local/orchestrator`
+The Codex edition uses `codex exec --json` workers. Each worker runs with:
 
-Teammates, via marketplace (once the plugin is added to the repo):
+- the primary worktree as its current directory;
+- `workspace-write` sandboxing;
+- only the mission directory and other declared worktrees added as writable;
+- inherited additional writable roots cleared and implicit `/tmp`/`$TMPDIR`
+  write access excluded;
+- non-interactive approvals disabled so blocked actions fail instead of hanging;
+- a persistent Codex `thread_id` captured from JSONL for resume.
 
-```
+Codex intentionally protects linked-worktree Git metadata inside
+`workspace-write`. Workers therefore leave reviewed changes uncommitted. After
+the turn, the launcher validates the plan/report/manifest. Once the worker is
+dead, the coordinator inspects the diff and runs one vetted commit-broker
+command with host approval. It reads a coordinator-owned control manifest kept
+outside all worker-writable roots, requires the worker-facing copy to match,
+rejects policy-memory changes, and creates one mission commit per worktree. The
+worker never bypasses hook trust or the sandbox.
+
+The default worker is `gpt-5.6` at `xhigh` reasoning. Set
+`ORC_CODEX_MODEL` or `ORC_CODEX_EFFORT` to override it.
+
+Codex does not guarantee a generic process-exit callback into a dormant task.
+The launcher therefore writes state immediately, keeps a terminal process
+handle when the host exposes one, sends a macOS notification on exit, and makes
+every later invocation reconcile the hub before doing anything else.
+
+## Claude Code installation
+
+The original v0.2.0 package remains intact in `.claude-plugin/`, `claude-skills/`,
+`commands/`, `hooks/`, `scripts/`, and `templates/`.
+
+```text
 /plugin marketplace add DaoBrewAI/building-in-public
+/plugin install 10x-engineer
 /plugin install orchestrator
 ```
 
-The command is namespaced `/orchestrator:orchestrate`; a user-level alias at `~/.claude/commands/orchestrate.md` provides bare `/orchestrate` (copy that one file to get the short form on other machines).
+Use `/orchestrator:orchestrate <ask>` or your local `/orchestrate` alias.
 
-Requires: `git`, `jq`, `uuidgen` (all standard on macOS), and the `10x-engineer` plugin (mission sessions follow its pipeline: writing-plans → TDD → verification; the spawn script auto-passes `--plugin-dir` for the cached 10x-engineer plugin so missions get it even if ambient config lacks it).
+## Mission lifecycle
 
-## Use
+1. **Brainstorm** — validate scope, acceptance criteria, non-goals, and affected repos.
+2. **Provision** — create one `orc/<mission-slug>` worktree per repo and record an immutable manifest and brief.
+3. **Launch** — one persistent worker owns planning, TDD implementation, self-review, verification, commit checkpoints, and report; the launcher validates afterward.
+4. **Mediate** — workers write `BLOCKED-n.md`; the coordinator decides reversible details and escalates only scope, user-visible behavior, cost, or data.
+5. **Accept** — verify artifacts and diff scope, merge without committing, run the full suite, then commit on pass or abort and resume on failure.
+6. **Clean up** — remove generated policy, worktrees, and merged mission branches; archive durable mission state.
 
-From your umbrella folder (the directory that contains your project repos):
+Only one active mission may own a repo. Conflicting missions remain `pending`
+until the active mission is accepted or failed.
 
-```
-/orchestrate add retry logic to the cuff sync and bump the endpoint schema
-```
+## Hub layout
 
-That's it. The orchestrator will:
-
-1. **Brainstorm** the ask with you — the last unstructured conversation about this mission.
-2. **Provision** — one worktree per involved repo on branch `orc/<mission-slug>`; the guard + pipeline-gate hooks are written into the `.claude/settings.json` of the primary worktree (the first involved repo's, which is also the session's cwd), then that file is validated (parses, no leftover placeholders, scripts executable) before anything launches.
-3. **Launch** — the mission runs as one headless session (Opus 4.8, extra-high effort), brief fed on stdin. It plans, executes, self-reviews, verifies, and commits on its own.
-4. **You're free** — chat about anything else, code, or launch other missions. Max 1 running mission per repo; a mission that conflicts on a repo queues as `pending` and launches automatically when the blocker finishes.
-5. **Mediate** — the mission never talks to you directly; it exits with a `BLOCKED-n.md`, the orchestrator triages (answering most itself, escalating only scope / user-visible behavior / cost / data), writes `ANSWER-n.md`, logs the ruling in the `DECISIONS.md` ledger, and resumes the session.
-6. **Light acceptance** (~2 minutes, no re-review of the code) — artifact checks (plan.md, report.md with a real review verdict and real test output) and fence checks, then per repo: `git merge --no-ff --no-commit`, run that repo's test suite against the merged tree, commit on pass or `merge --abort` on fail (your main branch is never left dirty; failures bounce back to the mission session with the failing output).
-7. **Cleanup** — all mission worktrees and `orc/<mission-slug>` branches are removed at acceptance; nothing temporary outlives the mission.
-8. **Report + memory** — one consolidated summary (what shipped per repo, decisions made on your behalf, test results, follow-ups); durable learnings written to memory exactly once per mission.
-
-A macOS notification fires whenever a mission session exits (blocked / ready for review / crash) — a backup channel in case you're away; come back to the orchestrator chat, or run bare `/orchestrate` in any fresh session, which resumes all in-flight missions from the hub. When the orchestrator's context passes 65%, it writes a carryover file and hands you a one-line instruction to open a fresh session — missions are unaffected.
-
-**When things go wrong:** a crashed mission session is resumed against its recorded session id (headless transcripts usually survive a crash), salvaging what's already on the branches. Two crash deaths, two failed acceptance cycles, or you saying "kill it" put the mission in a `failed` state: you're told what exists, and the worktrees + branches are **kept for salvage** until you decide; a `failed` mission doesn't block new missions on the same repos.
-
-## The hub
-
-All state lives in `.orchestrator/` at your umbrella folder (found by nearest-ancestor search, created on first run):
-
-```
+```text
 .orchestrator/
 ├── missions/<date>-<slug>/
-│   ├── MISSION.md        # ask · phase · repos · worktrees · session id
-│   ├── design.md         # brainstorm output
-│   ├── brief.md          # immutable launch instructions
-│   ├── state             # pending|running|blocked|review|accepted|failed
-│   ├── worktrees.txt     # tab-separated manifest: worktree · branch · base sha · repo
-│   ├── plan.md           # written by the mission session
+│   ├── MISSION.md
+│   ├── design.md
+│   ├── brief.md
+│   ├── state
+│   ├── worktrees.txt
+│   ├── session.txt
+│   ├── commits.txt
+│   ├── plan.md
 │   ├── BLOCKED-n.md / ANSWER-n.md
-│   ├── report.md         # incl. self-review verdict + test output
-│   └── worker-output-*.json · session.txt · worker-stderr.log
-├── DECISIONS.md          # global ledger; entries prefixed with mission slug
-├── MEMORY.md             # single-writer memory with TTL tags (durable | mission)
-├── board.html            # one row per mission (open in a browser)
-└── archive/              # accepted missions, moved whole
+│   ├── report.md
+│   └── worker-output-* + worker-stderr.log
+├── control/<date>-<slug>.worktrees  # coordinator-owned; never worker-writable
+├── DECISIONS.md
+├── MEMORY.md
+├── board.html
+└── archive/
 ```
 
-`cat missions/*/state` is the entire polling surface. Everything is markdown; no daemons.
+`state` is always one of `pending`, `running`, `blocked`, `review`, `accepted`,
+or `failed`. A dead process never implies lost work: the coordinator inspects
+the recorded thread, branches, artifacts, and JSONL before resuming or respawning.
 
-## Guards (4 layers)
+## Guards
 
-1. The orchestrator provisions every worktree and branch (`orc/<mission-slug>`); mission sessions never choose a repo or branch, and the session's cwd is locked to the primary worktree.
-2. Step-0 self-check in every brief: `pwd` + `git rev-parse` must match the brief, and the required 10x-engineer skills must be available — any mismatch is an immediate BLOCKED.
-3. Hooks planted in the primary worktree's `.claude/settings.json`, both of which fire even under `--dangerously-skip-permissions`:
-   - a **PreToolUse guard** — a multi-root fence (fail-closed if misconfigured) that blocks `git checkout/switch/merge/rebase/push/worktree` and any Write/Edit outside the mission's worktrees + its own mission directory;
-   - a **Stop-hook pipeline gate** — the session can't end its turn in `review` unless plan.md exists, report.md has its Code review and Verification sections with no unfilled `{{...}}` placeholders, and every mission branch has at least one commit; after 3 blocks it releases (acceptance is the backstop).
-4. Acceptance fence checks: the diff per repo must stay inside the design's declared scope, branch names must match the manifest, and a committed `.claude/settings.json` (the planted hooks) bounces the mission before merge.
+The Codex edition uses three layers:
 
-## Memory discipline
+1. OS sandbox roots restrict writes to mission workspaces and the mission directory.
+2. A post-turn gate requires a plan, filled review/verification evidence, and an unchanged copy of coordinator-owned worktree authority; after inspection, a separately approved broker rejects policy-memory changes and creates commits outside the worker sandbox.
+3. Coordinator acceptance verifies commit and diff scope and reruns each repository's tests on the pending merge.
 
-- Mission sessions receive a curated context digest in their brief and write only inside their own mission directory. They never touch CLAUDE.md, auto-memory, or hub memory.
-- The orchestrator writes `MEMORY.md` once per mission, at acceptance. Entries carry a TTL tag:
-  - `ttl:mission` — pruned when the mission archives
-  - `ttl:durable` — kept, and mirrored into the orchestrator's global auto-memory
+The OS sandbox, trusted wrapper, and acceptance checks are the enforcement
+boundaries. The launcher never bypasses the Codex sandbox or hook trust.
 
-## v0.1 → v0.2
+## Dual-host layout
 
-v0.1 split each ask into per-task worker sessions coordinated through a root `MISSION.md` and a `TASKS.md` board. v0.2 replaces that with `missions/` — one autonomous session owns each mission's whole pipeline, and `TASKS.md` is gone. If a v0.1 root `MISSION.md` hub is still in flight, the orchestrator surfaces the choice on your next `/orchestrate`: finish it under the old rules (this repo's git history has them) or archive it manually (move the root `MISSION.md`/`TASKS.md` and `tasks/` into `archive/`); the two layouts are never mixed.
+| Path | Host |
+|---|---|
+| `.codex-plugin/`, `skills/`, `codex-scripts/`, `codex-templates/`, `codex-tests/` | Codex |
+| `.claude-plugin/`, `claude-skills/`, `commands/`, `hooks/`, `scripts/`, `templates/`, `tests/` | Claude Code |
+
+Both editions implement the same v0.2 mission protocol and can inspect the
+same disk state, but a mission must be resumed by the host that created its
+recorded session.

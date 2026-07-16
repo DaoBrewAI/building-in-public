@@ -1,0 +1,44 @@
+{
+  "name": "building-in-public",
+  "interface": {
+    "displayName": "DaoBrew Building in Public"
+  },
+  "plugins": [
+    {
+      "name": "10x-engineer",
+      "source": {
+        "source": "local",
+        "path": "./10x-engineer"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "codex-loop-engineering",
+      "source": {
+        "source": "local",
+        "path": "./codex-loop-engineering"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    },
+    {
+      "name": "orchestrator",
+      "source": {
+        "source": "local",
+        "path": "./orchestrator"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

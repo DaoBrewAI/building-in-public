@@ -71,8 +71,8 @@ from your OWN observation only if you captured the artifact against the running 
 
 ### Step 5 — Render the HTML (use the template)
 Build from `assets/status-template.html` (in this skill dir). It encodes the color law so you
-cannot render an unwitnessed row green. Then publish via the Artifact tool (self-contained,
-CSP-safe). Load the `artifact-design` skill first for treatment calibration.
+cannot render an unwitnessed row green. Use the `visualize:visualize` skill when
+available; otherwise save a self-contained, CSP-safe HTML file and provide its path.
 
 ### Step 6 — Pre-publish assertion (say this back to the human)
 Before publishing any doc with green rows, state one line:
@@ -101,5 +101,5 @@ Publishing a green row without a passing derivation + artifact is the one forbid
 ## Integration
 
 - **Called after:** `10x-engineer:requesting-code-review`, `10x-engineer:finishing-a-development-branch`.
-- **Uses:** `artifact-design` (treatment), the Artifact tool (publish).
+- **Uses:** `visualize:visualize` when available, or a local self-contained HTML file.
 - **Never green without:** a running-SHA-matched artifact.

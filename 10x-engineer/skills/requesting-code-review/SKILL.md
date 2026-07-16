@@ -5,7 +5,7 @@ description: Use when completing tasks, implementing major features, or before m
 
 # Requesting Code Review
 
-Dispatch 10x-engineer:code-reviewer subagent to catch issues before they cascade.
+Dispatch a fresh reviewer subagent to catch issues before they cascade.
 
 **Core principle:** Review early, review often.
 
@@ -29,9 +29,16 @@ BASE_SHA=$(git rev-parse HEAD~1)   # parent commit
 HEAD_SHA=$(git rev-parse HEAD)     # current commit
 ```
 
+If the invoking workflow specifies **brokered commits**, review the working
+tree instead: use the manifest base SHA, `git diff <BASE_SHA>`, and
+`git status --short` so untracked files are included. Tell the reviewer that
+the head is `WORKING_TREE`; do not create a commit just to obtain a range.
+
 **2. Dispatch code-reviewer subagent:**
 
-Use Task tool with 10x-engineer:code-reviewer type, fill template at `code-reviewer.md`
+Use `spawn_agent` with the reviewer prompt at `code-reviewer.md`. Give the
+reviewer the commit range and requirements, but do not leak your conclusions or
+the result you expect.
 
 **Placeholders:**
 - `{WHAT_WAS_IMPLEMENTED}` - What you just built

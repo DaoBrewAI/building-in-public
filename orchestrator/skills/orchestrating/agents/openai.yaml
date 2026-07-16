@@ -1,0 +1,4 @@
+interface:
+  display_name: "Orchestrating"
+  short_description: "Codex workflow for Orchestrating."
+  default_prompt: "Use $orchestrating to guide this task."

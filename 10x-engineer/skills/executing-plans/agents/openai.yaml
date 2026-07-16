@@ -1,0 +1,4 @@
+interface:
+  display_name: "Executing Plans"
+  short_description: "Codex workflow for Executing Plans."
+  default_prompt: "Use $executing-plans to guide this task."

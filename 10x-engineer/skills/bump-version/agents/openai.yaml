@@ -1,0 +1,4 @@
+interface:
+  display_name: "Bump Version"
+  short_description: "Codex workflow for Bump Version."
+  default_prompt: "Use $bump-version to guide this task."

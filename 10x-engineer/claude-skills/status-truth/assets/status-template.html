@@ -1,0 +1,102 @@
+<!--
+  status-truth HTML template. Fill from status-provenance.mjs output.
+  The color law is enforced by the DATA (row.color), not by hand. Do not set a row
+  green unless the script returned color:"green". Replace {{...}} and the ROWS loop.
+  Publish via the Artifact tool (self-contained; inline all CSS; no external fonts).
+-->
+<title>{{TITLE}}</title>
+<style>
+  :root{
+    --ground:#0E1116; --panel:#161B22; --line:#273140;
+    --ink:#E6EDF3; --muted:#8B98A5; --faint:#5B6672;
+    --green:#3FB950; --green-dim:#123a1e; --green-bd:#1c5c30;
+    --blue:#4C9AFF;  --blue-dim:#1e3a5f;  --blue-bd:#244567;
+    --amber:#D29922; --amber-dim:#3d2f0a; --amber-bd:#6b5212;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,monospace;
+    --sans:ui-sans-serif,-apple-system,"Helvetica Neue","Segoe UI",system-ui,sans-serif;
+  }
+  *{box-sizing:border-box} body{margin:0}
+  .wrap{background:var(--ground);color:var(--ink);font-family:var(--sans);line-height:1.6;
+    -webkit-font-smoothing:antialiased;padding:clamp(20px,5vw,60px) clamp(16px,4vw,32px)}
+  .doc{max-width:760px;margin:0 auto}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--blue);display:flex;gap:10px;align-items:center;margin:0 0 16px}
+  .eyebrow::before{content:"";width:26px;height:1px;background:var(--blue)}
+  h1{font-size:clamp(28px,5vw,42px);line-height:1.06;letter-spacing:-.02em;font-weight:800;
+    margin:0 0 14px;text-wrap:balance}
+  .lede{font-size:clamp(15px,2.2vw,18px);color:#C5CFDA;max-width:62ch;margin:0 0 4px}
+
+  /* legend — the color law, stated once */
+  .legend{display:flex;flex-wrap:wrap;gap:8px 16px;margin:24px 0 8px;font-family:var(--mono);
+    font-size:12px;color:var(--muted)}
+  .legend span{display:flex;align-items:center;gap:7px}
+  .swatch{width:10px;height:10px;border-radius:3px}
+  .sw-green{background:var(--green)} .sw-blue{background:var(--blue)}
+  .sw-amber{background:var(--amber)} .sw-grey{background:var(--faint)}
+
+  /* honesty footer / summary */
+  .summary{margin:20px 0 30px;background:linear-gradient(90deg,var(--blue-dim),transparent);
+    border:1px solid var(--blue-bd);border-radius:9px;padding:14px 18px;font-family:var(--mono);
+    font-size:13px;color:#CBD9E8}
+  .summary b{color:#fff}
+
+  .rows{display:flex;flex-direction:column;gap:9px}
+  .row{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;
+    background:var(--panel);border:1px solid var(--line);border-left-width:3px;border-radius:8px;
+    padding:13px 16px}
+  .row.green{border-left-color:var(--green)} .row.blue{border-left-color:var(--blue)}
+  .row.amber{border-left-color:var(--amber)} .row.grey{border-left-color:var(--faint)}
+  .row .tag{font-family:var(--mono);font-size:12px;color:var(--muted);min-width:34px}
+  .row .name{font-weight:600;font-size:15px}
+  .row .name span{display:block;font-weight:400;font-size:13px;color:var(--muted);margin-top:2px;line-height:1.5}
+  .row .name code{font-family:var(--mono);font-size:12px;color:#A9C7EE}
+  .pills{display:flex;flex-direction:column;gap:5px;align-items:flex-end}
+  .pill{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;
+    padding:3px 9px;border-radius:20px;white-space:nowrap;font-weight:600}
+  .pill.code-built{color:#9ff0b4;background:var(--green-dim);border:1px solid var(--green-bd)}
+  .pill.code-merged{color:#A9C7EE;background:var(--blue-dim);border:1px solid var(--blue-bd)}
+  .pill.code-authored,.pill.code-planned,.pill.code-unknown{color:var(--muted);
+    background:transparent;border:1px solid var(--line)}
+  .pill.ev-witnessed{color:#9ff0b4;background:var(--green-dim);border:1px solid var(--green-bd)}
+  .pill.ev-tests{color:var(--muted);background:transparent;border:1px solid var(--line)}
+  .pill.ev-stale{color:#f0d18a;background:var(--amber-dim);border:1px solid var(--amber-bd)}
+  .pill.ev-none{color:var(--faint);background:transparent;border:1px dashed var(--line)}
+  .reason{grid-column:1 / -1;font-size:12px;color:var(--faint);font-family:var(--mono);margin-top:2px}
+  footer{margin-top:44px;padding-top:20px;border-top:1px solid var(--line);font-family:var(--mono);
+    font-size:12px;color:var(--faint);display:flex;flex-wrap:wrap;gap:6px 18px}
+  @media(max-width:600px){.row{grid-template-columns:auto 1fr}.pills{grid-column:2;align-items:flex-start;flex-direction:row;flex-wrap:wrap}}
+</style>
+<div class="wrap"><div class="doc">
+  <p class="eyebrow">{{EYEBROW}}</p>
+  <h1>{{HEADLINE}}</h1>
+  <p class="lede">{{LEDE}}</p>
+
+  <div class="legend">
+    <span><i class="swatch sw-green"></i>Green = witnessed running on this machine</span>
+    <span><i class="swatch sw-blue"></i>Blue = code merged, unseen live</span>
+    <span><i class="swatch sw-amber"></i>Amber = newer than the running build</span>
+    <span><i class="swatch sw-grey"></i>Grey = authored / planned</span>
+  </div>
+
+  <div class="summary"><b>Truth ratio:</b> {{SUMMARY_FOOTER}}</div>
+
+  <div class="rows">
+    <!-- REPEAT per row from script output. codeState→code-*, evidence→ev-*, color→row class. -->
+    <div class="row {{color}}">
+      <span class="tag">{{id}}</span>
+      <span class="name">{{label}}<span>{{detail}}</span></span>
+      <span class="pills">
+        <span class="pill code-{{codeState}}">{{codeState}}{{#builtSha}} @{{builtSha}}{{/builtSha}}</span>
+        <span class="pill ev-{{evidenceClass}}">{{evidenceText}}</span>
+      </span>
+      <span class="reason">{{reason}}</span>
+    </div>
+    <!-- /REPEAT -->
+  </div>
+
+  <footer>
+    <span><b>Running build</b> {{RUNNING_SHA}}</span>
+    <span><b>Generated</b> {{DATE}}</span>
+    <span><b>Rule</b> status-truth · two-axis</span>
+  </footer>
+</div></div>

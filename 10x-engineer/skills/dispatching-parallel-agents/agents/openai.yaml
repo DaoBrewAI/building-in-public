@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dispatching Parallel Agents"
+  short_description: "Codex workflow for Dispatching Parallel Agents."
+  default_prompt: "Use $dispatching-parallel-agents to guide this task."

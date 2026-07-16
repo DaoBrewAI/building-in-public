@@ -17,7 +17,7 @@ You are reviewing code changes for production readiness.
 
 {PLAN_REFERENCE}
 
-## Commit Range to Review
+## Diff to Review
 
 **Base:** {BASE_SHA}
 **Head:** {HEAD_SHA}
@@ -26,6 +26,9 @@ You are reviewing code changes for production readiness.
 git diff --stat {BASE_SHA}..{HEAD_SHA}
 git diff {BASE_SHA}..{HEAD_SHA}
 ```
+
+If **Head** is `WORKING_TREE`, use `git diff {BASE_SHA}` plus
+`git status --short`, and inspect every untracked file relevant to the task.
 
 ## Review Checklist
 

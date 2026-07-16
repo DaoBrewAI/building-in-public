@@ -23,7 +23,8 @@ Naming, internal structure, library choice among equivalents, test organization,
 
 **Scope** (adds/removes what gets built) · **user-visible behavior** · **cost** (money, model spend, infra) · **data** (schema, migration, deletion, privacy).
 
-→ Ask the user with a 3-line summary + the session's recommendation as the default option (AskUserQuestion style, recommendation first). Relay their ruling into `ANSWER-<n>.md`.
+→ Ask the user with a three-line summary and put the session's recommendation
+first as the default. Relay the ruling into `ANSWER-<n>.md`.
 
 ## Always, regardless of branch
 
