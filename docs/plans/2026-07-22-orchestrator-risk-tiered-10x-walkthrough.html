@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Change walkthrough — Orchestrator risk-tiered 10x gates</title>
+<style>
+  :root{--bg:#f4f0e8;--paper:#fffdf8;--ink:#24211d;--muted:#6d655b;--line:#d2c8ba;--accent:#8c4b2a;--green:#2f6955;--amber:#9a6817;--code:#eee8de} @media(prefers-color-scheme:dark){:root{--bg:#1b1916;--paper:#26231f;--ink:#f2ece2;--muted:#b9afa2;--line:#4c453c;--accent:#e5a27b;--green:#83c3aa;--amber:#e1bc6c;--code:#34302b}}
+  *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 ui-sans-serif,-apple-system,"Segoe UI",sans-serif}main{max-width:940px;margin:auto;padding:48px 22px 80px}h1{font-size:clamp(32px,6vw,58px);line-height:1.02;letter-spacing:-.035em;margin:0 0 14px}h2{font-size:24px;margin:46px 0 14px;padding-bottom:8px;border-bottom:1px solid var(--line)}h3{font-size:17px;margin:0 0 7px}.lede{font-size:19px;max-width:70ch;color:var(--muted)}.eyebrow{text-transform:uppercase;letter-spacing:.15em;color:var(--accent);font-weight:700;font-size:12px}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:24px 0}.step{background:var(--paper);border:1px solid var(--line);border-radius:9px;padding:14px;min-height:84px}.step b{display:block;color:var(--accent);font-size:12px;text-transform:uppercase;letter-spacing:.08em}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}.card{background:var(--paper);border:1px solid var(--line);border-radius:10px;padding:18px}.card p:last-child{margin-bottom:0}code{background:var(--code);padding:2px 5px;border-radius:4px;font:14px ui-monospace,SFMono-Regular,Menlo,monospace}.callout{border-left:4px solid var(--green);background:var(--paper);padding:12px 16px;margin:18px 0}.risk{border-left-color:var(--amber)}li{margin:8px 0}.quiz li{padding:8px 0 12px;border-bottom:1px solid var(--line)}.tag{display:inline-block;font-size:11px;text-transform:uppercase;letter-spacing:.08em;border:1px solid currentColor;border-radius:999px;padding:2px 8px;color:var(--accent)}a{color:var(--accent)}@media(max-width:760px){.flow{grid-template-columns:1fr 1fr}}@media(max-width:440px){.flow{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main>
+  <p class="eyebrow">Material change · alignment required</p>
+  <h1>Orchestrator now proves each gate instead of merely naming it.</h1>
+  <p class="lede">This change turns the preferred 10x workflow into durable mission state, deterministic shell gates, and HTML evidence. It intentionally pauses material work before merge so you can verify both what changed and what has actually been observed.</p>
+
+  <h2>1. Context</h2>
+  <p>P0 modularization completed, but the expected follow-through—review, truthful status, merge discipline, and HTML reporting—was not consistently visible. The root issue was that the skill described parts of the workflow without making every transition fail closed when evidence was missing.</p>
+
+  <h2>2. Intuition</h2>
+  <p>Think of each mission as moving through two airlocks. The worker airlock proves the code-making process; the coordinator airlock proves it is safe and understood before merge and archive.</p>
+  <div class="flow"><div class="step"><b>Design</b>brainstorm + written plan + plan review HTML</div><div class="step"><b>Worker airlock</b>TDD + independent review + fresh verification</div><div class="step"><b>Coordinator airlock</b>feature SHA + status truth + risk alignment</div><div class="step"><b>Acceptance</b>merge verification + final truth + classified next steps</div></div>
+  <div class="callout"><strong>The governing rule:</strong> tests can prove <code>tests-green</code>; only a matching running/build SHA plus captured observation can prove <code>witnessed-live</code>.</div>
+
+  <h2>3. What was done</h2>
+  <div class="grid">
+    <section class="card"><span class="tag">Worker evidence</span><h3>Pipeline gate</h3><p><code>pipeline-gate.sh</code> now rejects missing or fragmentary plan review HTML and missing TDD, review, verification, deviation, or follow-up evidence. The brief and report templates tell the worker exactly which 10x skill owns each stage.</p></section>
+    <section class="card"><span class="tag">Coordinator evidence</span><h3>Risk alignment gate</h3><p>The new <code>alignment-gate.sh</code> requires brokered commit evidence and pre-merge truth for every mission. Material missions additionally need standalone walkthrough HTML, a recorded quiz pass, and explicit merge approval.</p></section>
+    <section class="card"><span class="tag">Durable state</span><h3>Mission and board</h3><p><code>MISSION.md</code> persists risk and the active workflow gate. The board adds <code>awaiting-alignment</code> and links plan review, walkthrough, pre-merge truth, final truth, acceptance, and next steps.</p></section>
+    <section class="card"><span class="tag">Authority boundary</span><h3>Next steps</h3><p><code>NEXT-STEPS.md</code> is coordinator-owned after the worker stops. Every follow-up must be <code>ready</code>, <code>decision-needed</code>, or <code>deferred</code>; suggestions never silently become implementation authority.</p></section>
+  </div>
+
+  <h2>4. Deviations &amp; judgment calls</h2>
+  <ol>
+    <li>A deterministic coordinator script was added rather than relying on prose in the skill. This makes pre-merge and final/archive failures reproducible.</li>
+    <li>Plan review HTML became a worker-side required artifact. Markdown alone did not satisfy your requirement to always receive HTML reports.</li>
+    <li><code>NEXT-STEPS.md</code> was moved out of worker provisioning after review identified that it carries coordinator authority.</li>
+    <li>No review subagent was spawned because the active system constraint forbids delegation unless you explicitly request it. I performed a separate full-diff review locally and resolved two Important findings before commit.</li>
+    <li>The publication plan changed from immediate ready PR/merge to draft PR plus this quiz and explicit approval, because the governance change classifies itself as material.</li>
+  </ol>
+
+  <h2>5. What to watch</h2>
+  <div class="callout risk"><strong>Not yet witnessed live:</strong> all assertions are authored at <code>8a5ddc7</code> and tests-green, but no real mission has traversed the new gates yet. The pre-merge truth report therefore has zero green rows.</div>
+  <ul>
+    <li>Existing missions created from older templates may fail closed until their risk field and HTML artifacts are backfilled.</li>
+    <li>The gate intentionally recognizes exact risk and acceptance markers. Hand-edited variants fail closed rather than guessing.</li>
+    <li>The installed cache already matches this branch for local use; remote <code>main</code> will not match until this PR is approved and merged.</li>
+    <li>The most valuable post-merge check is to run one routine and one material mission end-to-end and attach real board/status artifacts.</li>
+  </ul>
+  <p>Evidence companion: <a href="2026-07-22-orchestrator-risk-tiered-10x-status-premerge.html">pre-merge status truth</a>.</p>
+
+  <h2>6. Quiz</h2>
+  <p>Reply in chat with answers 1–6. Questions 1–4 are critical; one miss is allowed only among 5–6.</p>
+  <ol class="quiz">
+    <li>Why are there two deterministic gates, and which evidence belongs to the worker gate versus the coordinator gate?</li>
+    <li>What extra conditions must a material mission satisfy before merge?</li>
+    <li>Why can passing tests never by themselves produce a green <code>witnessed-live</code> status row?</li>
+    <li>Who owns <code>NEXT-STEPS.md</code>, when is it created, and why?</li>
+    <li>What happens to an older mission whose <code>MISSION.md</code> lacks a valid risk classification?</li>
+    <li>Name the most important post-merge follow-up for proving this workflow beyond automated tests.</li>
+  </ol>
+</main></body>
+</html>
