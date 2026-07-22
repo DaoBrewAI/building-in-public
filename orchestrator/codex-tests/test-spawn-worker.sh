@@ -20,7 +20,8 @@ printf '%s\t%s\t%s\t%s\n' "$OTHER" orc/test-b "$BASE_B" "$REPO_B" >> "$MD/worktr
 cp "$MD/worktrees.txt" "$CONTROL"
 printf 'Implement the mission.\n' > "$MD/brief.md"
 printf 'Implementation plan.\n' > "$MD/plan.md"
-printf '## Code review\napproved\n\n## Verification\nall tests passed\n' > "$MD/report.md"
+printf '<!doctype html>\n<html lang="en"><body>Plan review</body></html>\n' > "$MD/plan-review.html"
+printf '## TDD evidence\nRED failed as expected; GREEN passed\n\n## Code review\napproved\n\n## Verification\nall tests passed\n\n## Deviations from the brief\nnone\n\n## Suggested follow-ups (for the orchestrator, not for you to do)\nnone\n' > "$MD/report.md"
 printf 'running\n' > "$MD/state"
 
 FAKE="$TMP/fake-codex"

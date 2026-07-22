@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review companion — Orchestrator risk-tiered 10x gates</title>
+<style>
+  :root { color-scheme: light dark; --bg:#f6f3ec; --fg:#26231f; --muted:#665f55; --line:#c9c1b4; --panel:#fffdf8; --accent:#8a4f28; --settled:#2d6955; --tweak:#9b6715; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#1e1c19; --fg:#f2ede4; --muted:#bdb4a7; --line:#4b463e; --panel:#292621; --accent:#e0a071; --settled:#79bca2; --tweak:#e0b965; } }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:32px 20px; background:var(--bg); color:var(--fg); font:16px/1.55 ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  main { max-width:900px; margin:0 auto; }
+  h1 { margin:0 0 6px; font-size:28px; }
+  h2 { margin:32px 0 12px; font-size:18px; border-bottom:1px solid var(--line); padding-bottom:8px; }
+  h3 { margin:0 0 8px; font-size:16px; }
+  p { margin:8px 0; }
+  .meta { color:var(--muted); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+  .card { border:1px solid var(--line); background:var(--panel); padding:16px; border-radius:8px; }
+  .tag { display:inline-block; margin-bottom:8px; padding:2px 8px; border:1px solid currentColor; border-radius:999px; font-size:12px; }
+  .settled { color:var(--settled); }
+  .tweak { color:var(--tweak); }
+  ol { padding-left:22px; }
+  code { font:0.9em ui-monospace,SFMono-Regular,Menlo,monospace; }
+  details { border-top:1px solid var(--line); padding:12px 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Orchestrator risk-tiered 10x gates</h1>
+  <p class="meta">Two-minute review companion · execution follows the Markdown implementation plan</p>
+
+  <h2>Data and durable state</h2>
+  <div class="grid">
+    <section class="card">
+      <span class="tag settled">Settled</span>
+      <h3>Risk classification becomes mission state</h3>
+      <p>Every mission records <code>routine</code> or <code>material</code>. Uncertainty is material. The active workflow gate is also recorded so a resumed coordinator cannot skip review or alignment.</p>
+      <p class="meta">Alternative rejected: infer risk only from chat history; it is not durable across sessions.</p>
+    </section>
+    <section class="card">
+      <span class="tag settled">Settled</span>
+      <h3>Next steps become a required artifact</h3>
+      <p><code>NEXT-STEPS.md</code> classifies follow-ups as <code>ready</code>, <code>decision-needed</code>, or <code>deferred</code>, and the board links it.</p>
+      <p class="meta">Alternative rejected: leave follow-ups only in the final chat response.</p>
+    </section>
+  </div>
+
+  <h2>Workflow contracts</h2>
+  <div class="grid">
+    <section class="card">
+      <span class="tag settled">Settled</span>
+      <h3>All missions use the same 10x spine</h3>
+      <p>Plan → TDD → independent review → fresh verification → brokered commit → pre-merge status truth → merge → merged-tree verification → final status truth.</p>
+    </section>
+    <section class="card">
+      <span class="tag settled">Settled</span>
+      <h3>Material missions pause for alignment</h3>
+      <p>User-visible, security, privacy, data, contract, production, infrastructure, cost, release, or long-running changes require a walkthrough report, quiz pass, and explicit merge approval.</p>
+      <p class="meta">Routine missions still generate truth reports but may merge automatically.</p>
+    </section>
+    <section class="card">
+      <span class="tag settled">Settled</span>
+      <h3>Status truth stays conservative</h3>
+      <p>Automated tests can prove <code>tests-green</code>, never <code>witnessed-live</code>. Green requires a matching running/build SHA and captured evidence.</p>
+    </section>
+  </div>
+
+  <h2>User-facing behavior</h2>
+  <ol>
+    <li>The task board shows risk and the exact active gate.</li>
+    <li>Every mission links durable pre-merge and final status HTML.</li>
+    <li>Material missions visibly enter <code>awaiting-alignment</code> and immediately notify the user instead of silently waiting.</li>
+    <li>Final handoff always includes implementation evidence, status truth, and classified next steps.</li>
+  </ol>
+
+  <h2>Trusted mechanical work</h2>
+  <details>
+    <summary>Tests, templates, and synchronization</summary>
+    <p>Shell contract tests will prevent missing evidence sections and missing coordinator gates. The skill, mission/report/board templates, and installed plugin copy will be updated together, validated, reviewed, and published through a scoped PR.</p>
+  </details>
+</main>
+</body>
+</html>

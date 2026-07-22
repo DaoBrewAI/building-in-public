@@ -6,10 +6,56 @@ description: Run Codex-orchestrated missions - brainstorm an ask, provision guar
 # Orchestrating Codex Missions
 
 Act as the coordinator. Each mission is one persistent `codex exec` thread that
-owns plan → implementation → self-review → verification → report. The trusted
-launcher validates the result and creates mission commits after the sandboxed
-turn ends.
+owns plan → TDD implementation → independent review → verification → report.
+The coordinator then owns status truth → risk-tiered alignment → merge → final
+truth. The trusted launcher validates the worker result and creates mission
+commits after the sandboxed turn ends.
 Keep shared state on disk and never edit a running mission's worktrees.
+
+## Mandatory 10x workflow and durable evidence
+
+Use these 10x skills in order; naming them in a brief is not evidence that they
+ran:
+
+1. `10x-engineer:brainstorming` for the validated design.
+2. `10x-engineer:writing-plans` for `plan.md` and durable
+   `plan-review.html`.
+3. `10x-engineer:test-driven-development` for every behavior change, with real
+   RED/GREEN evidence in `report.md`.
+4. `10x-engineer:requesting-code-review` against the worker's working tree;
+   resolve all Critical and Important findings.
+5. `10x-engineer:verification-before-completion` with fresh focused and full
+   verification output.
+6. After the brokered feature commit, `10x-engineer:status-truth` for
+   `status-truth-premerge.html` before any merge.
+7. After merged-tree verification, rerun `10x-engineer:status-truth` for final
+   `status-truth.html`. Never promote tests-green to witnessed-live without a
+   matching running/build SHA and attached observation.
+
+Persist each workflow gate in `MISSION.md` and show it on `board.html`. Every
+accepted mission must retain `coordinator-acceptance.md`,
+`status-truth-premerge.html`, `status-truth.html`, and `NEXT-STEPS.md`; the board
+must link them. HTML must be durable standalone output inside the mission
+directory, not only a transient conversation visualization.
+
+### Risk class and alignment gate
+
+Classify every mission before launch:
+
+- `material`: user-visible behavior; authentication, security, privacy, stored
+  data, migrations, or data semantics; public or cross-component contracts;
+  production, deployment, infrastructure, IAM, cost, release artifacts; long
+  autonomous implementation; or uncertainty about any of these.
+- `routine`: bounded docs, tests, or mechanical refactors with no behavior,
+  contract, data, production, or release effect.
+
+Uncertainty defaults to material. For a material mission, use
+`10x-engineer:change-walkthrough` after review and create
+`change-walkthrough.html`. Set phase/gate to `awaiting-alignment`, regenerate
+the board, and immediately notify the user with links. Do not merge until the
+walkthrough quiz passes and the user gives explicit merge approval. Record both
+in `coordinator-acceptance.md`. Routine missions still require both status-truth
+HTML reports, but may merge automatically after every other gate passes.
 
 ## Resolve paths and constants
 
@@ -20,7 +66,8 @@ Derive `PLUGIN_DIR` from this loaded file: move from
 - Default worker model: `gpt-5.6`, reasoning `xhigh`. Operators may override
   these with `ORC_CODEX_MODEL` and `ORC_CODEX_EFFORT`.
 - Branch name: `orc/<mission-slug>` in every involved repo.
-- Allow at most one `running`, `blocked`, or `review` mission per repo.
+- Allow at most one `running`, `blocked`, `review`, or `awaiting-alignment`
+  mission per repo.
 
 The hub is `<dir>/.orchestrator/`, where `<dir>` is the nearest ancestor of the
 current directory that already contains `.orchestrator/`; otherwise use the
@@ -56,6 +103,7 @@ across `missions/` and `archive/`. Create `MISSION.md` from the Codex template,
 set phase/state to `pending`, and record explicit acceptance criteria and
 non-goals. This design is orchestration state outside the mission repositories;
 do not commit it during the brainstorming workflow.
+Classify the mission risk and record the current workflow gate in `MISSION.md`.
 
 ## Phase 2 — Provision guarded worktrees
 
@@ -71,15 +119,17 @@ do not commit it during the brainstorming workflow.
    `$HUB/control/<mission-slug>.worktrees`, which must be outside every worker
    writable root. Copy it byte-for-byte to the mission's `worktrees.txt` for
    worker context. Never use the worker-facing copy as commit authority.
-4. Verify `pipeline-gate.sh`, `mission-commit.sh`, and `spawn-worker.sh` are
-   executable. The worker must not create commits: Codex workspace-write keeps
-   linked-worktree Git metadata read-only. The launcher runs the artifact gate
-   after the turn. Once the process is dead, the coordinator inspects the diff
-   and invokes the protected-path audit/commit broker with host approval outside
-   the worker sandbox.
-5. Copy the Codex `report.md` template and generate an immutable `brief.md` with
-   all placeholders filled. Curate only binding decisions, relevant file
-   patterns, known hazards, acceptance criteria, and exact test commands.
+4. Verify `pipeline-gate.sh`, `alignment-gate.sh`, `mission-commit.sh`, and
+   `spawn-worker.sh` are executable. The worker must not create commits: Codex
+   workspace-write keeps linked-worktree Git metadata read-only. The launcher
+   runs the artifact gate after the turn. Once the process is dead, the
+   coordinator inspects the diff and invokes the protected-path audit/commit
+   broker with host approval outside the worker sandbox.
+5. Copy the Codex `report.md` template and generate an immutable `brief.md`
+   with all placeholders filled. Curate only binding decisions, relevant file
+   patterns, known hazards, acceptance criteria, and exact test commands. Keep
+   `NEXT-STEPS.md` coordinator-owned: instantiate its template only after the
+   worker is dead, during Phase 6 acceptance.
 
 The launcher uses Codex `workspace-write`, adds only the declared worktrees and
 mission directory as writable roots, replaces inherited additional writable
@@ -112,6 +162,9 @@ orchestrator invocation, read `state`:
 - `blocked`: mediate in Phase 5.
 - `review`: accept in Phase 6. If the post-turn gate failed, resume with its
   exact error first.
+- `awaiting-alignment`: verify the walkthrough, quiz, pre-merge truth, and board
+  links are present. Notify the user if the alignment request has not already
+  been delivered; do not merge or start a conflicting mission.
 - `failed`: report it once and preserve worktrees.
 - `running` with a live PID: leave it alone.
 - `running` with a dead PID: inspect the latest `worker-output-*.jsonl`, stderr,
@@ -158,9 +211,10 @@ Never leave a mission silently waiting in `blocked`.
 
 ## Phase 6 — Accept and merge
 
-1. Require `plan.md` and a filled `report.md` with Code review and Verification
-   evidence. Resume the worker with exact missing items instead of filling them.
-   Re-run `pipeline-gate.sh` as a deterministic check.
+1. Require `plan.md` and a filled `report.md` with TDD, Code review,
+   Verification, Deviations, and Suggested follow-ups evidence. Resume the
+   worker with exact missing items instead of filling them. Re-run
+   `pipeline-gate.sh` as a deterministic check.
 2. For every manifest row, verify branch, base, and uncommitted diff scope.
    Reject `AGENTS.md` or `.codex/` policy changes unless they were explicit
    mission requirements approved by the user.
@@ -176,17 +230,34 @@ Never leave a mission silently waiting in `blocked`.
    This lets one vetted command write linked-worktree Git metadata outside the
    coordinator sandbox. Do not grant the worker broader permissions. Require
    `commits.txt` and verify one brokered commit SHA per manifest row.
-4. In dependency order, require each user's live checkout to be clean and on
+4. Use `10x-engineer:status-truth` against the brokered feature SHA and fresh
+   verification evidence. Write durable `status-truth-premerge.html`, link it
+   from the board, and cap unwitnessed claims honestly. For material risk, also
+   use `10x-engineer:change-walkthrough`, write durable
+   `change-walkthrough.html`, enter `awaiting-alignment`, and enforce the quiz +
+   explicit merge approval gate before continuing.
+   Run `$PLUGIN_DIR/codex-scripts/alignment-gate.sh --mission-dir <mission-dir> --stage premerge`
+   and do not continue unless it exits zero.
+5. In dependency order, require each user's live checkout to be clean and on
    its default branch. Never switch or clean it for them. Merge with
    `--no-ff --no-commit`, run the repository's full verification, then commit on
    pass or `git merge --abort` and resume the worker on failure.
-5. Remove worktrees and delete merged mission branches.
-6. Report changes, logged decisions, verification evidence, and suggested
-   follow-ups. Append durable learnings once to `$HUB/MEMORY.md`.
-7. Set state/phase to `accepted`. Move the trusted control manifest into the
+6. Create `coordinator-acceptance.md` with the risk ruling, gate evidence,
+   review disposition, exact verification, merge SHA, and alignment result.
+   Rerun `10x-engineer:status-truth` against merged `main` plus any actual
+   running artifact and write final `status-truth.html`.
+7. Fill `NEXT-STEPS.md` from every reported or discovered follow-up, classifying
+   each item `ready`, `decision-needed`, or `deferred`. Report and link changes,
+   decisions, verification, walkthrough when present, both truth reports, and
+   next steps. Append durable learnings once to `$HUB/MEMORY.md`.
+8. Run `$PLUGIN_DIR/codex-scripts/alignment-gate.sh --mission-dir <mission-dir> --stage final`.
+   Do not archive unless it exits zero. Then remove worktrees and delete merged
+   mission branches.
+9. Set state/phase/gate to `accepted`. Move the trusted control manifest into the
    stopped mission directory as `worktrees.trusted.txt`, move the mission into
    `archive/`, regenerate the board, and release newly unblocked pending
-   missions.
+   missions only when prior user scope already authorizes them. Never silently
+   convert a suggested follow-up into implementation authority.
 
 Two failed acceptance cycles enter Phase 6f.
 
@@ -200,7 +271,9 @@ cleanup; a failed mission does not block a new mission on the same repo.
 ## Board and carryover
 
 Regenerate `$HUB/board.html` from the Codex board template on every state
-transition. Before a manual task handoff or when Codex reports material context
+transition. Show each mission's risk class, workflow gate, and links to every
+available design/plan/report/acceptance/walkthrough/truth/next-step artifact.
+Before a manual task handoff or when Codex reports material context
 pressure, write `CARRYOVER.md` and make sure every mission's durable state is
 current. A carryover file or board entry never substitutes for the blocker
 notification contract above. Automatic Codex compaction is safe because Phase 0
@@ -214,6 +287,7 @@ reconstructs state from disk.
 - Escalate only scope, user-visible behavior, cost, or data decisions.
 - Self-unblock safe in-scope questions; if a blocker still needs the user, notify
   immediately and never wait silently.
-- The worker pipeline starts with `10x-engineer:writing-plans` and includes TDD,
-  working-tree code review, verification, commit checkpoints, and a filled
-  report; the trusted launcher creates the mission commits afterward.
+- Never merge before the ordered 10x gates and durable pre-merge status truth.
+- Never archive without final status truth and classified next steps.
+- Material missions require a walkthrough quiz pass and explicit merge approval;
+  routine missions may auto-merge only after every non-human gate passes.

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Tests for scripts/pipeline-gate.sh — the Stop-hook artifact gate.
+# shellcheck disable=SC2016,SC2034 # Assertions are deliberately evaluated after capture.
 set -uo pipefail
 GATE="$(cd "$(dirname "$0")/.." && pwd)/codex-scripts/pipeline-gate.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -45,12 +46,13 @@ check "blocks incomplete"    '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOU
 # 5. all artifacts + a valid manifest -> silent pass-through. Commits are
 # brokered only after this artifact gate passes.
 touch "$MD/plan.md"
-printf '## Code review\nverdict: approved\n\n## Verification\n12 tests, 0 failures\n' > "$MD/report.md"
+printf '<!doctype html>\n<html lang="en"><body>Plan review</body></html>\n' > "$MD/plan-review.html"
+printf '## TDD evidence\nRED failed as expected; GREEN passed\n\n## Code review\nverdict: approved\n\n## Verification\n12 tests, 0 failures\n\n## Deviations from the brief\nnone\n\n## Suggested follow-ups (for the orchestrator, not for you to do)\nnone\n' > "$MD/report.md"
 run_gate
 check "complete -> allow"    '[[ "$GRC" -eq 0 && -z "$GOUT" ]]'
 
 # 6. missing report section still blocks, names the section
-printf '## Verification\nok\n' > "$MD/report.md"
+printf '## TDD evidence\nred/green\n\n## Verification\nok\n\n## Deviations from the brief\nnone\n\n## Suggested follow-ups (for the orchestrator, not for you to do)\nnone\n' > "$MD/report.md"
 run_gate
 check "missing review section" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *"Code review"* ]]'
 
@@ -67,19 +69,41 @@ check "empty manifest -> block" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$
 # 9. template-blank report: both headings present but {{...}} placeholders left
 #    (orchestrator pre-copies templates/report.md, so headings alone prove nothing).
 printf '%s\t%s\t%s\t%s\n' "$REPO" "orc/test-mission" "$BASE" "$REPO" > "$MD/worktrees.txt"
-printf '## Code review\n{{verdict — approved/rejected + reviewer notes}}\n\n## Verification\n{{paste real test output}}\n' > "$MD/report.md"
+printf '## TDD evidence\n{{red/green output}}\n\n## Code review\n{{verdict — approved/rejected + reviewer notes}}\n\n## Verification\n{{paste real test output}}\n\n## Deviations from the brief\n{{none or details}}\n\n## Suggested follow-ups (for the orchestrator, not for you to do)\n{{none or details}}\n' > "$MD/report.md"
 run_gate
 check "unfilled placeholders -> block" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *unfilled* ]]'
 
 # 10. a rewritten worker-facing manifest is rejected.
 printf '%s\t%s\t%s\t%s\n' "$TMP/elsewhere" orc/evil deadbeef "$TMP/elsewhere" > "$MD/worktrees.txt"
-printf '## Code review\napproved\n\n## Verification\nok\n' > "$MD/report.md"
+printf '## TDD evidence\nred/green\n\n## Code review\napproved\n\n## Verification\nok\n\n## Deviations from the brief\nnone\n\n## Suggested follow-ups (for the orchestrator, not for you to do)\nnone\n' > "$MD/report.md"
 run_gate
 check "manifest mismatch -> block" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *"control manifest"* ]]'
 
 # 11. misconfig (ORC_MISSION_DIR unset) -> blocking error, exit 2
 MOUT="$(printf '{}' | env -u ORC_MISSION_DIR "$GATE" 2>/dev/null)"; MRC=$?
 check "misconfig exits 2"    '[[ "$MRC" -eq 2 ]]'
+
+# 12. Missing TDD evidence is blocked even when review and verification exist.
+printf '%s\t%s\t%s\t%s\n' "$REPO" "orc/test-mission" "$BASE" "$REPO" > "$MD/worktrees.txt"
+printf '## Code review\napproved\n\n## Verification\nok\n\n## Deviations from the brief\nnone\n\n## Suggested follow-ups (for the orchestrator, not for you to do)\nnone\n' > "$MD/report.md"
+run_gate
+check "missing TDD evidence" '[[ "$GRC" -eq 0 && "$GOUT" == *"block"* && "$GOUT" == *"TDD evidence"* ]]'
+
+# 13. Deviations and follow-ups are durable handoff requirements.
+printf '## TDD evidence\nred/green\n\n## Code review\napproved\n\n## Verification\nok\n' > "$MD/report.md"
+run_gate
+check "missing handoff sections" '[[ "$GRC" -eq 0 && "$GOUT" == *"block"* && "$GOUT" == *"Deviations"* && "$GOUT" == *"Suggested follow-ups"* ]]'
+
+# 14. The writing-plans HTML review companion is mandatory.
+printf '## TDD evidence\nred/green\n\n## Code review\napproved\n\n## Verification\nok\n\n## Deviations from the brief\nnone\n\n## Suggested follow-ups (for the orchestrator, not for you to do)\nnone\n' > "$MD/report.md"
+rm "$MD/plan-review.html"
+run_gate
+check "missing plan review HTML" '[[ "$GRC" -eq 0 && "$GOUT" == *"block"* && "$GOUT" == *"plan-review.html"* ]]'
+
+# 15. A fragment does not satisfy the durable standalone plan-review contract.
+printf '<section>fragment only</section>\n' > "$MD/plan-review.html"
+run_gate
+check "reject plan review fragment" '[[ "$GRC" -eq 0 && "$GOUT" == *"block"* && "$GOUT" == *"standalone HTML"* ]]'
 
 echo "  pipeline-gate: $OK/$N"
 [[ "$OK" -eq "$N" ]]

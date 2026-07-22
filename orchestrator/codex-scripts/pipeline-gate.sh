@@ -28,13 +28,27 @@ add() { MISSING="${MISSING}${1} · "; }
 if [[ ! -f "$MD/plan.md" ]]; then
   add "plan.md is missing — use 10x-engineer:writing-plans and save the plan to $MD/plan.md"
 fi
+if [[ ! -s "$MD/plan-review.html" ]]; then
+  add "plan-review.html is missing or empty — use the writing-plans HTML review companion and save durable output to $MD/plan-review.html"
+elif ! grep -Eiq '<!doctype[[:space:]]+html' "$MD/plan-review.html" || ! grep -Eiq '<html([[:space:]>])' "$MD/plan-review.html"; then
+  add "plan-review.html must be durable standalone HTML, not a fragment"
+fi
 
 if [[ -f "$MD/report.md" ]]; then
+  if ! grep -q '^## TDD evidence' "$MD/report.md"; then
+    add "report.md has no '## TDD evidence' section — use 10x-engineer:test-driven-development and record the actual RED/GREEN commands and outcomes"
+  fi
   if ! grep -q '^## Code review' "$MD/report.md"; then
     add "report.md has no '## Code review' section — use 10x-engineer:requesting-code-review and record the verdict"
   fi
   if ! grep -q '^## Verification' "$MD/report.md"; then
-    add "report.md has no '## Verification' section — run the test suites and paste real output"
+    add "report.md has no '## Verification' section — use 10x-engineer:verification-before-completion and paste fresh real output"
+  fi
+  if ! grep -q '^## Deviations from the brief' "$MD/report.md"; then
+    add "report.md has no '## Deviations from the brief' section — record every deviation or write none"
+  fi
+  if ! grep -q '^## Suggested follow-ups' "$MD/report.md"; then
+    add "report.md has no '## Suggested follow-ups' section — provide concrete follow-ups or write none"
   fi
   # The orchestrator pre-copies the report template, so headings exist from t=0;
   # leftover {{...}} placeholders are the tell that it was never filled in.

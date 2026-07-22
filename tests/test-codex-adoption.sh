@@ -52,7 +52,9 @@ fi
 
 assert_file orchestrator/codex-scripts/spawn-worker.sh
 assert_file orchestrator/codex-scripts/mission-commit.sh
+assert_file orchestrator/codex-scripts/alignment-gate.sh
 assert_file orchestrator/codex-tests/run.sh
+assert_file orchestrator/codex-templates/NEXT-STEPS.md
 
 rg -q 'CODEX_BIN=.*codex' orchestrator/codex-scripts/spawn-worker.sh &&
   rg -q '"\$CODEX_BIN" exec' orchestrator/codex-scripts/spawn-worker.sh ||
@@ -74,6 +76,47 @@ fi
 if rg -n 'claude -p|dangerously-skip-permissions|\.claude/' orchestrator/codex-scripts orchestrator/codex-templates; then
   fail "Claude runtime remains in Codex orchestrator runtime"
 fi
+
+ORC_SKILL=orchestrator/skills/orchestrating/SKILL.md
+ORC_REPORT=orchestrator/codex-templates/report.md
+ORC_MISSION=orchestrator/codex-templates/MISSION.md
+ORC_BOARD=orchestrator/codex-templates/board.html
+
+for required in \
+  '10x-engineer:writing-plans' \
+  '10x-engineer:test-driven-development' \
+  '10x-engineer:requesting-code-review' \
+  '10x-engineer:verification-before-completion' \
+  '10x-engineer:status-truth' \
+  'plan-review.html' \
+  'status-truth-premerge.html' \
+  'status-truth.html' \
+  'NEXT-STEPS.md' \
+  'risk class' \
+  'awaiting-alignment'; do
+  rg -q "$required" "$ORC_SKILL" || fail "orchestrator skill missing workflow contract: $required"
+done
+
+rg -q '10x-engineer:change-walkthrough' "$ORC_SKILL" &&
+  rg -q 'quiz' "$ORC_SKILL" &&
+  rg -q 'explicit merge approval' "$ORC_SKILL" ||
+  fail "material-risk walkthrough alignment gate is incomplete"
+
+rg -q 'alignment-gate.sh.*--stage premerge' "$ORC_SKILL" &&
+  rg -q 'alignment-gate.sh.*--stage final' "$ORC_SKILL" ||
+  fail "orchestrator skill does not enforce coordinator alignment gates"
+
+for heading in '## TDD evidence' '## Code review' '## Verification' '## Deviations from the brief' '## Suggested follow-ups'; do
+  rg -q "^${heading}" "$ORC_REPORT" || fail "report template missing $heading"
+done
+
+rg -q '\*\*Risk class:\*\*' "$ORC_MISSION" &&
+  rg -q '\*\*Workflow gate:\*\*' "$ORC_MISSION" ||
+  fail "mission template does not persist risk and workflow gate"
+
+for link in 'plan-review.html' 'change-walkthrough.html' 'status-truth-premerge.html' 'status-truth.html' 'NEXT-STEPS.md'; do
+  rg -q "$link" "$ORC_BOARD" || fail "board template does not link $link"
+done
 
 for name in 10x-engineer orchestrator; do
   jq -e --arg name "$name" '

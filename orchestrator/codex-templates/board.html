@@ -27,6 +27,7 @@
   .pill.running { border-color:var(--pine); color:var(--pine); background:#e7efec; }
   .pill.blocked { border-color:var(--amber); color:var(--amber); background:#f6efdd; }
   .pill.review  { border-color:var(--blue); color:var(--blue); background:#e7eef4; }
+  .pill.awaiting-alignment { border-color:var(--amber); color:var(--amber); background:#f6efdd; }
   .pill.done    { border-color:var(--pine); color:#fff; background:var(--pine); } /* v0.1, unused */
   .pill.failed  { border-color:var(--red); color:var(--red); background:#f5e7e6; }
   .pill.pending  { border-color:var(--line); color:var(--soft); background:#fff; }
@@ -42,18 +43,19 @@
   <div class="tablewrap">
     <table>
       <thead>
-        <tr><th>Mission</th><th>Ask</th><th>Repos</th><th>State</th><th>Links</th><th>Updated</th></tr>
+        <tr><th>Mission</th><th>Ask</th><th>Repos</th><th>Risk / gate</th><th>State</th><th>Links</th><th>Updated</th></tr>
       </thead>
       <tbody>
         <!-- ROWS -->
-        <!-- pill class = state: pending|running|blocked|review|accepted|failed -->
+        <!-- pill class = state: pending|running|blocked|review|awaiting-alignment|accepted|failed -->
         <!-- row shape:
         <tr>
           <td><code>2026-07-11-cuff-retry</code></td>
           <td class="scope">Add retry logic to cuff sync</td>
           <td><code>daobrewAI</code> · <code>cuff-fw</code></td>
+          <td><code>material</code> · <code>awaiting-alignment</code></td>
           <td><span class="pill running">running</span></td>
-          <td><a href="missions/2026-07-11-cuff-retry/design.md">design</a> · <a href="missions/2026-07-11-cuff-retry/plan.md">plan</a> · <a href="missions/2026-07-11-cuff-retry/report.md">report</a></td>
+          <td><a href="missions/2026-07-11-cuff-retry/design.md">design</a> · <a href="missions/2026-07-11-cuff-retry/plan.md">plan</a> · <a href="missions/2026-07-11-cuff-retry/plan-review.html">plan review</a> · <a href="missions/2026-07-11-cuff-retry/report.md">report</a> · <a href="missions/2026-07-11-cuff-retry/change-walkthrough.html">walkthrough</a> · <a href="missions/2026-07-11-cuff-retry/status-truth-premerge.html">pre-merge truth</a> · <a href="missions/2026-07-11-cuff-retry/status-truth.html">final truth</a> · <a href="missions/2026-07-11-cuff-retry/NEXT-STEPS.md">next steps</a></td>
           <td>2026-07-11 14:02</td>
         </tr>
         -->
