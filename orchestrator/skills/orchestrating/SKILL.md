@@ -134,6 +134,28 @@ $PLUGIN_DIR/codex-scripts/spawn-worker.sh \
   --resume "Read ANSWER-<n>.md in your mission directory and continue."
 ```
 
+### Blocker notification contract
+
+Never leave a mission silently waiting in `blocked`.
+
+1. Attempt to unblock autonomously first: inspect the blocker, design, plan,
+   code, prior decisions, logs, and safe in-scope alternatives. If the answer is
+   already determined by approved scope and does not change user-visible
+   behavior, cost, data semantics, or authority, write the ruling and resume the
+   worker without interrupting the user.
+2. If the blocker still requires user judgment, new authority, external action,
+   or a material scope/product/data/cost decision, update `MISSION.md`, preserve
+   `blocked`, regenerate `board.html`, and notify the user immediately in the
+   active conversation. Include: what is blocked, impact, what was tried, the
+   exact decision/action needed, and the safe default while waiting.
+3. Do not rely on disk state, a board update, a worker notification, or a future
+   status request as the notification. Do not keep polling an unchanged blocker
+   without telling the user. End the coordinator turn with the blocker when no
+   other useful in-scope work can continue.
+4. Notify once per new or materially changed blocker. Do not spam repeated
+   notifications for unchanged state, but never suppress the first actionable
+   notification.
+
 ## Phase 6 — Accept and merge
 
 1. Require `plan.md` and a filled `report.md` with Code review and Verification
@@ -180,8 +202,9 @@ cleanup; a failed mission does not block a new mission on the same repo.
 Regenerate `$HUB/board.html` from the Codex board template on every state
 transition. Before a manual task handoff or when Codex reports material context
 pressure, write `CARRYOVER.md` and make sure every mission's durable state is
-current. Automatic Codex compaction is safe because Phase 0 reconstructs state
-from disk.
+current. A carryover file or board entry never substitutes for the blocker
+notification contract above. Automatic Codex compaction is safe because Phase 0
+reconstructs state from disk.
 
 ## Non-negotiables
 
@@ -189,6 +212,8 @@ from disk.
 - Never edit a running worker's worktrees; corrections go through ANSWER files.
 - Only the coordinator writes `MEMORY.md`, `DECISIONS.md`, and `board.html`.
 - Escalate only scope, user-visible behavior, cost, or data decisions.
+- Self-unblock safe in-scope questions; if a blocker still needs the user, notify
+  immediately and never wait silently.
 - The worker pipeline starts with `10x-engineer:writing-plans` and includes TDD,
   working-tree code review, verification, commit checkpoints, and a filled
   report; the trusted launcher creates the mission commits afterward.
