@@ -119,6 +119,7 @@ write_session() {
 COMMON_FLAGS=(
   --model "$MODEL"
   --config "model_reasoning_effort=\"$EFFORT\""
+  --config 'approval_policy="never"'
   --config 'sandbox_workspace_write.writable_roots=[]'
   --config 'sandbox_workspace_write.exclude_slash_tmp=true'
   --config 'sandbox_workspace_write.exclude_tmpdir_env_var=true'
@@ -138,7 +139,6 @@ if [[ -z "$RESUME_MSG" ]]; then
   INITIAL_FLAGS=(
     "${COMMON_FLAGS[@]}"
     --sandbox workspace-write
-    --ask-for-approval never
     --add-dir "$MISSION_DIR"
   )
   for WT in "${WORKTREES[@]:1}"; do
