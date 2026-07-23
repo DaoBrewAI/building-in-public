@@ -7,6 +7,7 @@ REPO_A="$TMP/repo-a"; REPO_B="$TMP/repo-b"
 PRIMARY="$TMP/primary"; OTHER="$TMP/other"; MD="$TMP/mission"
 CONTROL="$TMP/control-worktrees.txt"
 mkdir -p "$MD"
+MD_PHYS="$(cd "$MD" && pwd -P)"
 for REPO in "$REPO_A" "$REPO_B"; do
   git init -q "$REPO"
   git -C "$REPO" -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m base
@@ -15,6 +16,7 @@ BASE_A="$(git -C "$REPO_A" rev-parse HEAD)"
 BASE_B="$(git -C "$REPO_B" rev-parse HEAD)"
 git -C "$REPO_A" worktree add -q -b orc/test-a "$PRIMARY"
 git -C "$REPO_B" worktree add -q -b orc/test-b "$OTHER"
+OTHER_PHYS="$(cd "$OTHER" && pwd -P)"
 printf '%s\t%s\t%s\t%s\n' "$PRIMARY" orc/test-a "$BASE_A" "$REPO_A" > "$MD/worktrees.txt"
 printf '%s\t%s\t%s\t%s\n' "$OTHER" orc/test-b "$BASE_B" "$REPO_B" >> "$MD/worktrees.txt"
 cp "$MD/worktrees.txt" "$CONTROL"
@@ -55,7 +57,10 @@ grep -q -- 'exec --model gpt-5.6-sol' "$TMP/args.log"
 grep -q -- '--sandbox workspace-write' "$TMP/args.log"
 grep -q -- 'approval_policy="never"' "$TMP/args.log"
 ! grep -q -- '--ask-for-approval' "$TMP/args.log"
-grep -q -- 'sandbox_workspace_write.writable_roots=\[\]' "$TMP/args.log"
+if [[ "$(grep -Fc -- "sandbox_workspace_write.writable_roots=[\"$MD_PHYS\",\"$OTHER_PHYS\"]" "$TMP/args.log")" -ne 1 ]]; then
+  echo "initial launch did not configure the approved writable roots" >&2
+  exit 1
+fi
 grep -q -- 'sandbox_workspace_write.exclude_slash_tmp=true' "$TMP/args.log"
 grep -q -- 'sandbox_workspace_write.exclude_tmpdir_env_var=true' "$TMP/args.log"
 ! grep -q -- '--dangerously-bypass-hook-trust' "$TMP/args.log"
@@ -72,6 +77,10 @@ OUT="$($SPAWN --mission-dir "$MD" --control-manifest "$CONTROL" --worktree "$PRI
 [[ "$OUT" == *"READY AFTER RESUME"* ]]
 grep -q -- 'exec resume' "$TMP/args.log"
 grep -q '019f0000-0000-7000-8000-000000000001' "$TMP/args.log"
+if [[ "$(grep -Fc -- "sandbox_workspace_write.writable_roots=[\"$MD_PHYS\",\"$OTHER_PHYS\"]" "$TMP/args.log")" -ne 2 ]]; then
+  echo "resume did not preserve the approved writable roots" >&2
+  exit 1
+fi
 [[ -f "$MD/worker-output-2.jsonl" ]]
 
 echo "  spawn-worker: initial + resume passed"

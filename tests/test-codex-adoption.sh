@@ -64,7 +64,8 @@ rg -q -- '--sandbox workspace-write' orchestrator/codex-scripts/spawn-worker.sh 
 rg -q 'approval_policy="never"' orchestrator/codex-scripts/spawn-worker.sh &&
   ! rg -q -- '--ask-for-approval' orchestrator/codex-scripts/spawn-worker.sh ||
   fail "worker launcher does not disable impossible non-interactive approvals"
-rg -q 'sandbox_workspace_write.writable_roots=\[\]' orchestrator/codex-scripts/spawn-worker.sh &&
+rg -q 'WRITABLE_ROOTS_JSON=.*jq' orchestrator/codex-scripts/spawn-worker.sh &&
+rg -q 'sandbox_workspace_write.writable_roots=\$WRITABLE_ROOTS_JSON' orchestrator/codex-scripts/spawn-worker.sh &&
   rg -q 'sandbox_workspace_write.exclude_slash_tmp=true' orchestrator/codex-scripts/spawn-worker.sh &&
   rg -q 'sandbox_workspace_write.exclude_tmpdir_env_var=true' orchestrator/codex-scripts/spawn-worker.sh ||
   fail "worker launcher does not replace ambient writable roots and exclude implicit temp roots"

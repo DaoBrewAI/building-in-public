@@ -55,6 +55,7 @@ done < "$CONTROL_MANIFEST"
   echo "launcher worktrees do not match coordinator control manifest" >&2
   exit 1
 }
+WRITABLE_DIRS=("$MISSION_PHYS")
 for I in "${!WORKTREES[@]}"; do
   ARG_PHYS="$(cd "${WORKTREES[$I]}" && pwd -P)"
   MANIFEST_PHYS="$(cd "${CONTROL_WORKTREES[$I]}" && pwd -P)"
@@ -65,7 +66,12 @@ for I in "${!WORKTREES[@]}"; do
   case "$CONTROL_PHYS" in
     "$ARG_PHYS"/*) echo "control manifest must be outside worker-writable worktrees" >&2; exit 1 ;;
   esac
+  if (( I > 0 )); then
+    WRITABLE_DIRS+=("$ARG_PHYS")
+  fi
 done
+
+WRITABLE_ROOTS_JSON="$(jq -cn --args '$ARGS.positional' -- "${WRITABLE_DIRS[@]}")"
 
 CODEX_BIN="${ORC_CODEX_BIN:-codex}"
 command -v "$CODEX_BIN" >/dev/null 2>&1 || {
@@ -120,7 +126,7 @@ COMMON_FLAGS=(
   --model "$MODEL"
   --config "model_reasoning_effort=\"$EFFORT\""
   --config 'approval_policy="never"'
-  --config 'sandbox_workspace_write.writable_roots=[]'
+  --config "sandbox_workspace_write.writable_roots=$WRITABLE_ROOTS_JSON"
   --config 'sandbox_workspace_write.exclude_slash_tmp=true'
   --config 'sandbox_workspace_write.exclude_tmpdir_env_var=true'
   --enable multi_agent
