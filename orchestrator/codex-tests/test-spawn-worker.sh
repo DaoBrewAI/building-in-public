@@ -51,7 +51,7 @@ OUT="$($SPAWN --mission-dir "$MD" --control-manifest "$CONTROL" --worktree "$PRI
 [[ "$OUT" == *"READY FOR REVIEW"* ]]
 grep -q '^thread_id: 019f0000-0000-7000-8000-000000000001$' "$MD/session.txt"
 grep -q '^backend: codex-exec$' "$MD/session.txt"
-grep -q -- 'exec --model gpt-5.6' "$TMP/args.log"
+grep -q -- 'exec --model gpt-5.6-sol' "$TMP/args.log"
 grep -q -- '--sandbox workspace-write' "$TMP/args.log"
 grep -q -- 'approval_policy="never"' "$TMP/args.log"
 ! grep -q -- '--ask-for-approval' "$TMP/args.log"

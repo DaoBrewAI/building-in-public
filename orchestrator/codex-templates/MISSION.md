@@ -7,7 +7,7 @@
 - **Started:** {{DATE}}
 - **Design:** ./design.md · **Brief:** ./brief.md · **Plan:** ./plan.md · **Plan review:** ./plan-review.html · **Report:** ./report.md · **Next steps:** ./NEXT-STEPS.md
 - **HTML evidence:** ./status-truth-premerge.html · ./change-walkthrough.html (material only) · ./status-truth.html
-- **Session spec:** gpt-5.6 (overrideable) · effort xhigh · workspace-write sandbox · approvals never · trusted post-turn commit broker
+- **Session spec:** gpt-5.6-sol (overrideable) · effort xhigh · workspace-write sandbox · approvals never · trusted post-turn commit broker
 
 ## Repos & worktrees
 | Repo | Worktree | Branch | Base SHA |

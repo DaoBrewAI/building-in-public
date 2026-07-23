@@ -73,7 +73,7 @@ command -v "$CODEX_BIN" >/dev/null 2>&1 || {
   exit 1
 }
 
-MODEL="${ORC_CODEX_MODEL:-gpt-5.6}"
+MODEL="${ORC_CODEX_MODEL:-gpt-5.6-sol}"
 EFFORT="${ORC_CODEX_EFFORT:-xhigh}"
 SESSION_FILE="$MISSION_DIR/session.txt"
 STDERR_FILE="$MISSION_DIR/worker-stderr.log"

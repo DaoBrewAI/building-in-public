@@ -63,7 +63,7 @@ Derive `PLUGIN_DIR` from this loaded file: move from
 `skills/orchestrating/SKILL.md` up two directories. Verify that
 `$PLUGIN_DIR/codex-scripts/spawn-worker.sh` exists before provisioning.
 
-- Default worker model: `gpt-5.6`, reasoning `xhigh`. Operators may override
+- Default worker model: `gpt-5.6-sol`, reasoning `xhigh`. Operators may override
   these with `ORC_CODEX_MODEL` and `ORC_CODEX_EFFORT`.
 - Branch name: `orc/<mission-slug>` in every involved repo.
 - Allow at most one `running`, `blocked`, `review`, or `awaiting-alignment`
