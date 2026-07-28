@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ceramic Product Photo Restyle"
+  short_description: "Apply a reproducible studio look to ceramic photos"
+  default_prompt: "Use $restyle-ceramic-product-photo to restyle my ceramic product photos with the approved soft studio preset."
