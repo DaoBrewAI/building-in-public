@@ -30,6 +30,8 @@
   .pill.done    { border-color:var(--pine); color:#fff; background:var(--pine); } /* v0.1, unused */
   .pill.failed  { border-color:var(--red); color:var(--red); background:#f5e7e6; }
   .pill.pending  { border-color:var(--line); color:var(--soft); background:#fff; }
+  .pill.planned  { border-color:var(--blue); color:var(--blue); background:#fff; }   /* plan ready, awaiting founder go */
+  .pill.executed { border-color:var(--pine); color:var(--pine); background:#fff; }   /* exec done, review spawning */
   .pill.accepted { border-color:var(--pine); color:#fff; background:var(--pine); }
   .scope { color:var(--soft); font-size:13px; max-width:26ch; }
   .foot { color:var(--soft); font-size:12px; margin-top:14px; }
@@ -46,7 +48,7 @@
       </thead>
       <tbody>
         <!-- ROWS -->
-        <!-- pill class = state: pending|running|blocked|review|accepted|failed -->
+        <!-- pill class = state: pending|running|planned|executed|blocked|review|accepted|failed -->
         <!-- row shape:
         <tr>
           <td><code>2026-07-11-cuff-retry</code></td>

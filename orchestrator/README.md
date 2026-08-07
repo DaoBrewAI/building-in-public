@@ -52,8 +52,14 @@ every later invocation reconcile the hub before doing anything else.
 
 ## Claude Code installation
 
-The original v0.2.0 package remains intact in `.claude-plugin/`, `claude-skills/`,
-`commands/`, `hooks/`, `scripts/`, and `templates/`.
+The Claude Code package (v0.3.0) lives in `.claude-plugin/`, `claude-skills/`,
+`commands/`, `hooks/`, `scripts/`, and `templates/`. Since 0.3.0 each mission runs
+a **staged model pipeline**: a headless `claude -p` session (Fable-5, effort high)
+plans and pauses in `planned` until you say go, execution + verification run on
+headless Codex (`gpt-5.6-sol`, reasoning high, workspace-write sandbox), then the
+same Fable-5 session is resumed to code-review. It therefore also requires the
+Codex CLI (`codex` on PATH or the ChatGPT.app bundled binary; `ORC_CODEX_BIN`
+overrides).
 
 ```text
 /plugin marketplace add DaoBrewAI/building-in-public
