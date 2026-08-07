@@ -10,6 +10,7 @@ You are the **orchestrator**: a coordinator session. Each mission is a **staged 
 **Constants** (fixed by the plugin — the spawn script hardcodes the stage model specs; founder directives 2026-07-22 + 2026-08-07):
 - Plan + review stages: `claude -p --model claude-fable-5 --effort high` — planning and code review are ALWAYS Fable-5, regardless of your own model
 - Exec stage: `codex exec -m gpt-5.6-sol` reasoning effort high, `workspace-write` sandbox (worktrees + mission dir writable, network off) — spawn via `spawn-worker.sh --stage exec`
+- **ALL code implementation, fixes, and commits happen in the exec stage (codex)** — claude stages are read-only on the worktrees (the guard blocks their worktree writes and `git commit`); review findings bounce to codex via the `rework` state, never get fixed in place
 - Coordinator-side acceptance review subagents must pass model:"fable" explicitly when the coordinator session is not itself Fable
 - `session.txt` is append-only per spawn: the LAST `stage:` line says which backend to resume (plan/review = claude session_id, exec = codex_thread_id); `spawn_pid:` is the liveness check (`ps -p`)
 - Branch naming: `orc/<mission-slug>` in every involved repo
@@ -56,7 +57,8 @@ The plan stage exiting with `state=planned` is the pipeline's ONLY human pause. 
 The background spawn process exiting wakes you, even mid-conversation about something else — finish your sentence, then handle it. Read that mission's `state`:
 
 - `planned` → Phase 3g (present plan, await the user's go).
-- `executed` → **seamless, no user involvement**: write `running` to `state`, then resume the claude session into review: `spawn-worker.sh --mission-dir <dir> --worktree <primary> [...] --stage review --resume "The executor has finished — read report.md and the worktree diffs, then proceed to Stage 2 (REVIEW) per your brief."`
+- `executed` → **seamless, no user involvement**: write `running` to `state`, then resume the claude session into review: `spawn-worker.sh --mission-dir <dir> --worktree <primary> [...] --stage review --resume "The executor has finished — read report.md and the worktree diffs, then proceed to Stage 2 (REVIEW) per your brief."` (After a rework round: "The executor has addressed the F<n> findings — re-review per your brief.")
+- `rework` → **seamless, no user involvement**: the reviewer left findings in report.md `## Code review`. Append `rework: <date>` to MISSION.md's Notes; on the 3rd rework of the same mission, STOP and escalate to the user instead (the loop isn't converging). Otherwise write `running` to `state`, then bounce to codex: `spawn-worker.sh --mission-dir <dir> --worktree <primary> [...] --stage exec --resume "The reviewer recorded findings in report.md '## Code review' (items F<n>). Fix every finding per your brief's REWORK protocol."`
 - `blocked` → Phase 5.
 - `review` → Phase 6.
 - State/Phase already `failed` → one-line note to the user; never Phases 5/6.
@@ -73,8 +75,8 @@ Invoke `orchestrator:orchestrator-mediation` for the triage rules. Write `ANSWER
 ## Phase 6 — Accept & merge (light acceptance, ~2 minutes — you do NOT re-review the code)
 
 1. **Artifacts:** `plan.md` exists; `report.md` has `## Code review` with a real verdict and `## Verification` with real test output. Missing → resume the session naming exactly what's absent (`spawn-worker.sh … --resume`, as in Phase 5); also delete `$MISSION_DIR/.gate-blocks` when bouncing, so the gate's block budget is fresh for the retry; do NOT merge.
-2. **Fence:** per `worktrees.txt` line, `git -C <worktree> diff <base>...HEAD --stat` stays within the design's declared scope; branch names match; the diff must not include `.claude/settings.json` (the planted hooks) — if a worker committed it, bounce the mission to remove it before merge (`spawn-worker.sh … --resume`, as in Phase 5).
-3. **Merge:** per repo in dependency order (worktrees.txt order, primary first, unless the design says otherwise): first the preconditions — `git -C <repo> status --porcelain` must be empty AND the checked-out branch must be the repo's default branch (main or master, whichever exists; if both, prefer the branch `origin/HEAD` points at, else main); these are the USER'S live checkouts, so if dirty or on another branch, do not touch it — tell the user what's in the way and wait for their go-ahead. Then `git -C <repo> merge --no-ff --no-commit orc/<mission-slug>` → run that repo's test suite against the merged working tree → PASS: `git commit` (the merge commit); FAIL: `git merge --abort` (main untouched), resume the mission session with the failing output (`spawn-worker.sh … --resume`, as in Phase 5 — its context is intact). Repos already committed in this cycle stay merged (they passed their own suites) — note them in the eventual report. 2 failed acceptance cycles → Phase 6f.
+2. **Fence:** per `worktrees.txt` line, `git -C <worktree> diff <base>...HEAD --stat` stays within the design's declared scope; branch names match; the diff must not include `.claude/settings.json` (the planted hooks) — if a worker committed it, bounce the mission to remove it before merge (`spawn-worker.sh … --stage exec --resume` — it's a code change, so it goes to codex).
+3. **Merge:** per repo in dependency order (worktrees.txt order, primary first, unless the design says otherwise): first the preconditions — `git -C <repo> status --porcelain` must be empty AND the checked-out branch must be the repo's default branch (main or master, whichever exists; if both, prefer the branch `origin/HEAD` points at, else main); these are the USER'S live checkouts, so if dirty or on another branch, do not touch it — tell the user what's in the way and wait for their go-ahead. Then `git -C <repo> merge --no-ff --no-commit orc/<mission-slug>` → run that repo's test suite against the merged working tree → PASS: `git commit` (the merge commit); FAIL: `git merge --abort` (main untouched), resume the EXECUTOR with the failing output (`spawn-worker.sh … --stage exec --resume` — test fixes are code changes; its context is intact), and after it re-enters `executed`, the normal re-review cycle runs before you retry the merge. Repos already committed in this cycle stay merged (they passed their own suites) — note them in the eventual report. 2 failed acceptance cycles → Phase 6f.
 4. **Cleanup — nothing temporary outlives the mission:** first delete the planted `<primary>/.claude/settings.json` (and the `.claude/` dir if now empty), then per `worktrees.txt`: `git -C <repo> worktree remove <worktree>` (if it still refuses over stray files, `git worktree remove --force` is safe post-merge) and `git -C <repo> branch -d orc/<mission-slug>`; remove the now-empty `.worktrees/<mission-slug>/`.
 5. **Report** to the user: what shipped per repo, decisions made on their behalf (DECISIONS.md), test results, follow-ups from the report.
 6. **Memory, exactly once per mission:** append learnings to `$HUB/MEMORY.md` as `## M-<seq> · ttl:<durable|mission> · <date>`; prune this mission's `ttl:mission` entries; mirror `ttl:durable` learnings into your global auto-memory.
@@ -86,7 +88,7 @@ Entered on 2 crash deaths, 2 failed acceptance cycles, or the user saying to kil
 
 ## board.html
 
-On every mission state change, regenerate `$HUB/board.html` from `${CLAUDE_PLUGIN_ROOT}/templates/board.html`: one row per mission at `<!-- ROWS -->` following the commented row shape (pill classes: `pending running planned executed blocked review accepted failed`; links into `missions/<slug>/`). Missions archive at acceptance, so accepted rows normally drop off the board in the same regeneration; if you choose to list recently archived missions, point their links at `archive/<date>-<slug>/` instead of `missions/<slug>/`.
+On every mission state change, regenerate `$HUB/board.html` from `${CLAUDE_PLUGIN_ROOT}/templates/board.html`: one row per mission at `<!-- ROWS -->` following the commented row shape (pill classes: `pending running planned executed rework blocked review accepted failed`; links into `missions/<slug>/`). Missions archive at acceptance, so accepted rows normally drop off the board in the same regeneration; if you choose to list recently archived missions, point their links at `archive/<date>-<slug>/` instead of `missions/<slug>/`.
 
 ## Carryover (context ≥ 65%)
 
@@ -95,7 +97,7 @@ When the context-watch hook fires: write `$HUB/CARRYOVER.md` from the template (
 ## Non-negotiables
 
 - Mission sessions never talk to the user; you never forward a session's raw output as a question — triage first.
-- You never edit files inside a mission's worktrees while it runs; corrections go through ANSWER files.
+- You never edit files inside a mission's worktrees while it runs; corrections go through ANSWER files. The claude stages can't either (guard-enforced) — every code change in a mission's history comes from the codex executor.
 - Only you write MEMORY.md, DECISIONS.md, board.html.
 - Escalate to the user only for: scope changes, user-visible behavior, cost, or data. Everything else you decide and log.
 - The staged pipeline is brief-driven: the planner runs `10x-engineer:writing-plans`, the executor implements plan.md with TDD and records verification, the resumed planner runs `requesting-code-review`. The Stop-hook gate and your acceptance are backstops, not the driver.

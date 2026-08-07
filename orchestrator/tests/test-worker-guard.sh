@@ -26,15 +26,18 @@ check denies '{"tool_name":"Bash","tool_input":{"command":"git push origin main"
 check denies '{"tool_name":"Bash","tool_input":{"command":"git merge feature"}}'
 check denies '{"tool_name":"Bash","tool_input":{"command":"cd /tmp && git checkout main"}}'
 check denies '{"tool_name":"Bash","tool_input":{"command":"git worktree add ../x"}}'
-check allows '{"tool_name":"Bash","tool_input":{"command":"git commit -m msg"}}'
+# All implementation belongs to the codex executor: claude stages may not
+# commit or write into worktrees — only the mission dir (2026-08-07).
+check denies '{"tool_name":"Bash","tool_input":{"command":"git commit -m msg"}}'
 check allows '{"tool_name":"Bash","tool_input":{"command":"git log --oneline"}}'
-check allows "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WT_A/src/file.swift\"}}"
-check allows "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WT_B/notes.md\"}}"
+check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WT_A/src/file.swift\"}}"
+check denies "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WT_B/notes.md\"}}"
 check allows "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$MD/report.md\"}}"
+check allows "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$MD/plan.md\"}}"
 check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$TMP/outside.md\"}}"
 check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WT_A/../escape.md\"}}"
 check denies '{"tool_name":"Write","tool_input":{}}'
-check allows '{"tool_name":"Write","tool_input":{"file_path":"relative/inside/cwd.md"}}'
+check denies '{"tool_name":"Write","tool_input":{"file_path":"relative/inside/cwd.md"}}'
 mkdir -p "$TMP/wt-a-evil"
 check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$TMP/wt-a-evil/x.md\"}}"
 check denies_unset "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WT_A/src/file.swift\"}}"
