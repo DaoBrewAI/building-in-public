@@ -89,5 +89,25 @@ check "unfilled placeholders -> block" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"
 MOUT="$(printf '{}' | env -u ORC_MISSION_DIR "$GATE" 2>/dev/null)"; MRC=$?
 check "misconfig exits 2"    '[[ "$MRC" -eq 2 ]]'
 
+# --- planned-state gate (plan stage must leave plan.md + the Review Companion) ---
+MD2="$TMP/mission2"; mkdir -p "$MD2"
+run_gate2() { GOUT="$(printf '{}' | ORC_MISSION_DIR="$MD2" "$GATE" 2>/dev/null)"; GRC=$?; }
+
+# 11. state=planned, nothing present -> block naming both artifacts
+echo planned > "$MD2/state"
+run_gate2
+check "planned blocks empty" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *plan.md* && "$GOUT" == *plan-review.html* ]]'
+
+# 12. plan.md alone is not enough — the companion is required (and must be non-empty)
+touch "$MD2/plan.md" "$MD2/plan-review.html"
+rm -f "$MD2/.gate-blocks"
+run_gate2
+check "planned needs companion" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *plan-review.html* ]]'
+
+# 13. both artifacts -> silent pass-through, block budget cleared
+echo '<html>companion</html>' > "$MD2/plan-review.html"
+run_gate2
+check "planned complete -> allow" '[[ "$GRC" -eq 0 && -z "$GOUT" && ! -f "$MD2/.gate-blocks" ]]'
+
 echo "  pipeline-gate: $OK/$N"
 [[ "$OK" -eq "$N" ]]

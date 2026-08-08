@@ -33,9 +33,11 @@ Read {{MISSION_DIR}}/design.md — the validated design you are implementing, wh
 {{DIGEST: binding DECISIONS rulings, reference files/patterns per repo, known gotchas}}
 
 ## Pipeline — Stage 1: PLAN (this turn)
-1. Invoke `10x-engineer:writing-plans` on the design. Save the plan to {{MISSION_DIR}}/plan.md. The plan must be executable by another engineer with zero conversation context: exact files, per-task test commands, verifiable acceptance per task.
-2. Explore the worktrees read-only as much as you need — but do NOT modify any worktree file and do NOT start implementing. Planning is your entire Stage 1.
-3. When plan.md is complete: write the single word `planned` to {{MISSION_DIR}}/state, then END YOUR TURN with the single line `PLAN READY {{MISSION_SLUG}}`.
+1. Invoke `10x-engineer:writing-plans` on the design. Save the plan to {{MISSION_DIR}}/plan.md. The plan must be executable by another engineer with zero conversation context: exact files, per-task test commands, verifiable acceptance per task. The skill's interactive prompts (Execution Preference, Execution Handoff) do NOT apply to you — the orchestrator owns execution; skip them silently.
+2. Generate the skill's **Review Companion** and save it to {{MISSION_DIR}}/plan-review.html (you have no Artifact tool — write the HTML file; the orchestrator publishes it to the founder at the go gate). Follow the skill's spec exactly: lead with what the founder is most likely to tweak — ① data-model changes ② new interfaces/contracts ③ user-facing behavior — each showing the decision made, 1–2 realistic alternatives, and a likely-tweak vs settled marker; bury mechanical work (refactors, wiring, test scaffolding) in a collapsed section at the bottom labeled as trusted. A 2-minute scan, not a second copy of the plan.
+3. Explore the worktrees read-only as much as you need — but do NOT modify any worktree file and do NOT start implementing. Planning is your entire Stage 1.
+4. When plan.md and plan-review.html are complete: write the single word `planned` to {{MISSION_DIR}}/state, then END YOUR TURN with the single line `PLAN READY {{MISSION_SLUG}}`. A Stop-hook gate bounces you back if either file is missing.
+If the founder's go-gate feedback changes a decision, you will be resumed with it: update plan.md FIRST, then regenerate plan-review.html, then re-enter `planned`.
 
 ## Pipeline — Stage 2: REVIEW (only after you are resumed with a "proceed to review" message)
 1. Read {{MISSION_DIR}}/report.md — the executor filled `## Verification` and heartbeats — then read the full diff per worktree: `git diff <base sha>..HEAD` (base SHAs in the table above / worktrees.txt). Running the test commands yourself (read-only) to check the executor's claims is encouraged:
