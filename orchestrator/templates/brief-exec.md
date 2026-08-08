@@ -40,6 +40,7 @@
 - Append one-line timestamped heartbeats under `## Heartbeats` in report.md as you go.
 
 ## Reporting protocol
+- **Complete ALL plan tasks in this single run.** Nobody watches you mid-run and nobody wants progress updates — the ONLY two ways to end your turn are BLOCKED and DONE. Never end early to report status; heartbeats in report.md are your progress channel.
 - **BLOCKED:** write {{MISSION_DIR}}/BLOCKED-<n>.md (shape below, n = next unused number), write the single word `blocked` to {{MISSION_DIR}}/state, then END YOUR TURN with the single line `BLOCKED {{MISSION_SLUG}}`. You will be resumed with a pointer to ANSWER-<n>.md — read it, then continue.
 - **DONE:** when every plan task is implemented, committed, and verification is recorded in report.md, write the single word `executed` to {{MISSION_DIR}}/state, then END YOUR TURN with the single line `EXECUTION DONE {{MISSION_SLUG}}`.
 - **REWORK:** you may later be resumed with reviewer findings (report.md `## Code review`, items `F<n>`). Fix EVERY finding, re-run the affected tests plus each repo's full suite, update `## Verification` to post-fix reality, commit, then write `executed` to state and end with `EXECUTION DONE {{MISSION_SLUG}}` again.

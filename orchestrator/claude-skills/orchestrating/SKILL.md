@@ -52,6 +52,8 @@ The plan stage exiting with `state=planned` is the pipeline's ONLY human pause. 
 
 `${CLAUDE_PLUGIN_ROOT}/scripts/spawn-worker.sh --mission-dir <mission-dir> --worktree <primary> [--worktree <other>]... --stage exec`
 
+Then **hands off until the process exits**: no polling, no reading heartbeats/worker output mid-run, no interim reviews, no status checks "just to see". The executor completes ALL plan tasks in one uninterrupted run and you are woken at exit (`executed`, `blocked`, or crash) — engaging earlier only burns tokens and can never change the outcome. The one review happens after `executed`.
+
 ## Phase 4 — Wake handling (event-driven)
 
 The background spawn process exiting wakes you, even mid-conversation about something else — finish your sentence, then handle it. Read that mission's `state`:
@@ -98,6 +100,7 @@ When the context-watch hook fires: write `$HUB/CARRYOVER.md` from the template (
 
 - Mission sessions never talk to the user; you never forward a session's raw output as a question — triage first.
 - You never edit files inside a mission's worktrees while it runs; corrections go through ANSWER files. The claude stages can't either (guard-enforced) — every code change in a mission's history comes from the codex executor.
+- You never engage with a running stage between wakes — no polling, no mid-run status reads, no interim reviews (token discipline; wakes are the only touchpoints). Review is once-per-`executed`, and findings go back to codex via `rework` — Fable only plans and reviews, codex is the only one who touches code.
 - Only you write MEMORY.md, DECISIONS.md, board.html.
 - Escalate to the user only for: scope changes, user-visible behavior, cost, or data. Everything else you decide and log.
 - The staged pipeline is brief-driven: the planner runs `10x-engineer:writing-plans`, the executor implements plan.md with TDD and records verification, the resumed planner runs `requesting-code-review`. The Stop-hook gate and your acceptance are backstops, not the driver.
