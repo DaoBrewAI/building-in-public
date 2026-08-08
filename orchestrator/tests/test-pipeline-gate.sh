@@ -26,10 +26,12 @@ check() {
 run_gate
 check "no state file"        '[[ "$GRC" -eq 0 && -z "$GOUT" ]]'
 
-# 2. state=running -> silent pass-through
+# 2. state=running -> block (ending a turn without writing a terminal state
+#    loses the mission — 2026-08-08 retrospective P1-2); budget still releases.
 echo running > "$MD/state"
 run_gate
-check "state running"        '[[ "$GRC" -eq 0 && -z "$GOUT" ]]'
+check "state running blocks" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *running* ]]'
+rm -f "$MD/.gate-blocks"
 
 # 3. state=blocked -> silent pass-through
 echo blocked > "$MD/state"

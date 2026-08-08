@@ -101,6 +101,20 @@ next_output() {
 
 SESSION_FILE="$MISSION_DIR/session.txt"
 RC=0
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# P1-1 (2026-08-08 retrospective): a worker killed by a usage/session limit
+# exits nonzero with state stuck in running — surface it as a structured,
+# retryable outcome (exit 75) instead of a crash.
+detect_quota() { # <files...> — returns 0 and prints the hint line if matched
+  local HINT
+  HINT="$(grep -hoiE "(you've hit your [a-z]+ limit|session limit|usage limit|rate limit)[^\"]{0,80}" "$@" 2>/dev/null | head -1 || true)"
+  if [[ -n "$HINT" ]]; then
+    echo "QUOTA_LIMIT detected — retry_hint: $HINT"
+    return 0
+  fi
+  return 1
+}
 
 # ---------------------------------------------------------------- exec (codex)
 if [[ "$STAGE" == "exec" ]]; then
@@ -147,8 +161,21 @@ if [[ "$STAGE" == "exec" ]]; then
     echo "spawn_pid: $$"
   } >> "$SESSION_FILE"
 
+  # P0-1: the codex sandbox cannot commit (git DB is read-only there) — run the
+  # commit broker alongside the executor and drain any backlog after it exits.
+  "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" \
+    >> "$MISSION_DIR/broker.log" 2>&1 &
+  BROKER_PID=$!
+  stop_broker() {
+    kill "$BROKER_PID" 2>/dev/null || true
+    wait "$BROKER_PID" 2>/dev/null || true
+    "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" --once \
+      >> "$MISSION_DIR/broker.log" 2>&1 || true
+  }
+
   if [[ -z "$RESUME_MSG" ]]; then
     if [[ ! -f "$MISSION_DIR/brief-exec.md" ]]; then
+      stop_broker
       echo "no brief-exec.md in $MISSION_DIR" >&2
       exit 1
     fi
@@ -164,6 +191,7 @@ if [[ "$STAGE" == "exec" ]]; then
   else
     THREAD_ID="$(awk -F': ' '/^codex_thread_id:/ {id=$2} END {print id}' "$SESSION_FILE")"
     if [[ -z "$THREAD_ID" ]]; then
+      stop_broker
       echo "no codex_thread_id in $SESSION_FILE — cannot resume exec stage" >&2
       exit 1
     fi
@@ -173,7 +201,11 @@ if [[ "$STAGE" == "exec" ]]; then
       --output-last-message "$LAST_MSG" "$RESUME_MSG" \
       > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
   fi
+  stop_broker
 
+  if [[ "$RC" -ne 0 ]] && detect_quota "$OUT" "$LAST_MSG" "$MISSION_DIR/worker-stderr.log"; then
+    exit 75
+  fi
   if [[ -s "$LAST_MSG" ]]; then
     echo "mission exec turn ended · backend=codex · rc=$RC"
     echo "---"
@@ -252,6 +284,9 @@ fi
 
 # Surface the mission session's final text + exit metadata on stdout for the
 # orchestrator's wake-up — ALWAYS, even when claude exited nonzero.
+if [[ "$RC" -ne 0 ]] && detect_quota "$OUT" "$MISSION_DIR/worker-stderr.log"; then
+  exit 75
+fi
 SUMMARY="" SUMMARY_OK=1
 if [[ -s "$OUT" ]]; then
   if SUMMARY="$(jq -er '"mission turn ended · is_error=\(.is_error) · turns=\(.num_turns)\n---\n\(.result)"' "$OUT" 2>/dev/null)"; then
