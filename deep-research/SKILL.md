@@ -362,11 +362,16 @@ Your job is to produce the final research report by integrating all findings.
 2. Read each completed task's details (TaskGet) for the full findings
 3. Review all messages in the conversation for additional context
 4. Identify consensus, conflicts, and gaps across all findings
-5. Write the final report to /tmp/research_report_$(date +%s).md
+5. Write the final report to /tmp/research_report_$(date +%s).html
 6. Message the orchestrator with the report path and a brief summary
 
 ## Report Structure:
 [See references/reporting.md for the full report template]
+
+## Format Requirements (MANDATORY, see references/reporting.md "Report Format"):
+- Deliver a single self-contained HTML file (inline CSS, light+dark themes) — not markdown
+- Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
+  timelines); prose only carries what a figure cannot
 
 ## Quality Requirements:
 - Cross-reference findings from different agents -- note where they agree/disagree

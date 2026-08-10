@@ -18,7 +18,26 @@ After all tasks are complete (or enough data collected):
 3. Prioritize based on source quality and recency
 4. Cross-reference with documentation
 
+## Report Format (MANDATORY)
+
+1. **HTML, not markdown.** The final deliverable is a single self-contained HTML file
+   (inline CSS, no external assets; support both light and dark themes via CSS custom
+   properties + `prefers-color-scheme` + `:root[data-theme]` overrides). HTML is required
+   because diagrams and text must render as one integrated document.
+2. **Diagrams first, prose second.** Wherever a finding can be shown as a picture, show
+   it as a picture: comparisons → bar/quadrant charts, structures → block diagrams,
+   flows/decisions → flow diagrams, timelines → timelines, confidence distributions →
+   stacked bars (inline SVG preferred). Prose is for what a diagram cannot carry.
+   A reader should get the argument by scanning the figures and captions alone.
+3. **Evidence chain is visible.** Every external claim carries a numbered citation
+   superscript, color-coded by confidence tier (primary-verified / cross-verified /
+   partially-confirmed / estimate-only / unverifiable / contradicted-corrected), linking
+   to a numbered reference table with source-type tags and access dates.
+
 ## Report Structure
+
+The content outline below still applies — render it as the HTML document described above
+(the markdown skeleton is the content model, not the delivery format):
 
 ```markdown
 # Research Report: [Topic]
@@ -50,12 +69,13 @@ After all tasks are complete (or enough data collected):
 
 After synthesizing the research findings:
 
-### Step 1: Generate markdown report file
+### Step 1: Generate HTML report file
 
 ```bash
-# Create report with timestamp
-cat > "/tmp/research_report_$(date +%s).md" << 'EOF'
-[Your complete markdown report following the structure above]
+# Create report with timestamp (self-contained HTML per "Report Format" above)
+cat > "/tmp/research_report_$(date +%s).html" << 'EOF'
+[Your complete HTML report: inline CSS, inline-SVG diagrams for every major
+finding, confidence-colored citation superscripts + numbered reference table]
 EOF
 ```
 
