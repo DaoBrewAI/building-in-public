@@ -52,8 +52,8 @@ every later invocation reconcile the hub before doing anything else.
 
 ## Claude Code installation
 
-The original v0.2.0 package remains intact in `.claude-plugin/`, `claude-skills/`,
-`commands/`, `hooks/`, `scripts/`, and `templates/`.
+The Claude Code edition lives in `.claude-plugin/`, `claude-skills/`,
+`commands/`, `hooks/`, `scripts/`, `templates/`, and `tests/`.
 
 ```text
 /plugin marketplace add DaoBrewAI/building-in-public
@@ -62,6 +62,36 @@ The original v0.2.0 package remains intact in `.claude-plugin/`, `claude-skills/
 ```
 
 Use `/orchestrator:orchestrate <ask>` or your local `/orchestrate` alias.
+Requires `git`, `jq`, `uuidgen`, the Codex CLI (`codex` on PATH or the
+ChatGPT.app bundled binary; `ORC_CODEX_BIN` overrides), and the `10x-engineer`
+plugin.
+
+Since v0.2 each mission runs as a **staged pipeline**: a headless `claude -p`
+session plans and pauses at a founder go-gate (`planned`), a `codex exec`
+worker executes and verifies inside a `workspace-write` sandbox, then the same
+claude session is resumed to code-review. Hardening from the first live
+mission retrospective (22 BLOCKEDs, 19 eliminable):
+
+- **Commit broker** (`scripts/commit-broker.sh`) — the Codex sandbox keeps git
+  metadata read-only, so the executor writes `COMMIT-REQUEST-<n>.json` and
+  polls in-turn for `COMMIT-DONE-<n>.json` instead of a BLOCKED round-trip per
+  task; the broker validates the path manifest before committing.
+- **Provision preflight** (`scripts/provision-preflight.sh`) — installs
+  dependencies, pre-creates in-worktree Swift caches, and runs the full
+  baseline **outside the sandbox** into `baseline-attestation.json`; briefs
+  carry a sandbox-facts section and an accepted-failure-set rule so sandbox
+  noise is never mistaken for a regression.
+- **Quota-limit detection** — `spawn-worker.sh` recognizes session/usage-limit
+  kills, exits 75 with a `retry_after` hint, and the coordinator schedules a
+  delayed respawn instead of counting a crash strike.
+- **Tighter pipeline gate** — a turn that ends with mission state still
+  `running` is bounced back until the session records
+  planned/executed/blocked/review.
+- **Planner hardening** — reuse claims require `file:line` citations from real
+  code, contract-changing tasks annotate their compile-impact surface, and
+  every checkpoint must compile independently.
+- **`scripts/orchestrator-gc.sh`** — sweeps stale worktrees and `orc/`
+  branches left behind by archived missions.
 
 ## Mission lifecycle
 

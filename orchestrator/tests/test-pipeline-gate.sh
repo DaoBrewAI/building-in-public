@@ -26,10 +26,12 @@ check() {
 run_gate
 check "no state file"        '[[ "$GRC" -eq 0 && -z "$GOUT" ]]'
 
-# 2. state=running -> silent pass-through
+# 2. state=running -> block (ending a turn without writing a terminal state
+#    loses the mission — 2026-08-08 retrospective P1-2); budget still releases.
 echo running > "$MD/state"
 run_gate
-check "state running"        '[[ "$GRC" -eq 0 && -z "$GOUT" ]]'
+check "state running blocks" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *running* ]]'
+rm -f "$MD/.gate-blocks"
 
 # 3. state=blocked -> silent pass-through
 echo blocked > "$MD/state"
@@ -88,6 +90,26 @@ check "unfilled placeholders -> block" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"
 # 10. misconfig (ORC_MISSION_DIR unset) -> blocking error, exit 2
 MOUT="$(printf '{}' | env -u ORC_MISSION_DIR "$GATE" 2>/dev/null)"; MRC=$?
 check "misconfig exits 2"    '[[ "$MRC" -eq 2 ]]'
+
+# --- planned-state gate (plan stage must leave plan.md + the Review Companion) ---
+MD2="$TMP/mission2"; mkdir -p "$MD2"
+run_gate2() { GOUT="$(printf '{}' | ORC_MISSION_DIR="$MD2" "$GATE" 2>/dev/null)"; GRC=$?; }
+
+# 11. state=planned, nothing present -> block naming both artifacts
+echo planned > "$MD2/state"
+run_gate2
+check "planned blocks empty" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *plan.md* && "$GOUT" == *plan-review.html* ]]'
+
+# 12. plan.md alone is not enough — the companion is required (and must be non-empty)
+touch "$MD2/plan.md" "$MD2/plan-review.html"
+rm -f "$MD2/.gate-blocks"
+run_gate2
+check "planned needs companion" '[[ "$GRC" -eq 0 && "$GOUT" == *\"block\"* && "$GOUT" == *plan-review.html* ]]'
+
+# 13. both artifacts -> silent pass-through, block budget cleared
+echo '<html>companion</html>' > "$MD2/plan-review.html"
+run_gate2
+check "planned complete -> allow" '[[ "$GRC" -eq 0 && -z "$GOUT" && ! -f "$MD2/.gate-blocks" ]]'
 
 echo "  pipeline-gate: $OK/$N"
 [[ "$OK" -eq "$N" ]]

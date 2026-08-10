@@ -1,5 +1,5 @@
 ---
-description: "Start or resume orchestrated missions: brainstorm the ask into a design, launch an autonomous headless session that plans/executes/self-reviews it, stay free to coordinate; mediate its questions and accept+merge its work. Bare /orchestrate resumes in-flight missions from the hub."
+description: "Start or resume orchestrated missions: brainstorm the ask into a design, run it as a staged pipeline (Fable-5 plans → your go → codex gpt-5.6-sol executes+verifies → Fable-5 reviews), stay free to coordinate; mediate its questions and accept+merge its work. Bare /orchestrate resumes in-flight missions from the hub."
 disable-model-invocation: true
 ---
 

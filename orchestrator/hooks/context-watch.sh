@@ -32,7 +32,7 @@ fi
 MARKER="$HUB/.carryover-notified"
 [[ -f "$MARKER" ]] && exit 0
 
-BUDGET="${ORC_CONTEXT_BUDGET:-200000}"
+BUDGET="${ORC_CONTEXT_BUDGET:-1000000}"
 THRESHOLD_PCT="${ORC_CARRYOVER_PCT:-65}"
 
 # Context used ≈ token usage of the latest assistant message in the transcript.

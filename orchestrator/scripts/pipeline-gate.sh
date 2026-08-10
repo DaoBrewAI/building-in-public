@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Stop-hook artifact gate for orchestrator mission sessions.
-# Blocks the session from ending its turn in state=review unless the pipeline
-# left its artifacts behind: plan.md, report.md sections, >=1 commit per branch.
+# state=planned: blocks unless the plan stage left plan.md AND plan-review.html
+#   (the writing-plans Review Companion the founder reads at the go gate).
+# state=review: blocks unless the pipeline left its artifacts behind: plan.md,
+#   report.md sections, >=1 commit per branch.
 # After 3 blocks it releases — the orchestrator's acceptance is the backstop.
 # Env: ORC_MISSION_DIR (required), ORC_WORKTREES (informational; commit checks
 # use the worktrees.txt manifest written at provision time).
@@ -20,7 +22,23 @@ fi
 MD="$ORC_MISSION_DIR"
 
 STATE="$(cat "$MD/state" 2>/dev/null || true)"
-if [[ "$STATE" != "review" ]]; then
+
+# P1-2 (2026-08-08 retrospective): a claude stage once ended its turn without
+# writing any state (subagent still mid-flight) — state stayed `running`, the
+# process died, and the orchestrator had to salvage it as a crash. Ending a
+# turn in `running` is always incomplete: bounce it.
+if [[ "$STATE" == "running" ]]; then
+  BLOCKS="$(cat "$MD/.gate-blocks" 2>/dev/null || echo 0)"
+  if [[ "$BLOCKS" -ge 3 ]]; then
+    exit 0
+  fi
+  echo $((BLOCKS + 1)) > "$MD/.gate-blocks"
+  jq -n --arg reason "[pipeline gate] You are ending your turn with state still 'running' — that loses the mission. Write your stage's terminal state to the state file first (plan stage: planned; review stage: rework or review) or follow the BLOCKED protocol, then end your turn." \
+    '{decision: "block", reason: $reason}'
+  exit 0
+fi
+
+if [[ "$STATE" != "review" && "$STATE" != "planned" ]]; then
   exit 0
 fi
 
@@ -29,6 +47,24 @@ add() { MISSING="${MISSING}${1} · "; }
 
 if [[ ! -f "$MD/plan.md" ]]; then
   add "plan.md is missing — run 10x-engineer:writing-plans and save the plan to $MD/plan.md"
+fi
+
+if [[ "$STATE" == "planned" ]]; then
+  if [[ ! -s "$MD/plan-review.html" ]]; then
+    add "plan-review.html is missing — generate the writing-plans Review Companion HTML (decisions first with alternatives and likely-tweak/settled markers, mechanical work collapsed) and save it to $MD/plan-review.html; the founder reads it at the go gate"
+  fi
+  if [[ -z "$MISSING" ]]; then
+    rm -f "$MD/.gate-blocks"
+    exit 0
+  fi
+  BLOCKS="$(cat "$MD/.gate-blocks" 2>/dev/null || echo 0)"
+  if [[ "$BLOCKS" -ge 3 ]]; then
+    exit 0
+  fi
+  echo $((BLOCKS + 1)) > "$MD/.gate-blocks"
+  jq -n --arg reason "[pipeline gate] You set state=planned but the plan stage is incomplete: ${MISSING}Fix these, then end your turn again." \
+    '{decision: "block", reason: $reason}'
+  exit 0
 fi
 
 if [[ -f "$MD/report.md" ]]; then

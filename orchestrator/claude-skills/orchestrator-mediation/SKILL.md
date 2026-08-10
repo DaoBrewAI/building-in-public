@@ -5,6 +5,8 @@ description: Triage a mission session's BLOCKED report - answer it, decide it, o
 
 # Mediating a Blocked Mission Session
 
+A block can come from either stage backend — the planner/reviewer (claude) or the executor (codex). Triage is identical; only the resume differs: check the last `stage:` line in the mission's `session.txt` and pass `--stage exec` to spawn-worker.sh when it says exec.
+
 Read the newest `BLOCKED-<n>.md` in the mission directory. It contains: what the mission session was doing, the question, 2–3 options with trade-offs, and the session's recommendation. Triage in this order:
 
 ## (a) Answerable — answer it yourself
