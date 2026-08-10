@@ -33,6 +33,13 @@ After all tasks are complete (or enough data collected):
    superscript, color-coded by confidence tier (primary-verified / cross-verified /
    partially-confirmed / estimate-only / unverifiable / contradicted-corrected), linking
    to a numbered reference table with source-type tags and access dates.
+   **Dedupe references by CONTENT, not URL**: the same article syndicated or mirrored
+   on multiple platforms (TechCrunch↔Yahoo Finance, journal↔PubMed Central, press
+   release↔wire repost, original↔translation) is ONE source under ONE reference number —
+   fold mirror URLs into that entry as labeled mirrors. Never let a mirror appear as a
+   second independent source supporting the same claim; independence requires distinct
+   authorship/reporting. Translations/derivatives may be listed only when they serve a
+   distinct evidentiary role, explicitly labeled non-independent.
 4. **Derivation transparency for internal numbers.** Any number NOT backed by an
    external source (internal estimate, assumption, self-set target, illustrative curve)
    must be visibly tagged as such **in the figure itself** (e.g. a dashed "internal

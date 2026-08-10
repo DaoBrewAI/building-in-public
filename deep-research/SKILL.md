@@ -378,6 +378,9 @@ Your job is to produce the final research report by integrating all findings.
   illustrative curves labeled as such
 - Figure/text alignment: figures (incl. SVG text and aria-labels) carry the same
   epistemic markings as prose; after verification, re-sweep every figure to match
+- Reference dedup by content: syndicated/mirrored/translated copies of the same
+  article share one reference number (mirrors labeled inline); a mirror never counts
+  as a second independent source for a claim
 
 ## Quality Requirements:
 - Cross-reference findings from different agents -- note where they agree/disagree
