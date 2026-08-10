@@ -60,9 +60,17 @@ Here's the full flow for a depth-first query like "how does the auth system work
 
 6. All tasks complete → Spawn synthesis agent (general-purpose):
    - Reads all task details and agent messages
-   - Produces final report at /tmp/research_report_*.md
+   - Produces an internal synthesis draft at /tmp/research_report_*.md
+   - Returns the draft to the orchestrator; the temporary Markdown is not a deliverable
 
-7. Shutdown all teammates, TeamDelete, deliver report
+7. Orchestrator applies the reporting contract:
+   - Converts the verified draft into one canonical, self-contained mobile HTML report
+   - Adds the early `graphify-source` semantic template and persists only the HTML
+   - Runs the Graphify conclusion/rationale/decision-status retrieval gate against the HTML
+   - Runs 390 × 844 and 430 × 932 browser validation and publishes the private artifact
+   - Creates centralized fallback Markdown only after a measured HTML retrieval failure plus retry
+
+8. Shutdown all teammates, TeamDelete, deliver the verified HTML reading link
 ```
 
 ## Anti-Patterns to Avoid

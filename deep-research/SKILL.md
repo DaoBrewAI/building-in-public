@@ -362,17 +362,22 @@ Your job is to produce the final research report by integrating all findings.
 2. Read each completed task's details (TaskGet) for the full findings
 3. Review all messages in the conversation for additional context
 4. Identify consensus, conflicts, and gaps across all findings
-5. Write the final report to /tmp/research_report_$(date +%s).html
-6. Message the orchestrator with the report path and a brief summary
+5. Write the semantic draft to `/tmp/research_report_<ts>.draft.md`; this is temporary
+   Trust Gate input, not a second persisted report file. Phase 3.5 verifies it before
+   canonical HTML is published
+6. Message the orchestrator with the draft path and a brief summary
 
 ## Report Structure:
 [See references/reporting.md for the full report template]
 
 ## Format Requirements (MANDATORY, see references/reporting.md "Report Format"):
-- Deliver BOTH a self-contained HTML file (inline CSS, light+dark themes) AND a PDF
-  render of it (mobile/offline reading; preserved rendering, ALL hyperlinks working —
-  external and internal jumps; see reporting.md rule 1 for the chunked-Chrome +
-  pypdf link-rebuild recipe)
+- Deliver one canonical self-contained, mobile-first HTML report (inline presentation
+  assets, light+dark themes). Embed the complete key semantics as structured
+  Markdown-like text in the required early `graphify-source` template; Graphify indexes
+  the HTML directly. The reading URL is part of delivery: for a private GitHub
+  repository, use a direct, unarchived Actions artifact rather than a blob/raw URL.
+  Do not persist sibling Markdown unless the real retrieval smoke test fails. PDF is
+  outside the default report workflow. See references/mobile_delivery.md.
 - Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
   timelines); prose only carries what a figure cannot
 - Derivation transparency: internal estimates/assumptions/targets are tagged IN the
@@ -429,17 +434,47 @@ At synthesis time:
      /tmp/research_report_<ts>.draft.md \
      > /tmp/research_report_<ts>.final.md
    ```
-6. Inject the Trust Banner at top of report (see references/color_palette.md for
-   the HEX-pinned palette).
+6. Inject the Trust Banner into the verified temporary Markdown (see
+   references/color_palette.md for the HEX-pinned palette).
+7. Generate `/tmp/research_report_<ts>.html` from the verified semantic draft and the
+   same structured figure data. Put the complete key semantics in the unique
+   `<template id="graphify-source">` after the restrictive CSP and before CSS; its
+   closing tag must be within the first 16,000 characters. Include the report ID and
+   `__REPORT_SOURCE_URL__` placeholder from references/mobile_delivery.md. Do not
+   introduce claims that exist only in the HTML/SVG layer.
+8. Validate the canonical HTML and both phone viewports. Do not persist the temporary
+   Markdown draft or publish directly from `/tmp`.
 
 **Color HARD RULE**: All status chips use blue / yellow / orange / red / gray.
 ZERO green. Adapt this rule to your accessibility needs or remove it if not applicable.
+
+### Phase 3.75: Persistence and Mobile Publication
+
+1. Resolve the target repository, destination path, and report status with the user
+   request and repository conventions. Persist exactly one canonical `.html` report.
+2. Re-run the HTML validator and mobile checks after the final persisted content.
+3. Keep the HTML indexable and update Graphify from it. Run the report-specific
+   retrieval smoke test before any push. Only after a real failure plus one corrected
+   retry may you generate `graph-sources/<same-relative-path>.md` and target only the
+   failed HTML path in `.graphifyignore`; never put fallback Markdown beside the report.
+4. Commit and push only when that repository mutation is authorized by the user's
+   request and current workflow. Push the exact ref containing the canonical HTML.
+5. Ensure the private HTML workflow exists on the default branch. Dispatch that
+   default-branch workflow with the pushed report commit as its separate `source_ref`
+   input. Wait for success and open the artifact URL in a real browser before declaring
+   delivery complete.
+6. If commit, push, workflow installation, or dispatch is not authorized/available,
+   return the local HTML path and state plainly that no phone-readable URL
+   exists yet. A `/tmp` path, GitHub blob URL, or unverified Actions run is not a
+   published report.
 
 ### Phase 4: Cleanup
 
 1. Send `shutdown_request` to all remaining teammates
 2. Call `TeamDelete` to clean up team and task files
-3. Deliver the report (see [references/reporting.md](references/reporting.md))
+3. Deliver the report and a phone-readable URL (see
+   [references/reporting.md](references/reporting.md) and
+   [references/mobile_delivery.md](references/mobile_delivery.md))
 
 ## Tool Strategies
 
@@ -465,7 +500,10 @@ The full teammate prompt template (with communication protocol, peer-to-peer mes
 
 ## Synthesis & Reporting
 
-For the report structure, delivery flow, and resource budgets, see [references/reporting.md](references/reporting.md).
+For the report structure, delivery flow, and resource budgets, see
+[references/reporting.md](references/reporting.md). For private GitHub HTML previews,
+direct HTML indexing, stable private hosting, and mobile acceptance checks, see
+[references/mobile_delivery.md](references/mobile_delivery.md).
 
 ## Complete Orchestration Example, Anti-Patterns, Worktree & Resume
 
@@ -479,6 +517,7 @@ This skill includes the following bundled resources:
 - `tools_guide.md` - Detailed tooling reference for teammates
 - `subagent_template.md` - Full template for teammate instructions and protocol
 - `reporting.md` - Report structure, delivery flow, resource budgets
+- `mobile_delivery.md` - Canonical HTML, direct Graphify indexing, and private delivery
 - `orchestration_example.md` - End-to-end example, anti-patterns, advanced features (worktree, resume)
 - `finding_schema.md` - Structured Finding JSON schema for research agents
 - `color_palette.md` - Accessibility-safe color palette for trust gate status tags
@@ -486,6 +525,14 @@ This skill includes the following bundled resources:
 ### subagents/
 - `trust_gate_verifier_prompt.md` - Verification subagent prompt
 - `claim_extractor_prompt.md` - Claim extraction subagent prompt
+
+### templates/
+- `private-html-preview.yml` - GitHub Actions workflow for a private, directly
+  viewable single-file HTML artifact
+
+### examples/
+- `mobile-html-report/` - Valid single-file HTML fixture with embedded Graphify source,
+  CSP, responsive layout, and workflow source-link placeholder
 
 ### references/scripts/
 - `trust_gate.sh` - Trust Gate decision engine

@@ -5,9 +5,10 @@
 - [Information Integration](#information-integration)
 - [Report Structure](#report-structure)
 - [Delivering the Report](#delivering-the-report)
-  - [Step 1: Generate markdown report file](#step-1-generate-markdown-report-file)
-  - [Step 2: Share the report](#step-2-share-the-report)
-  - [Step 3: Confirm delivery](#step-3-confirm-delivery)
+  - [Step 1: Generate the canonical HTML](#step-1-generate-the-canonical-html)
+  - [Step 2: Publish a mobile reading URL](#step-2-publish-a-mobile-reading-url)
+  - [Step 3: Verify Graphify retrieval](#step-3-verify-graphify-retrieval)
+  - [Step 4: Confirm delivery](#step-4-confirm-delivery)
 - [Resource Budgets](#resource-budgets)
 
 ## Information Integration
@@ -20,25 +21,15 @@ After all tasks are complete (or enough data collected):
 
 ## Report Format (MANDATORY)
 
-1. **Two deliverables every time: HTML + PDF.** The final output is (a) a single
-   self-contained HTML file (inline CSS, no external assets; support both light and dark
-   themes via CSS custom properties + `prefers-color-scheme` + `:root[data-theme]`
-   overrides) — HTML is required because diagrams and text must render as one integrated
-   document — and (b) a PDF render of the same report for mobile/offline reading, since
-   raw HTML can't be viewed rendered from a phone (especially via GitHub links).
-   PDF requirements: preserve the HTML rendering (headless-Chrome print-to-PDF, forced
-   light theme, all `<details>` opened, `@page`/break-inside print CSS); ALL hyperlinks
-   must still work — external URLs and internal anchor jumps alike. Known pitfalls and
-   the working recipe: Chrome's print pipeline fails on large SVG-heavy documents —
-   print top-level sections as separate chunks and merge with pypdf; Chrome silently
-   drops `#anchor` links whose target isn't in the printed chunk — pre-rewrite internal
-   hrefs to a sentinel absolute URL (e.g. `https://anchor.internal/<id>`), then after
-   merging rewrite those URI annotations into GoTo destinations located by text markers
-   (normalize extracted text with NFKC — Chrome maps some CJK glyphs to Kangxi radicals).
-   Verify before delivery: zero sentinel URIs left, internal GoTo count == internal href
-   count in the HTML, external URI count matches, spot-render a page. Keep the PDF under
-   ~10MB or GitHub won't render it inline — chunked printing duplicates font subsets, so
-   run pypdf `compress_identical_objects` + `compress_content_streams` after merging.
+1. **Deliver one canonical mobile-first HTML report.** The self-contained HTML (inline
+   presentation assets; light and dark themes via CSS custom properties and
+   `prefers-color-scheme`) is both the durable Git source and the human reading surface.
+   Embed the complete key semantics in a compact Markdown-like template near the start
+   so Graphify can index this same file directly. A committed GitHub `blob` or `raw` URL
+   is the source location, not the reading URL; for a private repository, publish the
+   report as a direct, unarchived Actions artifact. Do not generate a sibling Markdown
+   file unless the real Graphify retrieval gate fails. PDF is not part of this delivery
+   workflow. Follow [mobile_delivery.md](mobile_delivery.md).
 2. **Diagrams first, prose second.** Wherever a finding can be shown as a picture, show
    it as a picture: comparisons → bar/quadrant charts, structures → block diagrams,
    flows/decisions → flow diagrams, timelines → timelines, confidence distributions →
@@ -72,83 +63,89 @@ After all tasks are complete (or enough data collected):
 
 ## Report Structure
 
-The content outline below still applies — render it as the HTML document described above
-(the markdown skeleton is the content model, not the delivery format):
+Place this compact semantic outline inside the HTML's unique
+`<template id="graphify-source">`. Its closing tag must be within the first 16,000
+characters so Graphify 0.8.33 receives it inside the 20,000-character raw cap:
 
 ```markdown
-# Research Report: [Topic]
-
-## Executive Summary
+# Executive Summary
 - Key findings in 3-5 bullet points
 - Critical context
 
-## Detailed Findings
+# Conclusions
 
-### [Perspective/Component 1]
+## [Perspective/Component 1]
 - Finding with evidence (file_path:line_number references)
 - Context (team, platform, history)
 
-### [Perspective/Component 2]
+## [Perspective/Component 2]
 ...
 
-## Recommendations
-- Actionable next steps
-- Relevant teams/experts to consult
-- Related commits/PRs to review
+# Decision Status
+- Confirmed / exploration only, with explicit rationale
 
-## Sources
+# Sources
 - Primary: [Specific files, commits, build targets]
 - Secondary: [Related documentation, queries]
 ```
+
+These four top-level headings are the validation minimum. Put recommendations under
+`# Conclusions` or add an extra heading; extra structure must never become a reason to
+reject an otherwise complete semantic block.
 
 ## Delivering the Report
 
 After synthesizing the research findings:
 
-### Step 1: Generate HTML report file and its PDF render
+### Step 1: Generate the canonical HTML
 
-```bash
-# Create report with timestamp (self-contained HTML per "Report Format" above)
-cat > "/tmp/research_report_$(date +%s).html" << 'EOF'
-[Your complete HTML report: inline CSS, inline-SVG diagrams for every major
-finding, confidence-colored citation superscripts + numbered reference table]
-EOF
+Generate one self-contained `.html` report containing inline CSS, inline SVG diagrams,
+confidence-colored citation superscripts, the numbered reference table, and the
+structured semantic template required by [mobile_delivery.md](mobile_delivery.md). Put
+that one file in the repository when the report is project state; use `/tmp` only for
+drafts or when the user asked for local-only artifacts.
 
-# Then produce the companion PDF per "Report Format" rule 1 (chunked
-# headless-Chrome print + pypdf merge + link rebuild). Deliver BOTH files
-# together — the HTML is the canonical document, the PDF is the
-# mobile/offline render.
-```
+Do not leave unique conclusions inside SVG text or interactive controls. Preserve a
+text equivalent in accessible body content and the semantic template. Add the report
+ID, strict CSP, and `__REPORT_SOURCE_URL__` placeholder required by the workflow.
 
-### Step 2: Share the report
+Validate the file against the mobile HTML acceptance contract in
+[mobile_delivery.md](mobile_delivery.md), including real rendering at 390 × 844 and
+430 × 932 CSS pixels.
 
-Choose the delivery method appropriate for your environment:
+### Step 2: Publish a mobile reading URL
 
-**Option A: Google Docs** (if available)
-```bash
-# Convert to Google Doc
-# Use whatever tool is available in your environment to convert markdown to Google Docs
+Choose the least-public delivery method that meets the user's request:
 
-# Notify the user
-echo "Research Complete: [Brief Topic] - Summary of findings. View report: [URL]"
-```
+- **Private GitHub repository (default):** use the workflow in
+  `templates/private-html-preview.yml` to publish a non-zipped, directly viewable HTML
+  artifact. Run the workflow definition from the default branch and pass the exact
+  pushed report commit as `source_ref`. Return the completed run/artifact URL, not the
+  `blob` URL.
+- **Stable private URL:** with explicit authorization, use an identity-protected static
+  site as described in `mobile_delivery.md`.
+- **Local-only delivery:** return the absolute HTML file path and state that it is not
+  yet reachable from the user's phone.
 
-**Option B: Direct file sharing**
-```bash
-# The report is available at the local path
-ls -t /tmp/research_report_*.md | head -1
-```
+Do not upload to a paste service or public Pages site unless the user explicitly
+authorizes public disclosure.
 
-**Option C: Paste service** (if available)
-```bash
-# Upload to your organization's paste service
-cat /tmp/research_report_TIMESTAMP.md | <paste-tool>
-```
+### Step 3: Verify Graphify retrieval
 
-### Step 3: Confirm delivery
+Keep the canonical HTML indexable, run the repository's normal Graphify update, and ask
+a report-specific question covering its main findings, recommendations, and decision
+status. Use the HTML alone when retrieval succeeds. Only after a real failure and one
+semantic-template correction/retry may you create the centralized
+`graph-sources/<same-relative-path>.md` fallback described in
+[mobile_delivery.md](mobile_delivery.md). Never put fallback Markdown beside the report.
+
+### Step 4: Confirm delivery
 
 - Inform the user that the full report has been generated
-- Include the file path and/or URL in your response
+- Put the clickable interactive HTML URL first; a local path alone is not a mobile
+  handoff
+- Include the exact-commit canonical HTML source link and Graphify smoke-test result
+- State whether the link requires GitHub sign-in and when it expires
 - Provide a brief summary (2-3 sentences) in the response
 
 ## Resource Budgets
