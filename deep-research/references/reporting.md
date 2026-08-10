@@ -33,6 +33,20 @@ After all tasks are complete (or enough data collected):
    superscript, color-coded by confidence tier (primary-verified / cross-verified /
    partially-confirmed / estimate-only / unverifiable / contradicted-corrected), linking
    to a numbered reference table with source-type tags and access dates.
+4. **Derivation transparency for internal numbers.** Any number NOT backed by an
+   external source (internal estimate, assumption, self-set target, illustrative curve)
+   must be visibly tagged as such **in the figure itself** (e.g. a dashed "internal
+   estimate" badge or inline label), not only in surrounding text, AND accompanied by a
+   note showing HOW it was derived (inputs × assumptions, e.g. "population × pay-rate ×
+   price assumption"). If the derivation cannot be shown, either drop the number or
+   explicitly mark it "derivation not preserved — do not quote externally". Conceptual
+   illustrations must be labeled "illustrative, not measured data".
+5. **Figure/text alignment.** Figures and prose must carry the SAME epistemic markings.
+   A figure may never present as fact a number that the text qualifies as estimate or
+   inference (and vice versa) — after any verification pass, re-sweep every figure
+   (including SVG text and aria-labels) so in-figure wording matches the verified
+   conclusions. The bar for the whole report: a reader can tell, for every number,
+   where it came from and whether to trust it.
 
 ## Report Structure
 

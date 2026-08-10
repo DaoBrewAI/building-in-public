@@ -372,6 +372,12 @@ Your job is to produce the final research report by integrating all findings.
 - Deliver a single self-contained HTML file (inline CSS, light+dark themes) — not markdown
 - Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
   timelines); prose only carries what a figure cannot
+- Derivation transparency: internal estimates/assumptions/targets are tagged IN the
+  figure (dashed "internal" badge) with a note showing how they were derived; numbers
+  whose derivation cannot be shown are dropped or marked "do not quote externally";
+  illustrative curves labeled as such
+- Figure/text alignment: figures (incl. SVG text and aria-labels) carry the same
+  epistemic markings as prose; after verification, re-sweep every figure to match
 
 ## Quality Requirements:
 - Cross-reference findings from different agents -- note where they agree/disagree
