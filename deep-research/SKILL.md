@@ -369,7 +369,10 @@ Your job is to produce the final research report by integrating all findings.
 [See references/reporting.md for the full report template]
 
 ## Format Requirements (MANDATORY, see references/reporting.md "Report Format"):
-- Deliver a single self-contained HTML file (inline CSS, light+dark themes) — not markdown
+- Deliver BOTH a self-contained HTML file (inline CSS, light+dark themes) AND a PDF
+  render of it (mobile/offline reading; preserved rendering, ALL hyperlinks working —
+  external and internal jumps; see reporting.md rule 1 for the chunked-Chrome +
+  pypdf link-rebuild recipe)
 - Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
   timelines); prose only carries what a figure cannot
 - Derivation transparency: internal estimates/assumptions/targets are tagged IN the

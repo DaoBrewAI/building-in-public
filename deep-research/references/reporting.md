@@ -20,10 +20,23 @@ After all tasks are complete (or enough data collected):
 
 ## Report Format (MANDATORY)
 
-1. **HTML, not markdown.** The final deliverable is a single self-contained HTML file
-   (inline CSS, no external assets; support both light and dark themes via CSS custom
-   properties + `prefers-color-scheme` + `:root[data-theme]` overrides). HTML is required
-   because diagrams and text must render as one integrated document.
+1. **Two deliverables every time: HTML + PDF.** The final output is (a) a single
+   self-contained HTML file (inline CSS, no external assets; support both light and dark
+   themes via CSS custom properties + `prefers-color-scheme` + `:root[data-theme]`
+   overrides) — HTML is required because diagrams and text must render as one integrated
+   document — and (b) a PDF render of the same report for mobile/offline reading, since
+   raw HTML can't be viewed rendered from a phone (especially via GitHub links).
+   PDF requirements: preserve the HTML rendering (headless-Chrome print-to-PDF, forced
+   light theme, all `<details>` opened, `@page`/break-inside print CSS); ALL hyperlinks
+   must still work — external URLs and internal anchor jumps alike. Known pitfalls and
+   the working recipe: Chrome's print pipeline fails on large SVG-heavy documents —
+   print top-level sections as separate chunks and merge with pypdf; Chrome silently
+   drops `#anchor` links whose target isn't in the printed chunk — pre-rewrite internal
+   hrefs to a sentinel absolute URL (e.g. `https://anchor.internal/<id>`), then after
+   merging rewrite those URI annotations into GoTo destinations located by text markers
+   (normalize extracted text with NFKC — Chrome maps some CJK glyphs to Kangxi radicals).
+   Verify before delivery: zero sentinel URIs left, internal GoTo count == internal href
+   count in the HTML, external URI count matches, spot-render a page.
 2. **Diagrams first, prose second.** Wherever a finding can be shown as a picture, show
    it as a picture: comparisons → bar/quadrant charts, structures → block diagrams,
    flows/decisions → flow diagrams, timelines → timelines, confidence distributions →
@@ -90,7 +103,7 @@ The content outline below still applies — render it as the HTML document descr
 
 After synthesizing the research findings:
 
-### Step 1: Generate HTML report file
+### Step 1: Generate HTML report file and its PDF render
 
 ```bash
 # Create report with timestamp (self-contained HTML per "Report Format" above)
@@ -98,6 +111,11 @@ cat > "/tmp/research_report_$(date +%s).html" << 'EOF'
 [Your complete HTML report: inline CSS, inline-SVG diagrams for every major
 finding, confidence-colored citation superscripts + numbered reference table]
 EOF
+
+# Then produce the companion PDF per "Report Format" rule 1 (chunked
+# headless-Chrome print + pypdf merge + link rebuild). Deliver BOTH files
+# together — the HTML is the canonical document, the PDF is the
+# mobile/offline render.
 ```
 
 ### Step 2: Share the report
