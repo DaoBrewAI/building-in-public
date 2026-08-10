@@ -36,7 +36,9 @@ After all tasks are complete (or enough data collected):
    merging rewrite those URI annotations into GoTo destinations located by text markers
    (normalize extracted text with NFKC — Chrome maps some CJK glyphs to Kangxi radicals).
    Verify before delivery: zero sentinel URIs left, internal GoTo count == internal href
-   count in the HTML, external URI count matches, spot-render a page.
+   count in the HTML, external URI count matches, spot-render a page. Keep the PDF under
+   ~10MB or GitHub won't render it inline — chunked printing duplicates font subsets, so
+   run pypdf `compress_identical_objects` + `compress_content_streams` after merging.
 2. **Diagrams first, prose second.** Wherever a finding can be shown as a picture, show
    it as a picture: comparisons → bar/quadrant charts, structures → block diagrams,
    flows/decisions → flow diagrams, timelines → timelines, confidence distributions →
