@@ -28,14 +28,39 @@ After all tasks are complete (or enough data collected):
    so Graphify can index this same file directly. A committed GitHub `blob` or `raw` URL
    is the source location, not the reading URL; for a private repository, publish the
    report as a direct, unarchived Actions artifact. Do not generate a sibling Markdown
-   file unless the real Graphify retrieval gate fails. PDF is not part of this delivery
-   workflow. Follow [mobile_delivery.md](mobile_delivery.md).
-2. **Diagrams first, prose second.** Wherever a finding can be shown as a picture, show
+   file unless the real Graphify retrieval gate fails. Follow
+   [mobile_delivery.md](mobile_delivery.md); the companion PDF in rule 2 is also part
+   of every delivery.
+2. **Companion PDF, every time (Linhan, 2026-08-10 — supersedes "PDF is not part of
+   this delivery workflow").** Alongside the canonical HTML, always deliver a PDF render
+   for phone/offline reading and easy sharing (GitHub renders PDFs inline, unlike HTML).
+   Requirements: preserve the HTML rendering (headless-Chrome print, forced light theme,
+   `<details>` opened, print CSS) and keep ALL hyperlinks working — external URLs and
+   internal anchor jumps alike.
+   **Use the ready pipeline: `references/scripts/html_report_to_pdf.py`** (SRC_HTML /
+   PDF_ZOOM env vars; adjust GROUPS + NEEDLES per report — see its header comments).
+   The tuned recipe it encodes:
+   - Chrome print crashes on large SVG-heavy documents → print in chunks, merge with
+     pypdf; every chunk boundary forces a page break (a potential half-empty page), so
+     make chunk groups as large as printing succeeds, splitting only the failing group.
+   - Desktop density: `zoom: 0.82` + tightened margins/section spacing — at 1.0,
+     unbreakable figures jump pages and leave large blanks.
+   - Chrome silently drops `#anchor` links whose target isn't in the printed chunk →
+     pre-rewrite internal hrefs to `https://anchor.internal/<id>`, then rewrite those
+     URI annotations into GoTo destinations after merging, locating targets by
+     NFKC-normalized text markers (Chrome maps some CJK glyphs to Kangxi radicals).
+   - Keep the PDF under ~10MB or GitHub won't render it inline: chunked printing
+     duplicates font subsets → pypdf `compress_identical_objects` +
+     `compress_content_streams` after merging.
+   The script asserts: zero sentinel URIs, internal GoTo count == internal href count,
+   external URI count matches, size <10MB; spot-render a page before delivery.
+
+3. **Diagrams first, prose second.** Wherever a finding can be shown as a picture, show
    it as a picture: comparisons → bar/quadrant charts, structures → block diagrams,
    flows/decisions → flow diagrams, timelines → timelines, confidence distributions →
    stacked bars (inline SVG preferred). Prose is for what a diagram cannot carry.
    A reader should get the argument by scanning the figures and captions alone.
-3. **Evidence chain is visible.** Every external claim carries a numbered citation
+4. **Evidence chain is visible.** Every external claim carries a numbered citation
    superscript, color-coded by confidence tier (primary-verified / cross-verified /
    partially-confirmed / estimate-only / unverifiable / contradicted-corrected), linking
    to a numbered reference table with source-type tags and access dates.
@@ -46,7 +71,7 @@ After all tasks are complete (or enough data collected):
    second independent source supporting the same claim; independence requires distinct
    authorship/reporting. Translations/derivatives may be listed only when they serve a
    distinct evidentiary role, explicitly labeled non-independent.
-4. **Derivation transparency for internal numbers.** Any number NOT backed by an
+5. **Derivation transparency for internal numbers.** Any number NOT backed by an
    external source (internal estimate, assumption, self-set target, illustrative curve)
    must be visibly tagged as such **in the figure itself** (e.g. a dashed "internal
    estimate" badge or inline label), not only in surrounding text, AND accompanied by a
@@ -54,7 +79,7 @@ After all tasks are complete (or enough data collected):
    price assumption"). If the derivation cannot be shown, either drop the number or
    explicitly mark it "derivation not preserved — do not quote externally". Conceptual
    illustrations must be labeled "illustrative, not measured data".
-5. **Figure/text alignment.** Figures and prose must carry the SAME epistemic markings.
+6. **Figure/text alignment.** Figures and prose must carry the SAME epistemic markings.
    A figure may never present as fact a number that the text qualifies as estimate or
    inference (and vice versa) — after any verification pass, re-sweep every figure
    (including SVG text and aria-labels) so in-figure wording matches the verified
@@ -103,7 +128,8 @@ Generate one self-contained `.html` report containing inline CSS, inline SVG dia
 confidence-colored citation superscripts, the numbered reference table, and the
 structured semantic template required by [mobile_delivery.md](mobile_delivery.md). Put
 that one file in the repository when the report is project state; use `/tmp` only for
-drafts or when the user asked for local-only artifacts.
+drafts or when the user asked for local-only artifacts. Then generate the companion PDF
+from this canonical HTML (Report Format rule 2) and commit it alongside.
 
 Do not leave unique conclusions inside SVG text or interactive controls. Preserve a
 text equivalent in accessible body content and the semantic template. Add the report

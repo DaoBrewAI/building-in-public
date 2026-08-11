@@ -376,8 +376,12 @@ Your job is to produce the final research report by integrating all findings.
   Markdown-like text in the required early `graphify-source` template; Graphify indexes
   the HTML directly. The reading URL is part of delivery: for a private GitHub
   repository, use a direct, unarchived Actions artifact rather than a blob/raw URL.
-  Do not persist sibling Markdown unless the real retrieval smoke test fails. PDF is
-  outside the default report workflow. See references/mobile_delivery.md.
+  Do not persist sibling Markdown unless the real retrieval smoke test fails.
+  See references/mobile_delivery.md.
+- Companion PDF every time (Linhan 2026-08-10): render the canonical HTML to PDF with
+  references/scripts/html_report_to_pdf.py (preserved rendering; ALL links working —
+  external + internal GoTo; <10MB so GitHub renders inline; 0.82 print zoom + largest
+  printable chunk groups to avoid blank areas) and commit it alongside the HTML.
 - Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
   timelines); prose only carries what a figure cannot
 - Derivation transparency: internal estimates/assumptions/targets are tagged IN the
@@ -457,9 +461,11 @@ ZERO green. Adapt this rule to your accessibility needs or remove it if not appl
    retrieval smoke test before any push. Only after a real failure plus one corrected
    retry may you generate `graph-sources/<same-relative-path>.md` and target only the
    failed HTML path in `.graphifyignore`; never put fallback Markdown beside the report.
-4. Commit and push only when that repository mutation is authorized by the user's
+4. Generate the companion PDF from the final canonical HTML via
+   references/scripts/html_report_to_pdf.py and persist it beside the HTML.
+5. Commit and push only when that repository mutation is authorized by the user's
    request and current workflow. Push the exact ref containing the canonical HTML.
-5. Ensure the private HTML workflow exists on the default branch. Dispatch that
+6. Ensure the private HTML workflow exists on the default branch. Dispatch that
    default-branch workflow with the pushed report commit as its separate `source_ref`
    input. Wait for success and open the artifact URL in a real browser before declaring
    delivery complete.
