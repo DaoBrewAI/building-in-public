@@ -453,8 +453,13 @@ ZERO green. Adapt this rule to your accessibility needs or remove it if not appl
 
 ### Phase 3.75: Persistence and Mobile Publication
 
-1. Resolve the target repository, destination path, and report status with the user
-   request and repository conventions. Persist exactly one canonical `.html` report.
+1. Resolve the target repository, parent collection, descriptive report slug, and
+   report status from the user request and repository conventions. Create one dated
+   report folder such as
+   `explorations/2026-08-10-b2b-agent-harness-customers-market/`. Persist exactly one
+   canonical report document inside it as `report.html`. Do not persist a report
+   Markdown copy. The only Markdown allowed in this folder is the tiny navigation-only
+   `README.md` created in step 6.
 2. Re-run the HTML validator and mobile checks after the final persisted content.
 3. Keep the HTML indexable and update Graphify from it. Run the report-specific
    retrieval smoke test before any push. Only after a real failure plus one corrected
@@ -466,18 +471,19 @@ ZERO green. Adapt this rule to your accessibility needs or remove it if not appl
    default-branch workflow with the pushed report commit as its separate `source_ref`
    input. Wait for success and open the artifact URL in a real browser before declaring
    delivery complete.
-6. After artifact publication succeeds, update both the target repository's root
-   `README.md` and the report directory's `README.md` with a conspicuous vertical
-   `📱 阅读网页` block containing the artifact reading URL, immutable report source
-   commit, and expiry timestamp. Add each newly created navigation-only directory
-   README to `.graphifyignore` by exact root-relative path; do not exclude an existing
-   semantic root README merely because it now includes Reader links, and never ignore
-   the canonical HTML. Commit and push this focused navigation update. Do not use a
-   Markdown table for the mobile entry.
+6. After artifact publication succeeds, create or replace only that report folder's
+   navigation-only `README.md`. Put the conspicuous vertical `📱 阅读网页` artifact link
+   first, followed by the immutable `report.html` source commit and UTC expiry. Never
+   add report links to the repository root README or to a growing global report index.
+   Configure `.graphifyignore` once with a parent-scoped pattern such as
+   `/explorations/*/README.md`, after verifying that it matches only navigation cards;
+   never ignore `report.html`. Commit and push this focused folder handoff. Do not use
+   a Markdown table.
 7. Treat GitHub `blob` and `raw` links only as source links. For a GitHub Free private
    repository, use the workflow's `archive: false` artifact as the reading surface. If
-   it expires, rerun the workflow with the same immutable `source_ref`, replace the URL
-   and expiry in both navigation READMEs, and commit/push the refreshed entry.
+   it expires, rerun the workflow with the same immutable `source_ref`, replace only
+   the URL and expiry in that report folder's README, and commit/push the refreshed
+   entry. The canonical HTML and its Graphify identity do not change.
 8. If commit, push, workflow installation, or dispatch is not authorized/available,
    return the local HTML path and state plainly that no phone-readable URL
    exists yet. A `/tmp` path, GitHub blob URL, or unverified Actions run is not a

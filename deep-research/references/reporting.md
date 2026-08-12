@@ -123,12 +123,13 @@ After synthesizing the research findings:
 
 ### Step 1: Generate the canonical HTML
 
-Generate one self-contained `.html` report containing inline CSS, inline SVG diagrams,
+Generate one self-contained `report.html` containing inline CSS, inline SVG diagrams,
 confidence-colored citation superscripts, the numbered reference table, and the
 structured semantic template required by [mobile_delivery.md](mobile_delivery.md). Put
-that one file in the repository when the report is project state; use `/tmp` only for
-drafts or when the user asked for local-only artifacts. Do not generate or persist a
-PDF unless Report Format rule 2 applies.
+it inside one dated, descriptively named folder such as
+`explorations/2026-08-10-b2b-agent-harness-customers-market/report.html`; use `/tmp` only
+for drafts or when the user asked for local-only artifacts. Do not persist a Markdown
+report copy. Do not generate or persist a PDF unless Report Format rule 2 applies.
 
 Do not leave unique conclusions inside SVG text or interactive controls. Preserve a
 text equivalent in accessible body content and the semantic template. Add the report
@@ -156,13 +157,14 @@ Choose the least-public delivery method that meets the user's request:
 Do not upload to a paste service or public Pages site unless the user explicitly
 authorizes public disclosure.
 
-After the artifact succeeds and opens, publish the repository navigation required by
-`mobile_delivery.md`: add the vertical `📱 阅读网页` block to the root README and the
-report-directory README, and record the immutable source commit and timezone-qualified
-expiry timestamp. Add only newly created navigation-only directory READMEs to
-`.graphifyignore`; keep an existing semantic root README indexed. Then commit and push
-the focused navigation update. When the artifact expires, rerun it from the same
-immutable source commit and commit/push the refreshed URL and expiry in both entries.
+After the artifact succeeds and opens, publish the report-folder link card required by
+`mobile_delivery.md`: create only that folder's tiny `README.md`, put the vertical
+`📱 阅读网页` block first, and record the immutable `report.html` source commit and
+timezone-qualified expiry timestamp. Never modify the repository root README or append
+to a global report index. Exclude navigation cards from Graphify with the verified
+parent-scoped pattern, then commit and push the focused handoff. When the artifact
+expires, rerun it from the same immutable source commit and replace only that folder's
+URL and expiry.
 
 ### Step 3: Verify Graphify retrieval
 
@@ -180,8 +182,8 @@ semantic-template correction/retry may you create the centralized
   handoff
 - Include the exact-commit canonical HTML source link and Graphify smoke-test result
 - State whether the link requires GitHub sign-in and when it expires
-- Confirm that both navigation README entries and every required exact
-  navigation-only `.graphifyignore` rule were committed and pushed
+- Confirm that the report-folder README entry and its parent-scoped navigation-only
+  `.graphifyignore` rule were committed and pushed, with the root README unchanged
 - Provide a brief summary (2-3 sentences) in the response
 
 ## Resource Budgets

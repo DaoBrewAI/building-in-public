@@ -89,11 +89,13 @@ Install as a Claude Code skill, then invoke with `/deep-research` followed by yo
 /deep-research What are the security implications of the new cache layer?
 ```
 
-The completed result is one canonical `.html` file plus a private, phone-readable
-interactive link. Graphify indexes the HTML directly. A centralized Markdown fallback
-under `graph-sources/` is created only after an actual retrieval smoke test proves that
-the HTML failed; it is never stored beside the report. PDF is not part of the default
-report workflow.
+The completed result is one dated, descriptively named report folder containing
+canonical `report.html` plus a tiny GitHub-rendered `README.md` link card. The card
+opens a private, phone-readable interactive artifact and is excluded from Graphify;
+Graphify indexes the HTML directly. Report delivery never grows the repository root
+README or a global index. A centralized Markdown fallback under `graph-sources/` is
+created only after an actual retrieval smoke test proves that the HTML failed; it is
+never stored beside the report. PDF is not part of the default report workflow.
 
 ## License
 
