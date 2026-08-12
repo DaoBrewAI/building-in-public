@@ -24,7 +24,9 @@ GitHub does not render committed HTML documents as web pages.
 Use this delivery order:
 
 1. **Private GitHub artifact (default):** publish the single HTML file as an
-   unarchived Actions artifact. It requires GitHub sign-in and repository read access.
+   unarchived Actions artifact (`archive: false`). This is the default reading surface
+   for a GitHub Free private repository; it requires GitHub sign-in and repository read
+   access and remains subject to artifact retention.
 2. **Stable private site (only when requested):** deploy the same file to an
    identity-protected static host. Creating a project, domain, access policy, or
    deployment requires explicit authorization.
@@ -203,6 +205,65 @@ content. Re-run the default-branch workflow with the same commit and path to rep
 expired artifact link. Never claim publication until the run succeeds and the artifact
 opens in a browser.
 
+## Publish repository navigation after artifact success
+
+Treat navigation publication as part of the default private-report delivery, not an
+optional follow-up. Perform it only after the workflow succeeds, the artifact opens,
+and the job summary provides the expected expiry timestamp.
+
+1. Capture the direct artifact URL, the full immutable `source_ref` commit that contains
+   the canonical HTML, the exact HTML source URL, and the expiry timestamp from the
+   successful run. Display the timestamp with an explicit timezone, preferably UTC.
+2. Add or update one conspicuous vertical entry in the target repository's root
+   `README.md` and in the report directory's `README.md`. Create the directory README
+   when it does not exist. If the report itself is at repository root, one root entry is
+   sufficient. Preserve unrelated README content and make the update idempotent by
+   matching the report ID or canonical report path.
+3. Use a vertical block, never a Markdown table. Keep the artifact link first:
+
+   ```markdown
+   ### <report title>
+
+   **[📱 阅读网页（推荐）](<direct-artifact-url>)**
+
+   Source: [`<report-path>`](<exact-commit-blob-url>)
+
+   Immutable source commit: [`<full-sha>`](<commit-url>)
+
+   Expires: `YYYY-MM-DD HH:MM UTC`
+
+   Requires GitHub sign-in and read access to this private repository. If the link has
+   expired, rerun `Private HTML Report` with the same source commit and report path,
+   then replace this URL and expiry date.
+   ```
+
+4. Add each newly created navigation-only directory README to the target repository's
+   `.graphifyignore`, using an exact root-relative path. Preserve existing rules and do
+   not add a broad `README.md`, `*.md`, or directory-wide pattern. Do not exclude an
+   existing semantic root README merely because it now contains Reader links: index
+   that navigation contract normally, without copying report semantics into it. For
+   example:
+
+   ```gitignore
+   /explorations/README.md
+   ```
+
+   Never add the canonical report HTML to `.graphifyignore` unless the separately
+   documented two-failure Graphify fallback gate has actually fired.
+5. Review the navigation diff, then create and push a focused navigation commit
+   containing all applicable README updates and any required `.graphifyignore` change.
+   Keep the displayed immutable source commit pinned to the earlier report commit; the
+   navigation commit is not a replacement source identity.
+
+GitHub `blob` and `raw` URLs always identify source bytes; they are never the reading
+surface. The `archive: false` Actions artifact is the directly viewable mobile surface
+for the default GitHub Free private-repository path.
+
+When an artifact expires, rerun the default-branch workflow with the same immutable
+`source_ref` and `report_path`. After the replacement artifact opens, update the URL and
+expiry date in both navigation READMEs and commit/push that focused refresh. Do not
+change the source commit unless the report content itself changed.
+
 ## Mobile HTML acceptance contract
 
 Before publishing, verify all of the following:
@@ -233,7 +294,10 @@ Default successful HTML indexing:
 
 ```text
 DaoBrewStrategy/
+├── README.md                                      # repo overview + Reader links; indexed
+├── .graphifyignore                                # exact navigation-only paths
 ├── explorations/
+│   ├── README.md                                  # mobile navigation only; ignored
 │   └── 2026-08-09-direction-portfolio.html
 ├── decisions/
 │   └── DEC-2026-08-10-direction-portfolio.md   # only if explicitly confirmed
@@ -256,8 +320,9 @@ DaoBrewStrategy/
 The final delivery message is intentionally simple:
 
 ```text
-Read interactive report — private GitHub artifact link, expires YYYY-MM-DD
+Read interactive report — private GitHub artifact link, expires YYYY-MM-DD HH:MM UTC
 Committed source — exact-commit HTML link, indexed by Graphify
+Repository navigation — root and report-directory README links committed and pushed
 Graphify smoke test — PASS for <tested query>
 ```
 

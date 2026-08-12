@@ -1,6 +1,6 @@
 ---
 name: deep-research
-description: Advanced multi-agent research system for large codebases and infrastructure. Use when users need deep, comprehensive research across monorepos, requiring analysis of code patterns, diffs, build systems, or data infrastructure. Especially useful for complex questions requiring multiple perspectives, extensive codebase exploration, or investigation across multiple systems.
+description: Advanced multi-agent research and evidence-backed report production for codebases, infrastructure, markets, and strategy. Use when users need comprehensive research across many sources or perspectives, coordinated subagents, Trust Gate verification, or a canonical mobile HTML report with Graphify indexing and private GitHub delivery.
 ---
 
 # Deep Research
@@ -378,10 +378,9 @@ Your job is to produce the final research report by integrating all findings.
   repository, use a direct, unarchived Actions artifact rather than a blob/raw URL.
   Do not persist sibling Markdown unless the real retrieval smoke test fails.
   See references/mobile_delivery.md.
-- Companion PDF every time (Linhan 2026-08-10): render the canonical HTML to PDF with
-  references/scripts/html_report_to_pdf.py (preserved rendering; ALL links working —
-  external + internal GoTo; <10MB so GitHub renders inline; 0.82 print zoom + largest
-  printable chunk groups to avoid blank areas) and commit it alongside the HTML.
+- Do not generate a PDF by default. Produce one only when the user explicitly asks for
+  it or the verified HTML reading route is unavailable; it is a derivative fallback,
+  never the canonical report or Graphify source. See references/reporting.md.
 - Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
   timelines); prose only carries what a figure cannot
 - Derivation transparency: internal estimates/assumptions/targets are tagged IN the
@@ -461,15 +460,25 @@ ZERO green. Adapt this rule to your accessibility needs or remove it if not appl
    retrieval smoke test before any push. Only after a real failure plus one corrected
    retry may you generate `graph-sources/<same-relative-path>.md` and target only the
    failed HTML path in `.graphifyignore`; never put fallback Markdown beside the report.
-4. Generate the companion PDF from the final canonical HTML via
-   references/scripts/html_report_to_pdf.py and persist it beside the HTML.
-5. Commit and push only when that repository mutation is authorized by the user's
+4. Commit and push only when that repository mutation is authorized by the user's
    request and current workflow. Push the exact ref containing the canonical HTML.
-6. Ensure the private HTML workflow exists on the default branch. Dispatch that
+5. Ensure the private HTML workflow exists on the default branch. Dispatch that
    default-branch workflow with the pushed report commit as its separate `source_ref`
    input. Wait for success and open the artifact URL in a real browser before declaring
    delivery complete.
-6. If commit, push, workflow installation, or dispatch is not authorized/available,
+6. After artifact publication succeeds, update both the target repository's root
+   `README.md` and the report directory's `README.md` with a conspicuous vertical
+   `📱 阅读网页` block containing the artifact reading URL, immutable report source
+   commit, and expiry timestamp. Add each newly created navigation-only directory
+   README to `.graphifyignore` by exact root-relative path; do not exclude an existing
+   semantic root README merely because it now includes Reader links, and never ignore
+   the canonical HTML. Commit and push this focused navigation update. Do not use a
+   Markdown table for the mobile entry.
+7. Treat GitHub `blob` and `raw` links only as source links. For a GitHub Free private
+   repository, use the workflow's `archive: false` artifact as the reading surface. If
+   it expires, rerun the workflow with the same immutable `source_ref`, replace the URL
+   and expiry in both navigation READMEs, and commit/push the refreshed entry.
+8. If commit, push, workflow installation, or dispatch is not authorized/available,
    return the local HTML path and state plainly that no phone-readable URL
    exists yet. A `/tmp` path, GitHub blob URL, or unverified Actions run is not a
    published report.
