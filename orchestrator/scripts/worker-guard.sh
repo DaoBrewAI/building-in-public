@@ -32,18 +32,40 @@ fi
 WTS="$ORC_WORKTREES"
 MD="$ORC_MISSION_DIR"
 
+path_is_physically_inside_mission() { # <absolute target, may not exist>
+  local TARGET="$1" CUR PARENT_PHYS MD_PHYS
+  MD_PHYS="$(cd "$MD" && pwd -P)" || return 1
+  [[ ! -L "$TARGET" ]] || return 1
+  CUR="$TARGET"
+  while [[ ! -e "$CUR" && ! -L "$CUR" ]]; do
+    [[ "$CUR" != "/" ]] || return 1
+    CUR="$(dirname "$CUR")"
+  done
+  # Any symlink component makes lexical authorization ambiguous; fail closed.
+  local REL="${TARGET#"$MD"/}" COMPONENT PREFIX="$MD"
+  OLDIFS="$IFS"; IFS='/'
+  for COMPONENT in $REL; do
+    PREFIX="$PREFIX/$COMPONENT"
+    if [[ -L "$PREFIX" ]]; then
+      IFS="$OLDIFS"
+      return 1
+    fi
+  done
+  IFS="$OLDIFS"
+  if [[ -d "$CUR" ]]; then
+    PARENT_PHYS="$(cd "$CUR" 2>/dev/null && pwd -P)" || return 1
+  else
+    PARENT_PHYS="$(cd "$(dirname "$CUR")" 2>/dev/null && pwd -P)" || return 1
+  fi
+  case "$PARENT_PHYS" in
+    "$MD_PHYS"|"$MD_PHYS"/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 case "$TOOL" in
   Bash)
-    CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
-    if printf '%s' "$CMD" | grep -qE '\bgit\b[^|;&]*\b(checkout|switch|merge|rebase|push)\b'; then
-      deny "[orchestrator guard] git checkout/switch/merge/rebase/push are forbidden for mission sessions. The orchestrator integrates. If you believe you need this, write a BLOCKED file instead."
-    fi
-    if printf '%s' "$CMD" | grep -qE '\bgit\b[^|;&]*\bcommit\b'; then
-      deny "[orchestrator guard] git commit is forbidden for the planner/reviewer session — ALL implementation and commits belong to the codex executor. Record findings in report.md '## Code review' and set state=rework instead."
-    fi
-    if printf '%s' "$CMD" | grep -qE '\bgit\b[^|;&]*\bworktree\b'; then
-      deny "[orchestrator guard] mission sessions must not manage worktrees. Write a BLOCKED file if your workspace looks wrong."
-    fi
+    deny "[orchestrator guard] Bash is unavailable to Fable brainstorm/plan/review stages. Use Read/Glob/Grep for read-only inspection and Write/Edit only for mission artifacts. The coordinator supplies trusted diffs for review; all implementation and write-producing tests belong to Codex."
     ;;
   Write|Edit|NotebookEdit)
     FP="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')"
@@ -67,7 +89,10 @@ case "$TOOL" in
     done
     IFS="$OLDIFS"
     if [[ "$FP" == "$MD"/* ]]; then
-      exit 0
+      if path_is_physically_inside_mission "$FP"; then
+        exit 0
+      fi
+      deny "[orchestrator guard] symlink or physical-path escape blocked: $FP. Mission artifact writes must remain physically inside $MD."
     fi
     deny "[orchestrator guard] write outside your sandbox blocked: $FP. You may only write inside your mission directory $MD (worktrees are read-only for claude stages). This includes all CLAUDE.md / memory files — the orchestrator owns memory."
     ;;

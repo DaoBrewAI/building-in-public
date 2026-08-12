@@ -13,10 +13,11 @@
 # spawn-worker.sh runs this loop alongside the codex process and kills it when
 # the exec turn ends. --once processes the current backlog and exits (tests).
 #
-#   commit-broker.sh --mission-dir <dir> [--once] [--interval <seconds>]
+#   commit-broker.sh --mission-dir <dir> --control-dir <dir> [--once] [--interval <seconds>]
 #
 # Validation per request (any failure -> REJECTED, never a partial commit):
-#   - worktree is one registered in $MISSION_DIR/worktrees.txt
+#   - worker-facing worktrees.txt still matches the coordinator-owned copy
+#   - worktree is one registered in $CONTROL_DIR/worktrees.txt
 #   - paths are relative, contain no "..", and resolve inside the worktree
 #   - no path is .claude/settings.json (the planted hooks)
 #   - the worktree has no modifications OUTSIDE the requested paths
@@ -24,20 +25,26 @@
 
 set -uo pipefail
 
-MISSION_DIR="" ONCE=0 INTERVAL=2
+MISSION_DIR="" CONTROL_DIR="" ONCE=0 INTERVAL=2
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mission-dir) MISSION_DIR="$2"; shift 2 ;;
+    --control-dir) CONTROL_DIR="$2"; shift 2 ;;
     --once)        ONCE=1; shift ;;
     --interval)    INTERVAL="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
-if [[ -z "$MISSION_DIR" || ! -d "$MISSION_DIR" ]]; then
-  echo "usage: commit-broker.sh --mission-dir <dir> [--once] [--interval <s>]" >&2
+if [[ -z "$MISSION_DIR" || ! -d "$MISSION_DIR" || -L "$MISSION_DIR" || -z "$CONTROL_DIR" || ! -d "$CONTROL_DIR" || -L "$CONTROL_DIR" ]]; then
+  echo "usage: commit-broker.sh --mission-dir <dir> --control-dir <dir> [--once] [--interval <s>]" >&2
   exit 1
 fi
-MANIFEST="$MISSION_DIR/worktrees.txt"
+MANIFEST="$CONTROL_DIR/worktrees.txt"
+WORKER_MANIFEST="$MISSION_DIR/worktrees.txt"
+if [[ ! -s "$MANIFEST" || -L "$MANIFEST" ]]; then
+  echo "coordinator control manifest missing, empty, or symlinked: $MANIFEST" >&2
+  exit 1
+fi
 
 reject() { # <n> <reason>
   jq -n --arg reason "$2" '{reason: $reason}' > "$MISSION_DIR/COMMIT-REJECTED-$1.json"
@@ -45,10 +52,15 @@ reject() { # <n> <reason>
 }
 
 process_request() { # <request file>
-  local REQ="$1" N WT MSG
+  local REQ="$1" N WT MSG REGISTERED_WT REGISTERED_BRANCH
   N="${REQ##*COMMIT-REQUEST-}"; N="${N%.json}"
   # Already answered -> skip (executor may retry with a new n after REJECTED).
   if [[ -e "$MISSION_DIR/COMMIT-DONE-$N.json" || -e "$MISSION_DIR/COMMIT-REJECTED-$N.json" ]]; then
+    return 0
+  fi
+
+  if ! cmp -s "$MANIFEST" "$WORKER_MANIFEST"; then
+    reject "$N" "worker manifest does not match coordinator control manifest"
     return 0
   fi
 
@@ -69,8 +81,34 @@ process_request() { # <request file>
     return 0
   fi
 
-  if ! grep -qF "$WT"$'\t' "$MANIFEST" 2>/dev/null; then
-    reject "$N" "worktree not registered in worktrees.txt: $WT"
+  case "$WT" in
+    /*) ;;
+    *) reject "$N" "worktree must be an absolute registered path: $WT"; return 0 ;;
+  esac
+  if [[ ! -d "$WT" ]]; then
+    reject "$N" "worktree does not exist: $WT"
+    return 0
+  fi
+  WT="$(cd "$WT" && pwd -P)"
+  REGISTERED_WT=""
+  REGISTERED_BRANCH=""
+  while IFS=$'\t' read -r MANIFEST_WT MANIFEST_BRANCH MANIFEST_BASE MANIFEST_REPO EXTRA || [[ -n "${MANIFEST_WT:-}" ]]; do
+    [[ -n "$MANIFEST_WT" && -n "$MANIFEST_BRANCH" && -n "$MANIFEST_BASE" && -n "$MANIFEST_REPO" && -z "${EXTRA:-}" ]] || continue
+    [[ -d "$MANIFEST_WT" ]] || continue
+    MANIFEST_PHYS="$(cd "$MANIFEST_WT" && pwd -P)"
+    if [[ "$WT" == "$MANIFEST_PHYS" ]]; then
+      REGISTERED_WT="$MANIFEST_PHYS"
+      REGISTERED_BRANCH="$MANIFEST_BRANCH"
+      break
+    fi
+  done < "$MANIFEST"
+  if [[ -z "$REGISTERED_WT" ]]; then
+    reject "$N" "worktree not registered in coordinator control manifest: $WT"
+    return 0
+  fi
+  CURRENT_BRANCH="$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [[ "$CURRENT_BRANCH" != "$REGISTERED_BRANCH" ]]; then
+    reject "$N" "worktree branch mismatch: expected $REGISTERED_BRANCH, found ${CURRENT_BRANCH:-unknown}"
     return 0
   fi
 

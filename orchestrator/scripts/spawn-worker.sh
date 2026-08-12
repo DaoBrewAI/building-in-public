@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Spawn (or resume) one stage of an orchestrator mission's staged pipeline.
 #
-#   spawn-worker.sh --mission-dir <dir> --worktree <primary> [--worktree <other>]...
+#   spawn-worker.sh --mission-dir <dir> --control-dir <dir>
+#       --worktree <primary> [--worktree <other>]...
 #       fresh PLAN stage: claude (Fable-5) reads brief.md, plans, exits state=planned
-#   spawn-worker.sh --mission-dir <dir> --worktree <primary> [...] --stage exec
+#   spawn-worker.sh --mission-dir <dir> --control-dir <dir>
+#       --worktree <primary> [...] --stage exec
 #       fresh EXEC stage: codex (gpt-5.6-sol) reads brief-exec.md, implements plan.md,
 #       exits state=executed
 #   spawn-worker.sh ... --resume "<message>" [--stage review|exec]
@@ -21,19 +23,20 @@
 
 set -euo pipefail
 
-MISSION_DIR="" RESUME_MSG="" STAGE=""
+MISSION_DIR="" CONTROL_DIR="" RESUME_MSG="" STAGE=""
 WORKTREES=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mission-dir) MISSION_DIR="$2"; shift 2 ;;
+    --control-dir) CONTROL_DIR="$2"; shift 2 ;;
     --worktree)    WORKTREES+=("$2"); shift 2 ;;
     --resume)      RESUME_MSG="$2"; shift 2 ;;
     --stage)       STAGE="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
-if [[ -z "$MISSION_DIR" || "${#WORKTREES[@]}" -eq 0 ]]; then
-  echo "usage: --mission-dir <dir> --worktree <primary> [--worktree <other>]... [--stage plan|exec|review] [--resume <msg>]" >&2
+if [[ -z "$MISSION_DIR" || -z "$CONTROL_DIR" || "${#WORKTREES[@]}" -eq 0 ]]; then
+  echo "usage: --mission-dir <dir> --control-dir <dir> --worktree <primary> [--worktree <other>]... [--stage plan|exec|review] [--resume <msg>]" >&2
   exit 1
 fi
 case "$STAGE" in
@@ -52,9 +55,42 @@ for WT in "${WORKTREES[@]}"; do
   fi
 done
 
+[[ -d "$MISSION_DIR" && ! -L "$MISSION_DIR" ]] || { echo "mission directory missing or symlinked: $MISSION_DIR" >&2; exit 1; }
+[[ -d "$CONTROL_DIR" && ! -L "$CONTROL_DIR" ]] || { echo "coordinator control directory missing or symlinked: $CONTROL_DIR" >&2; exit 1; }
+CONTROL_MANIFEST="$CONTROL_DIR/worktrees.txt"
+[[ -s "$CONTROL_MANIFEST" && ! -L "$CONTROL_MANIFEST" ]] || { echo "coordinator control manifest missing, empty, or symlinked: $CONTROL_MANIFEST" >&2; exit 1; }
+cmp -s "$CONTROL_MANIFEST" "$MISSION_DIR/worktrees.txt" || { echo "worker manifest does not match coordinator control manifest" >&2; exit 1; }
+[[ ! "$CONTROL_MANIFEST" -ef "$MISSION_DIR/worktrees.txt" ]] || { echo "worker manifest must be a copy, not a hard link to coordinator authority" >&2; exit 1; }
+
+MISSION_PHYS="$(cd "$MISSION_DIR" && pwd -P)"
+CONTROL_PHYS="$(cd "$CONTROL_DIR" && pwd -P)"
+case "$CONTROL_PHYS" in
+  "$MISSION_PHYS"|"$MISSION_PHYS"/*) echo "control directory must be outside the worker-writable mission directory" >&2; exit 1 ;;
+esac
+CONTROL_WORKTREES=()
+while IFS=$'\t' read -r WT BRANCH BASE REPO EXTRA || [[ -n "${WT:-}" ]]; do
+  [[ -n "$WT" && -n "$BRANCH" && -n "$BASE" && -n "$REPO" && -z "${EXTRA:-}" ]] || { echo "malformed coordinator control manifest" >&2; exit 1; }
+  CONTROL_WORKTREES+=("$WT")
+done < "$CONTROL_MANIFEST"
+[[ "${#CONTROL_WORKTREES[@]}" -eq "${#WORKTREES[@]}" ]] || { echo "launcher worktrees do not match coordinator control manifest" >&2; exit 1; }
+for I in "${!WORKTREES[@]}"; do
+  ARG_PHYS="$(cd "${WORKTREES[$I]}" && pwd -P)"
+  MANIFEST_PHYS="$(cd "${CONTROL_WORKTREES[$I]}" && pwd -P)"
+  [[ "$ARG_PHYS" == "$MANIFEST_PHYS" ]] || { echo "launcher worktrees do not match coordinator control manifest" >&2; exit 1; }
+  case "$CONTROL_PHYS" in
+    "$ARG_PHYS"|"$ARG_PHYS"/*) echo "control directory must be outside worker-writable worktrees" >&2; exit 1 ;;
+  esac
+done
+
 # Stage model specs are fixed by the plugin (founder directives 2026-07-22 + 2026-08-07):
 # plan/review = Fable-5 high on claude; exec = gpt-5.6-sol reasoning-high on codex.
-WORKER_FLAGS=(--model claude-fable-5 --effort high --dangerously-skip-permissions --output-format json)
+FABLE_TOOLS=(Read Glob Grep Write Edit Skill)
+FABLE_TOOL_LIST="$(IFS=,; echo "${FABLE_TOOLS[*]}")"
+WORKER_FLAGS=(--model claude-fable-5 --effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
+WORKER_FLAGS+=(--add-dir "$MISSION_DIR" --add-dir "$CONTROL_DIR")
+for ((i = 1; i < ${#WORKTREES[@]}; i++)); do
+  WORKER_FLAGS+=(--add-dir "${WORKTREES[$i]}")
+done
 
 # Make the 10x-engineer pipeline available even if ambient config lacks it.
 TENX="$(ls -d "$HOME"/.claude/plugins/cache/*/10x-engineer/*/ 2>/dev/null | sort -V | tail -1 || true)"
@@ -103,6 +139,15 @@ SESSION_FILE="$MISSION_DIR/session.txt"
 RC=0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+verify_approved_contract() {
+  local APPROVED
+  for APPROVED in approved-design.md approved-plan.md brief-exec.md; do
+    [[ -s "$CONTROL_DIR/$APPROVED" && ! -L "$CONTROL_DIR/$APPROVED" ]] || { echo "approved control artifact missing, empty, or symlinked: $CONTROL_DIR/$APPROVED" >&2; return 1; }
+  done
+  [[ -s "$CONTROL_DIR/approved.sha256" && ! -L "$CONTROL_DIR/approved.sha256" ]] || { echo "approved hash manifest missing, empty, or symlinked: $CONTROL_DIR/approved.sha256" >&2; return 1; }
+  (cd "$CONTROL_DIR" && shasum -a 256 -c approved.sha256 >/dev/null) || { echo "approved control artifact hash mismatch" >&2; return 1; }
+}
+
 # P1-1 (2026-08-08 retrospective): a worker killed by a usage/session limit
 # exits nonzero with state stuck in running — surface it as a structured,
 # retryable outcome (exit 75) instead of a crash.
@@ -118,6 +163,7 @@ detect_quota() { # <files...> — returns 0 and prints the hint line if matched
 
 # ---------------------------------------------------------------- exec (codex)
 if [[ "$STAGE" == "exec" ]]; then
+  verify_approved_contract || exit 1
   CODEX_BIN="${ORC_CODEX_BIN:-}"
   if [[ -z "$CODEX_BIN" ]]; then
     if command -v codex >/dev/null 2>&1; then
@@ -144,6 +190,8 @@ if [[ "$STAGE" == "exec" ]]; then
     -c 'model_reasoning_effort="high"'
     -c 'sandbox_mode="workspace-write"'
     -c "sandbox_workspace_write.writable_roots=[$ROOTS]"
+    -c 'sandbox_workspace_write.exclude_slash_tmp=true'
+    -c 'sandbox_workspace_write.exclude_tmpdir_env_var=true'
     --json
   )
   if [[ -n "${ORC_CODEX_NETWORK:-}" ]]; then
@@ -163,26 +211,26 @@ if [[ "$STAGE" == "exec" ]]; then
 
   # P0-1: the codex sandbox cannot commit (git DB is read-only there) — run the
   # commit broker alongside the executor and drain any backlog after it exits.
-  "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" \
+  "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" --control-dir "$CONTROL_DIR" \
     >> "$MISSION_DIR/broker.log" 2>&1 &
   BROKER_PID=$!
   stop_broker() {
     kill "$BROKER_PID" 2>/dev/null || true
     wait "$BROKER_PID" 2>/dev/null || true
-    "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" --once \
+    "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" --control-dir "$CONTROL_DIR" --once \
       >> "$MISSION_DIR/broker.log" 2>&1 || true
   }
 
   if [[ -z "$RESUME_MSG" ]]; then
-    if [[ ! -f "$MISSION_DIR/brief-exec.md" ]]; then
+    if [[ ! -f "$CONTROL_DIR/brief-exec.md" ]]; then
       stop_broker
-      echo "no brief-exec.md in $MISSION_DIR" >&2
+      echo "no approved brief-exec.md in $CONTROL_DIR" >&2
       exit 1
     fi
     echo "exec_spawned: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
     cd "$PRIMARY"
     ORC_WORKER=1 "$CODEX_BIN" exec "${EXEC_FLAGS[@]}" --output-last-message "$LAST_MSG" - \
-      < "$MISSION_DIR/brief-exec.md" \
+      < "$CONTROL_DIR/brief-exec.md" \
       > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
     THREAD_ID="$(jq -r 'select(.type == "thread.started") | .thread_id' "$OUT" 2>/dev/null | head -1 || true)"
     if [[ -n "$THREAD_ID" ]]; then
@@ -221,6 +269,9 @@ if [[ "$STAGE" == "exec" ]]; then
 fi
 
 # ------------------------------------------------------- plan/review (claude)
+if [[ "$STAGE" == "review" ]]; then
+  verify_approved_contract || exit 1
+fi
 if [[ -z "$RESUME_MSG" ]]; then
   if [[ ! -f "$MISSION_DIR/brief.md" ]]; then
     echo "no brief.md in $MISSION_DIR" >&2

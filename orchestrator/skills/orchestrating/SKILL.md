@@ -1,219 +1,281 @@
 ---
 name: orchestrating
-description: Run Codex-orchestrated missions - brainstorm an ask, provision guarded git worktrees, launch one autonomous resumable codex exec thread per mission, mediate material blockers, and accept or merge verified work. Use when the user asks to orchestrate work, launch an autonomous mission, or resume missions from a .orchestrator hub.
+description: Run Hybrid Codex-orchestrated missions in which Claude Fable-5 brainstorms, plans, and independently reviews while Codex GPT-5.6-Sol performs every implementation and rework change. Use when the user asks to orchestrate work, launch an autonomous mission, or resume missions from a .orchestrator hub.
 ---
 
-# Orchestrating Codex Missions
+# Orchestrating Hybrid 0.3 Missions
 
-Act as the coordinator. Each mission is one persistent `codex exec` thread that
-owns plan → implementation → self-review → verification → report. The trusted
-launcher validates the result and creates mission commits after the sandboxed
-turn ends.
-Keep shared state on disk and never edit a running mission's worktrees.
+Act as the Codex coordinator. Each new mission is a staged pipeline across two
+resumable backends: the same headless Claude Fable-5 session owns brainstorm,
+plan, and review; a separate Codex GPT-5.6-Sol thread owns implementation,
+verification, rework, and brokered commit requests. State and handoffs live on
+disk so the coordinator stays free between process-exit wakes.
 
-## Resolve paths and constants
+## Fixed backend ownership
 
-Derive `PLUGIN_DIR` from this loaded file: move from
-`skills/orchestrating/SKILL.md` up two directories. Verify that
-`$PLUGIN_DIR/codex-scripts/spawn-worker.sh` exists before provisioning.
+- Mission backend contract: brainstorm, plan, and review use claude-fable-5;
+  ALL code implementation uses gpt-5.6-sol.
+- Brainstorm, plan, plan revision, review, and re-review:
+  `claude -p --model claude-fable-5 --effort high`.
+- **ALL code implementation, fixes, tests that require writes, and commits happen
+  in the exec stage on gpt-5.6-sol** with high reasoning.
+- The same Fable session plans and reviews. The same Codex thread implements and
+  handles every rework round.
+- Fable stages are read-only on worktrees. The guard blocks worktree writes and
+  `git commit`; findings enter `state=rework` and return to Codex.
+- Codex runs in `workspace-write` with only mission worktrees and the mission
+  directory writable, network off by default. A trusted commit broker converts
+  `COMMIT-REQUEST-<n>.json` files into commits.
+- Branches are `orc/<mission-slug>`. At most one active mission owns a repo.
 
-- Default worker model: `gpt-5.6`, reasoning `xhigh`. Operators may override
-  these with `ORC_CODEX_MODEL` and `ORC_CODEX_EFFORT`.
-- Branch name: `orc/<mission-slug>` in every involved repo.
-- Allow at most one `running`, `blocked`, or `review` mission per repo.
+## Resolve paths and hub
 
-The hub is `<dir>/.orchestrator/`, where `<dir>` is the nearest ancestor of the
-current directory that already contains `.orchestrator/`; otherwise use the
-current directory. Create `missions/`, `control/`, `archive/`, `DECISIONS.md`, and
-`MEMORY.md` on first use. Call it `$HUB`.
+Derive `PLUGIN_DIR` from this loaded file by moving from
+`skills/orchestrating/SKILL.md` up two directories. Before provisioning, require
+these executable shared 0.3 assets:
+
+- `$PLUGIN_DIR/scripts/spawn-worker.sh`
+- `$PLUGIN_DIR/scripts/provision-preflight.sh`
+- `$PLUGIN_DIR/scripts/pipeline-gate.sh`
+- `$PLUGIN_DIR/scripts/worker-guard.sh`
+- `$PLUGIN_DIR/scripts/commit-broker.sh`
+- `$PLUGIN_DIR/scripts/orchestrator-gc.sh`
+
+The hub is the nearest ancestor of cwd already containing `.orchestrator/`, or
+cwd on first use. Create `.orchestrator/missions/`, `control/`, `archive/`,
+`DECISIONS.md`, and `MEMORY.md`. Call the directory `$HUB`. A mission's
+coordinator-owned control directory is `$HUB/control/<mission-slug>/`; it must
+stay outside every worker-writable root.
+
+### Legacy Codex 0.2 compatibility
+
+Do not silently migrate an in-flight 0.2 mission. Treat it as legacy when its
+session has `backend: codex-exec`/`worker_pid:` with no append-only `stage:`
+history, OR when it is pending with the 0.2 MISSION shape (one `Brief:`, the
+`gpt-5.6 (overrideable)` session spec, or a flat `.worktrees` control file) and
+no Hybrid 0.3 pipeline marker (`request.md` plus `Briefs:`). This includes an
+old pending mission that has no session.txt yet. Reconcile and resume it with
+`$PLUGIN_DIR/codex-scripts/spawn-worker.sh`, its trusted control manifest, and
+the old state vocabulary. New missions always use the Hybrid 0.3 shared
+`scripts/` and `templates/` paths. Never mix launchers inside one mission.
 
 ## Phase 0 — Reconcile before every action
 
-1. If a legacy root `$HUB/MISSION.md` is incomplete, do not mix layouts. Ask
-   whether to finish it with the historical plugin or archive it.
-2. For every `$HUB/missions/*/`, read `state`, `MISSION.md`, `session.txt`, and
-   its coordinator-owned `$HUB/control/<mission-slug>.worktrees`. Treat the
-   mission-local `worktrees.txt` as an untrusted worker-facing copy and require
-   it to match the control manifest.
-3. Treat a worker as alive only when its recorded `worker_pid` is numeric,
-   `kill -0 <pid>` succeeds, and `ps -p <pid>` identifies the worker wrapper or
-   Codex child. When uncertain, recheck once; never double-spawn into the same
-   worktrees.
-4. Reconcile missing worktrees, unmatched `BLOCKED-<n>.md` files, and stale
-   `running` states. Summarize all missions to the user in at most five lines,
-   then handle `blocked`, `review`, or crashed missions below.
+1. If legacy root `$HUB/MISSION.md` is incomplete, do not mix layouts. Ask
+   whether to finish it with its historical version or archive it.
+2. Delete `$HUB/.carryover-notified` when beginning in a fresh context.
+3. For every mission, read `state`, `MISSION.md`, `session.txt`,
+   `worktrees.txt`, unanswered BLOCKED files, recorded branches, and the
+   coordinator-owned control manifest. Treat mission-local manifests and
+   approved inputs as untrusted copies.
+4. For Hybrid 0.3, use the last `spawn_pid:` and last `stage:`. Plan/review
+   stages resume `session_id`; exec/rework resumes `codex_thread_id`. Treat an
+   uncertain process as alive, recheck once, and never double-spawn.
+5. Summarize all missions to the user in at most five lines, then handle exited,
+   blocked, planned, rework, review, or crashed missions below.
 
-If a terminal session handle from launch still exists, poll it non-blockingly
-for fresh output. Codex does not guarantee a process-exit callback into a
-dormant conversation, so disk state and the wrapper notification are the
-portable wake mechanism.
+## Phase 1 — Record the request
 
-## Phase 1 — Brainstorm and record the mission
+Identify the repository set from the user's request without making product or
+architecture decisions. Create the unique date-prefixed mission directory,
+write the user's complete ask and explicit constraints to `request.md`, create
+MISSION.md from `$PLUGIN_DIR/templates/MISSION.md`, and write `pending` to
+`state`. Fable owns the creative brainstorm after worktrees are provisioned.
+If the repository set itself is materially ambiguous, ask the user before
+provisioning.
 
-Use `10x-engineer:brainstorming` on the ask. Save the validated design as
-`$HUB/missions/<date>-<slug>/design.md`. The date-prefixed slug must be unique
-across `missions/` and `archive/`. Create `MISSION.md` from the Codex template,
-set phase/state to `pending`, and record explicit acceptance criteria and
-non-goals. This design is orchestration state outside the mission repositories;
-do not commit it during the brainstorming workflow.
+## Phase 2 — Provision guarded worktrees and briefs
 
-## Phase 2 — Provision guarded worktrees
+1. Require every repo to pass `git rev-parse`. Refuse tab/newline-containing
+   paths. If another mission in `running`, `planned`, `executed`, `rework`,
+   `blocked`, or `review` owns a repo, leave this mission pending.
+2. Create `<umbrella>/.worktrees/<mission-slug>/<repo-name>` on
+   `orc/<mission-slug>`. Record tab-separated
+   `<worktree> <branch> <base-sha> <repo>` rows in
+   `$HUB/control/<mission-slug>/worktrees.txt`, copy it byte-for-byte to the
+   mission's worker-facing `worktrees.txt`, and record rows in MISSION.md. Never
+   use the worker-facing copy as commit authority.
+3. The first repo is primary. If it already tracks `.claude/settings.json`,
+   stop: planting mission hooks would mask repository policy.
+4. Render `$PLUGIN_DIR/templates/worker-settings.json` into the primary
+   worktree's `.claude/settings.json`, filling worktrees, mission directory,
+   coordinator-owned control directory,
+   `$PLUGIN_DIR/scripts/worker-guard.sh`, and
+   `$PLUGIN_DIR/scripts/pipeline-gate.sh`. Require `jq` parsing, no unfilled
+   placeholders, and executable hook paths.
+5. Copy the report template. Render the Fable brainstorm/plan/review brief from
+   `$PLUGIN_DIR/templates/brief-codex.md` to mission `brief.md`. Render the Codex
+   executor brief from `$PLUGIN_DIR/templates/brief-exec.md` to
+   mission `brief-exec.md`. Fill all placeholders, including `CONTROL_DIR` and a
+   control-directory `REVIEW_DIFFS` path. Fable may update its own brief only
+   through a logged crash-respawn addendum before go; the executor never reads
+   worker-writable approved inputs.
+6. Run `$PLUGIN_DIR/scripts/provision-preflight.sh --mission-dir <dir>
+   --worktree <primary> [--worktree <other>]...`. It installs dependencies,
+   prepares in-worktree caches, and writes `baseline-attestation.json`. Never
+   launch over an unadjudicated red baseline; record accepted pre-existing or
+   sandbox-only failures in DECISIONS.md and the executor brief.
 
-1. List each repo touched by the design. Require `git -C <repo> rev-parse` to
-   succeed. Reject repo, hub, worktree, or plugin paths containing a tab or
-   newline because the tab-separated manifest cannot represent them safely.
-2. If another nonfailed mission already owns a repo, leave this mission pending
-   and launch it only after the conflict clears.
-3. For each repo, create
-   `<umbrella>/.worktrees/<mission-slug>/<repo-name>` on
-   `orc/<mission-slug>`. Append tab-separated
-   `<worktree> <branch> <base-sha> <repo>` rows to the coordinator-owned
-   `$HUB/control/<mission-slug>.worktrees`, which must be outside every worker
-   writable root. Copy it byte-for-byte to the mission's `worktrees.txt` for
-   worker context. Never use the worker-facing copy as commit authority.
-4. Verify `pipeline-gate.sh`, `mission-commit.sh`, and `spawn-worker.sh` are
-   executable. The worker must not create commits: Codex workspace-write keeps
-   linked-worktree Git metadata read-only. The launcher runs the artifact gate
-   after the turn. Once the process is dead, the coordinator inspects the diff
-   and invokes the protected-path audit/commit broker with host approval outside
-   the worker sandbox.
-5. Copy the Codex `report.md` template and generate an immutable `brief.md` with
-   all placeholders filled. Curate only binding decisions, relevant file
-   patterns, known hazards, acceptance criteria, and exact test commands.
+## Phase 3 — Launch Fable brainstorm + plan
 
-The launcher uses Codex `workspace-write`, adds only the declared worktrees and
-mission directory as writable roots, replaces inherited additional writable
-roots with an empty list, excludes implicit `/tmp` and `$TMPDIR` write access,
-and disables interactive approvals. It
-never disables the sandbox or bypasses hook trust. Existing hooks retain their
-normal Codex trust behavior and are not part of the mission security boundary.
-
-## Phase 3 — Launch
-
-Write `running` before starting the process. Run the wrapper with the terminal
-tool using a short yield so the coordinator regains control:
+Write `running` before spawning, then launch the shared worker in a background
+terminal process whose exit can wake the coordinator:
 
 ```text
-$PLUGIN_DIR/codex-scripts/spawn-worker.sh \
+$PLUGIN_DIR/scripts/spawn-worker.sh \
   --mission-dir <mission-dir> \
-  --control-manifest $HUB/control/<mission-slug>.worktrees \
+  --control-dir $HUB/control/<mission-slug> \
   --worktree <primary> [--worktree <other>]...
 ```
 
-Record a returned terminal handle in `terminal-handle.txt` when the host exposes
-one. Update `MISSION.md` and `board.html`, tell the user the mission is running,
-and remain available for other coordination work.
+The fresh Fable session invokes `10x-engineer:brainstorming`, writes design.md,
+invokes `10x-engineer:writing-plans`, writes plan.md and plan-review.html, sets
+state=planned, and exits. Update MISSION.md and board.html, tell the user it is
+running, and remain available for other work.
 
-## Phase 4 — Completion or crash handling
+## Phase 3g — Founder go gate
 
-On terminal completion, notification, a user status request, or a later
-orchestrator invocation, read `state`:
+`state=planned` is the only planned human pause. Require `design.md`, `plan.md`,
+and `plan-review.html`. Show the review HTML with a concise note covering the
+mission, repos, and riskiest choice, then ask for explicit **go**.
 
-- `blocked`: mediate in Phase 5.
-- `review`: accept in Phase 6. If the post-turn gate failed, resume with its
-  exact error first.
-- `failed`: report it once and preserve worktrees.
-- `running` with a live PID: leave it alone.
-- `running` with a dead PID: inspect the latest `worker-output-*.jsonl`, stderr,
-  working-tree diffs, and artifacts. Resume the recorded `thread_id` with a salvage
-  instruction. If the thread cannot resume, append a clearly marked respawn
-  addendum to `brief.md`, log the decision, and start a fresh thread.
-
-Record each crash in `MISSION.md`; two crashes enter Phase 6f.
-
-## Phase 5 — Mediate
-
-Use `orchestrator:orchestrator-mediation`. Write `ANSWER-<n>.md`, append the
-ruling to `DECISIONS.md`, write `running` before resume, then run:
+If the user requests changes, resume the same Fable session so it updates
+design.md first, then plan.md and plan-review.html:
 
 ```text
-$PLUGIN_DIR/codex-scripts/spawn-worker.sh \
+$PLUGIN_DIR/scripts/spawn-worker.sh \
   --mission-dir <mission-dir> \
-  --control-manifest $HUB/control/<mission-slug>.worktrees \
+  --control-dir $HUB/control/<mission-slug> \
   --worktree <primary> [--worktree <other>]... \
-  --resume "Read ANSWER-<n>.md in your mission directory and continue."
+  --stage plan --resume "<founder correction>"
 ```
 
-### Blocker notification contract
+On go, atomically snapshot mission `design.md`, `plan.md`, and the fully rendered
+`brief-exec.md` into the coordinator-owned control directory as
+`approved-design.md`, `approved-plan.md`, and `brief-exec.md`. Record SHA-256
+hashes in `approved.sha256`; verify all four files are regular, non-symlinked,
+and outside worker roots. These frozen files are the only approved contract.
+Then write `running` and launch the Codex executor:
 
-Never leave a mission silently waiting in `blocked`.
+```text
+$PLUGIN_DIR/scripts/spawn-worker.sh \
+  --mission-dir <mission-dir> \
+  --control-dir $HUB/control/<mission-slug> \
+  --worktree <primary> [--worktree <other>]... \
+  --stage exec
+```
 
-1. Attempt to unblock autonomously first: inspect the blocker, design, plan,
-   code, prior decisions, logs, and safe in-scope alternatives. If the answer is
-   already determined by approved scope and does not change user-visible
-   behavior, cost, data semantics, or authority, write the ruling and resume the
-   worker without interrupting the user.
-2. If the blocker still requires user judgment, new authority, external action,
-   or a material scope/product/data/cost decision, update `MISSION.md`, preserve
-   `blocked`, regenerate `board.html`, and notify the user immediately in the
-   active conversation. Include: what is blocked, impact, what was tried, the
-   exact decision/action needed, and the safe default while waiting.
-3. Do not rely on disk state, a board update, a worker notification, or a future
-   status request as the notification. Do not keep polling an unchanged blocker
-   without telling the user. End the coordinator turn with the blocker when no
-   other useful in-scope work can continue.
-4. Notify once per new or materially changed blocker. Do not spam repeated
-   notifications for unchanged state, but never suppress the first actionable
-   notification.
+Do not poll, inspect heartbeats, or review mid-run. The executor completes the
+whole plan in one turn and exits only as `executed`, `blocked`, quota-limited,
+or crashed.
 
-## Phase 6 — Accept and merge
+## Phase 4 — Event-driven wake handling
 
-1. Require `plan.md` and a filled `report.md` with Code review and Verification
-   evidence. Resume the worker with exact missing items instead of filling them.
-   Re-run `pipeline-gate.sh` as a deterministic check.
-2. For every manifest row, verify branch, base, and uncommitted diff scope.
-   Reject `AGENTS.md` or `.codex/` policy changes unless they were explicit
-   mission requirements approved by the user.
-3. Only after the worker is dead and the diff passes inspection, run the
-   following through the host's approval/escalation mechanism:
+Read state when the tracked process exits:
 
-   ```text
-   $PLUGIN_DIR/codex-scripts/mission-commit.sh \
-     --mission-dir <mission-dir> \
-     --control-manifest $HUB/control/<mission-slug>.worktrees
-   ```
+- `planned`: enter Phase 3g.
+- `executed`: first verify `approved.sha256`, the control manifest, and every
+  approved artifact. Generate one coordinator-owned full diff per worktree at
+  the `REVIEW_DIFFS` paths embedded in Fable's brief. Do not run test commands
+  here; write-producing tests belong to the Codex executor. Then, without user
+  involvement, write `running` and resume the same Fable session for review:
 
-   This lets one vetted command write linked-worktree Git metadata outside the
-   coordinator sandbox. Do not grant the worker broader permissions. Require
-   `commits.txt` and verify one brokered commit SHA per manifest row.
-4. In dependency order, require each user's live checkout to be clean and on
-   its default branch. Never switch or clean it for them. Merge with
-   `--no-ff --no-commit`, run the repository's full verification, then commit on
-   pass or `git merge --abort` and resume the worker on failure.
-5. Remove worktrees and delete merged mission branches.
-6. Report changes, logged decisions, verification evidence, and suggested
-   follow-ups. Append durable learnings once to `$HUB/MEMORY.md`.
-7. Set state/phase to `accepted`. Move the trusted control manifest into the
-   stopped mission directory as `worktrees.trusted.txt`, move the mission into
-   `archive/`, regenerate the board, and release newly unblocked pending
-   missions.
+  ```text
+  $PLUGIN_DIR/scripts/spawn-worker.sh --mission-dir <dir> \
+    --control-dir $HUB/control/<mission-slug> \
+    --worktree <primary> [...] --stage review \
+    --resume "The executor finished. Read report.md and all branch diffs, then perform Stage 2 REVIEW per brief.md."
+  ```
 
-Two failed acceptance cycles enter Phase 6f.
+- `rework`: the reviewer recorded `F<n>` findings. Append a rework timestamp.
+  On the 3rd rework, stop and escalate because the loop is not converging.
+  Otherwise write `running` and resume the same Codex thread:
 
-## Phase 6f — Preserve a failed mission
+  ```text
+  $PLUGIN_DIR/scripts/spawn-worker.sh --mission-dir <dir> \
+    --control-dir $HUB/control/<mission-slug> \
+    --worktree <primary> [...] --stage exec \
+    --resume "Fix every current F<n> finding in report.md under the REWORK protocol."
+  ```
 
-Enter on two crashes, two failed acceptance cycles, or an explicit user kill.
-Terminate a live wrapper before setting `failed`. Report branches, worktrees,
-artifacts, and last errors. Keep them for salvage until the user authorizes
-cleanup; a failed mission does not block a new mission on the same repo.
+  After it returns to `executed`, resume the same Fable session with
+  `--stage review` for re-review.
+- `blocked`: mediate in Phase 5 and resume whichever backend is named by the
+  last `stage:` line.
+- `review`: verify approved hashes again, then accept in Phase 6.
+- `failed`: report once; do not accept.
+- Exit 75 with `QUOTA_LIMIT`: schedule a delayed retry of the exact same stage;
+  do not count it as a crash.
+- Process exited while state remains `running`: inspect stage-specific output,
+  stderr, branches, and artifacts. Resume the recorded backend with a salvage
+  instruction. Only if resume itself fails may you append a logged respawn
+  addendum and start a fresh session. Two crashes enter Phase 6f.
+
+Whenever a compound command launches a worker, the worker must be its last
+foreground command; detaching it loses the exit wake.
+
+## Phase 5 — Mediate BLOCKED
+
+Use `orchestrator:orchestrator-mediation`. Answer from design, plan, decisions,
+or code first; decide reversible implementation details; escalate only scope,
+user-visible behavior, cost, or data. Write `ANSWER-<n>.md`, append the ruling to
+DECISIONS.md, write `running`, then inspect the last `stage:`:
+
+- brainstorm/plan/review: resume Fable without `--stage exec` (use the relevant
+  `--stage plan` or `--stage review` label).
+- exec: resume Codex with `--stage exec`.
+
+Never leave a material blocker silently waiting. Notify the user once with the
+impact, attempts, exact decision needed, and safe default.
+
+## Phase 6 — Light acceptance and merge
+
+1. Require design.md, plan.md, plan-review.html, brokered commits, and a filled
+   report with real `## Code review` and `## Verification` evidence. Missing
+   worker-owned evidence returns to the backend that owns it.
+2. Verify every branch/base/diff stays inside declared scope and excludes the
+   planted `.claude/settings.json`. Code corrections always return to Codex.
+3. For each repo in dependency order, require the user's live checkout to be
+   clean and on its default branch. Never switch or clean it for them. Before
+   merging, resume the same Codex executor for any verification that may write
+   caches, snapshots, coverage, or generated artifacts. The coordinator may
+   run only a test command explicitly attested read-only and externally
+   isolated; otherwise rely on the executor's fresh evidence plus Fable review.
+   Merge `--no-ff --no-commit`, commit on a verified pass, or abort and resume
+   Codex with the exact failure. Two failed acceptance cycles enter Phase 6f.
+4. Delete the planted settings, remove merged worktrees and branches, then run
+   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB` to find leftovers.
+5. Report shipped changes, decisions, tests, and report follow-ups. Append one
+   durable memory entry exactly once.
+6. Set state/phase accepted, archive the mission directory, regenerate the
+   board, and release already-authorized pending missions.
+
+## Phase 6f — Preserve failure
+
+Enter after two crashes, two failed acceptance cycles, three non-converging
+reworks, or explicit user cancellation. Stop a live worker before writing
+`failed`. Preserve worktrees, branches, artifacts, and last errors for salvage;
+a failed mission does not block another repo owner.
 
 ## Board and carryover
 
-Regenerate `$HUB/board.html` from the Codex board template on every state
-transition. Before a manual task handoff or when Codex reports material context
-pressure, write `CARRYOVER.md` and make sure every mission's durable state is
-current. A carryover file or board entry never substitutes for the blocker
-notification contract above. Automatic Codex compaction is safe because Phase 0
-reconstructs state from disk.
+Regenerate board.html from `$PLUGIN_DIR/templates/board.html` on every state
+transition. Its valid states include pending, running, planned, executed,
+rework, blocked, review, accepted, and failed. At material context pressure,
+write CARRYOVER.md and ensure disk state is current. A carryover or board entry
+never substitutes for user notification of a blocker.
 
 ## Non-negotiables
 
-- Workers never ask the user directly; they use the BLOCKED protocol.
-- Never edit a running worker's worktrees; corrections go through ANSWER files.
-- Only the coordinator writes `MEMORY.md`, `DECISIONS.md`, and `board.html`.
-- Escalate only scope, user-visible behavior, cost, or data decisions.
-- Self-unblock safe in-scope questions; if a blocker still needs the user, notify
-  immediately and never wait silently.
-- The worker pipeline starts with `10x-engineer:writing-plans` and includes TDD,
-  working-tree code review, verification, commit checkpoints, and a filled
-  report; the trusted launcher creates the mission commits afterward.
+- Fable owns brainstorm, plan, review, and re-review; it never edits code.
+- GPT-5.6-Sol owns every implementation and rework change.
+- Plan and review reuse one Claude session; implementation and rework reuse one
+  Codex thread.
+- Never edit or inspect a running stage between process-exit wakes.
+- Mission workers never ask the user directly; they use BLOCKED files.
+- Only the coordinator writes shared MEMORY.md, DECISIONS.md, and board.html.
+- Never bypass the OS sandbox, hook guard, pipeline gate, or commit broker.
+- Every Hybrid launch passes `--control-dir $HUB/control/<mission-slug>`; the
+  control manifest and frozen approved contract are never worker writable.
+- Never merge without a clean independent Fable verdict and fresh merged-tree
+  verification.

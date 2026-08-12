@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
-  "version": "0.2.0",
-  "description": "Mission-control orchestration for Codex using guarded worktrees, persistent mission state, mediated blocking decisions, and resumable codex exec workers.",
+  "version": "0.3.0",
+  "description": "Hybrid mission-control orchestration for Codex: Claude Fable-5 brainstorms, plans, and independently reviews; Codex GPT-5.6-Sol performs every implementation and rework change in guarded worktrees.",
   "author": {
     "name": "DaoBrew AI",
     "url": "https://github.com/DaoBrewAI"
@@ -21,8 +21,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Orchestrator",
-    "shortDescription": "Guarded autonomous Codex missions.",
-    "longDescription": "A Codex-native mission coordinator that turns validated designs into isolated git worktrees, launches one resumable codex exec worker per mission, mediates only material blockers, verifies artifacts and tests, and keeps durable state in a repo-local .orchestrator hub.",
+    "shortDescription": "Fable-planned, Codex-executed missions.",
+    "longDescription": "A hybrid mission coordinator for Codex that uses Claude Fable-5 for brainstorm, plan, and independent review, while a resumable Codex GPT-5.6-Sol executor owns every code change, test fix, and brokered commit in guarded git worktrees.",
     "developerName": "DaoBrew AI",
     "category": "Productivity",
     "capabilities": [

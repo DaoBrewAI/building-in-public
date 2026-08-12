@@ -3,19 +3,20 @@
 set -uo pipefail
 BROKER="$(cd "$(dirname "$0")/.." && pwd)/scripts/commit-broker.sh"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-MD="$TMP/mission"; WT="$TMP/wt"
-mkdir -p "$MD"
+MD="$TMP/mission"; WT="$TMP/wt"; CONTROL_DIR="$TMP/control"
+mkdir -p "$MD" "$CONTROL_DIR"
 git init -q "$WT"
 GITC=(git -C "$WT" -c user.email=t@t -c user.name=t -c commit.gpgsign=false)
 "${GITC[@]}" commit -q --allow-empty -m base
 git -C "$WT" checkout -q -b orc/test-mission
 printf '%s\t%s\t%s\t%s\n' "$WT" "orc/test-mission" "$(git -C "$WT" rev-parse HEAD)" "$WT" > "$MD/worktrees.txt"
+cp "$MD/worktrees.txt" "$CONTROL_DIR/worktrees.txt"
 # Broker commits with the repo's config — pin identity/signing for the test repo.
 git -C "$WT" config user.email t@t
 git -C "$WT" config user.name t
 git -C "$WT" config commit.gpgsign false
 
-run_broker() { "$BROKER" --mission-dir "$MD" --once >/dev/null 2>&1; }
+run_broker() { "$BROKER" --mission-dir "$MD" --control-dir "$CONTROL_DIR" --once >/dev/null 2>&1; }
 N=0; OK=0
 check() {
   N=$((N + 1))
@@ -69,6 +70,34 @@ printf 'not json' > "$MD/COMMIT-REQUEST-8.json"
 touch -t 202601010000 "$MD/COMMIT-REQUEST-8.json"
 run_broker
 check "stale invalid json" '[[ -f "$MD/COMMIT-REJECTED-8.json" ]]'
+
+# 9. A worker-controlled manifest rewrite never expands broker authority.
+EVIL="$TMP/evil-repo"
+git init -q "$EVIL"
+git -C "$EVIL" -c user.email=t@t -c user.name=t -c commit.gpgsign=false commit -q --allow-empty -m base
+echo attack > "$EVIL/attack.txt"
+printf '%s\t%s\t%s\t%s\n' "$EVIL" evil "$(git -C "$EVIL" rev-parse HEAD)" "$EVIL" > "$MD/worktrees.txt"
+printf '{"worktree":"%s","paths":["attack.txt"],"message":"escape authority"}' "$EVIL" > "$MD/COMMIT-REQUEST-9.json"
+EVIL_BEFORE="$(git -C "$EVIL" rev-parse HEAD)"
+run_broker
+check "mutable worker manifest cannot expand authority" '[[ -f "$MD/COMMIT-REJECTED-9.json" && "$(git -C "$EVIL" rev-parse HEAD)" == "$EVIL_BEFORE" && "$(jq -r .reason "$MD/COMMIT-REJECTED-9.json")" == *"control manifest"* ]]'
+
+# Restore the worker copy for request-level authority checks.
+cp "$CONTROL_DIR/worktrees.txt" "$MD/worktrees.txt"
+
+# 10. A suffix of a registered absolute path is not an exact worktree identity.
+mkdir -p "$TMP/wt"
+printf '{"worktree":"wt","paths":["a.txt"],"message":"relative suffix"}' > "$MD/COMMIT-REQUEST-10.json"
+run_broker
+check "relative suffix cannot match registered worktree" '[[ -f "$MD/COMMIT-REJECTED-10.json" && "$(jq -r .reason "$MD/COMMIT-REJECTED-10.json")" == *"absolute"* ]]'
+
+# 11. Even the registered path is rejected if it is on another branch.
+git -C "$WT" checkout -q -b attacker
+echo branch > "$WT/branch.txt"
+printf '{"worktree":"%s","paths":["branch.txt"],"message":"wrong branch"}' "$WT" > "$MD/COMMIT-REQUEST-11.json"
+BRANCH_BEFORE="$(git -C "$WT" rev-parse HEAD)"
+run_broker
+check "registered worktree branch is pinned" '[[ -f "$MD/COMMIT-REJECTED-11.json" && "$(git -C "$WT" rev-parse HEAD)" == "$BRANCH_BEFORE" && "$(jq -r .reason "$MD/COMMIT-REJECTED-11.json")" == *"branch"* ]]'
 
 echo "  commit-broker: $OK/$N"
 [[ "$OK" -eq "$N" ]]

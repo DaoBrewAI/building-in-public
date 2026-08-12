@@ -29,7 +29,9 @@ check denies '{"tool_name":"Bash","tool_input":{"command":"git worktree add ../x
 # All implementation belongs to the codex executor: claude stages may not
 # commit or write into worktrees — only the mission dir (2026-08-07).
 check denies '{"tool_name":"Bash","tool_input":{"command":"git commit -m msg"}}'
-check allows '{"tool_name":"Bash","tool_input":{"command":"git log --oneline"}}'
+check denies '{"tool_name":"Bash","tool_input":{"command":"git log --oneline"}}'
+check denies "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"printf hacked > '$WT_A/source.swift'\"}}"
+check denies "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sed -i '' s/a/b/ '$WT_B/notes.md'\"}}"
 check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WT_A/src/file.swift\"}}"
 check denies "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$WT_B/notes.md\"}}"
 check allows "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$MD/report.md\"}}"
@@ -41,6 +43,16 @@ check denies '{"tool_name":"Write","tool_input":{"file_path":"relative/inside/cw
 mkdir -p "$TMP/wt-a-evil"
 check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$TMP/wt-a-evil/x.md\"}}"
 check denies_unset "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$WT_A/src/file.swift\"}}"
+
+# A lexical mission-dir prefix must not permit a symlink escape.
+ln -s "$WT_A" "$MD/worktree-link"
+check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$MD/worktree-link/escaped.swift\"}}"
+mkdir -p "$MD/safe"
+check allows "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$MD/safe/artifact.md\"}}"
+echo running > "$MD/state"
+check allows "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$MD/state\"}}"
+ln -s "$WT_A/source.swift" "$MD/state-link"
+check denies "{\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$MD/state-link\"}}"
 
 echo "  worker-guard: $OK/$N"
 [[ "$OK" -eq "$N" ]]

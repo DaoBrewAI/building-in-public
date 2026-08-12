@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
   "version": "0.3.0",
-  "description": "Mission-control orchestration for Claude Code — one coordinator session brainstorms each ask, then runs each mission as a staged pipeline in guarded git worktrees: Fable-5 plans, pauses for your go, Codex gpt-5.6-sol executes and verifies, and the same Fable-5 session is resumed to code-review; the coordinator stays free for other work, mediates blocked questions, and does light acceptance + merge. All state lives on disk in a .orchestrator/ hub so any fresh session can resume.",
+  "description": "Hybrid mission-control orchestration for Claude Code — the coordinator records the ask and provisions guarded worktrees; Fable-5 brainstorms, plans, pauses for your go, and independently reviews; Codex gpt-5.6-sol executes, verifies, and performs every rework change. All state lives on disk in a .orchestrator/ hub so any fresh session can resume.",
   "repository": "https://github.com/DaoBrewAI/building-in-public",
   "license": "MIT",
   "keywords": [

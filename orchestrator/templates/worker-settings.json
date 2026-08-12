@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ORC_WORKTREES='{{WORKTREES}}' ORC_MISSION_DIR='{{MISSION_DIR}}' '{{GUARD_SCRIPT}}'"
+            "command": "ORC_WORKTREES='{{WORKTREES}}' ORC_MISSION_DIR='{{MISSION_DIR}}' ORC_CONTROL_DIR='{{CONTROL_DIR}}' '{{GUARD_SCRIPT}}'"
           }
         ]
       }
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ORC_WORKTREES='{{WORKTREES}}' ORC_MISSION_DIR='{{MISSION_DIR}}' '{{GATE_SCRIPT}}'"
+            "command": "ORC_WORKTREES='{{WORKTREES}}' ORC_MISSION_DIR='{{MISSION_DIR}}' ORC_CONTROL_DIR='{{CONTROL_DIR}}' '{{GATE_SCRIPT}}'"
           }
         ]
       }

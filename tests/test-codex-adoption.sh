@@ -29,8 +29,8 @@ assert_json .agents/plugins/marketplace.json
   fail "10x-engineer Codex version must be 1.1.0"
 [[ "$(jq -r .skills 10x-engineer/.codex-plugin/plugin.json)" == "./skills/" ]] ||
   fail "10x-engineer must use the canonical Codex skill tree"
-[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" == "0.2.0" ]] ||
-  fail "orchestrator Codex version must be 0.2.0"
+[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" == "0.3.0" ]] ||
+  fail "orchestrator Codex version must be 0.3.0"
 [[ "$(jq -r .skills orchestrator/.codex-plugin/plugin.json)" == "./skills/" ]] ||
   fail "orchestrator must use the canonical Codex skill tree"
 
@@ -45,14 +45,27 @@ for plugin in 10x-engineer orchestrator; do
   done < <(find "$plugin/skills" -mindepth 2 -maxdepth 2 -name SKILL.md | sort)
 done
 
-FORBIDDEN='Skill tool|Task tool|TodoWrite|TeamCreate|TaskCreate|TaskUpdate|AskUserQuestion|For Claude|Artifact tool|artifact-design|CLAUDE_PLUGIN_ROOT|claude -p|dangerously-skip-permissions|\.claude/'
+FORBIDDEN='Skill tool|Task tool|TodoWrite|TeamCreate|TaskCreate|TaskUpdate|AskUserQuestion|For Claude|Artifact tool|artifact-design|CLAUDE_PLUGIN_ROOT'
 if rg -n "$FORBIDDEN" 10x-engineer/skills orchestrator/skills; then
-  fail "Claude-only runtime vocabulary remains in Codex-native skills"
+  fail "unsupported host-specific vocabulary remains in Codex skills"
+fi
+if rg -n 'claude -p|dangerously-skip-permissions|\.claude/' 10x-engineer/skills; then
+  fail "Claude runtime vocabulary remains in Codex-native 10x skills"
 fi
 
 assert_file orchestrator/codex-scripts/spawn-worker.sh
 assert_file orchestrator/codex-scripts/mission-commit.sh
 assert_file orchestrator/codex-tests/run.sh
+assert_file orchestrator/scripts/spawn-worker.sh
+assert_file orchestrator/templates/brief-codex.md
+assert_file orchestrator/tests/test-codex-hybrid-plugin.sh
+
+rg -q 'claude-fable-5' orchestrator/scripts/spawn-worker.sh &&
+  rg -q 'gpt-5.6-sol' orchestrator/scripts/spawn-worker.sh ||
+  fail "Hybrid launcher does not pin Fable-5 plan/review and GPT-5.6-Sol exec"
+rg -q 'templates/brief-codex.md' orchestrator/skills/orchestrating/SKILL.md &&
+  rg -q 'scripts/spawn-worker.sh' orchestrator/skills/orchestrating/SKILL.md ||
+  fail "Codex orchestrating skill does not use the Hybrid 0.3 assets"
 
 rg -q 'CODEX_BIN=.*codex' orchestrator/codex-scripts/spawn-worker.sh &&
   rg -q '"\$CODEX_BIN" exec' orchestrator/codex-scripts/spawn-worker.sh ||
@@ -89,5 +102,6 @@ for name in 10x-engineer orchestrator; do
 done
 
 bash orchestrator/codex-tests/run.sh
+bash orchestrator/tests/run.sh
 
 echo "PASS Codex adoption contract"
