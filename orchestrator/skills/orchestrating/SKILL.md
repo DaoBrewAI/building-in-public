@@ -13,10 +13,16 @@ disk so the coordinator stays free between process-exit wakes.
 
 ## Fixed backend ownership
 
-- Mission backend contract: brainstorm, plan, and review use claude-fable-5;
-  ALL code implementation uses gpt-5.6-sol.
+- Mission backend contract: brainstorm, plan, and review prefer claude-fable-5,
+  falling back once to claude-opus-5 only when the error explicitly names the
+  Fable model quota; ALL code implementation uses gpt-5.6-sol.
 - Brainstorm, plan, plan revision, review, and re-review:
-  `claude -p --model claude-fable-5 --effort high`.
+  `claude -p --model claude-fable-5 --effort high`, or
+  `claude-opus-5 --effort high` after that model-specific quota fallback.
+- Generic account, session, or usage limits do not trigger a model switch; they
+  retain Phase 4's exit-75 delayed retry behavior. The launcher records a model
+  switch as `model_fallback:` in `session.txt`; do not hand-copy the launcher
+  per mission to select Opus.
 - **ALL code implementation, fixes, tests that require writes, and commits happen
   in the exec stage on gpt-5.6-sol** with high reasoning.
 - The same Fable session plans and reviews. The same Codex thread implements and
