@@ -127,8 +127,14 @@ check "Claude coordinator records the ask instead of brainstorming it" \
   contains "$CLAUDE_SKILL" '## Phase 1 — Record the request'
 check "Claude coordinator renders the same Fable brainstorm brief" \
   contains "$CLAUDE_SKILL" 'templates/brief-codex.md'
-check "Claude coordinator uses the full active-state conflict set" \
-  contains "$CLAUDE_SKILL" '`running`, `planned`, `executed`, `rework`, `blocked`, or `review`'
+check "Claude coordinator lets missions share a repo in parallel" \
+  contains "$CLAUDE_SKILL" 'Missions on one repo run in PARALLEL by default'
+check "Claude coordinator queues only on a real dependency" \
+  contains "$CLAUDE_SKILL" 'Dependency check (NOT a repo-exclusivity check)'
+check "Codex coordinator lets missions share a repo in parallel" \
+  contains "$SKILL" 'Missions sharing a repo run in PARALLEL'
+check "Codex coordinator queues only on a real dependency" \
+  contains "$SKILL" 'Sharing a repo with another mission is allowed'
 check "Claude coordinator routes write-producing acceptance tests to Codex" \
   contains "$CLAUDE_SKILL" 'verification that may write caches, snapshots, coverage, or generated artifacts'
 
