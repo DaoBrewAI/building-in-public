@@ -14,7 +14,24 @@ disk so the coordinator stays free between process-exit wakes.
 ## Fixed backend ownership
 
 - Mission backend contract: brainstorm, plan, and review use claude-fable-5;
-  ALL code implementation uses gpt-5.6-sol.
+  ALL code implementation uses gpt-5.6-sol. Fable is a preference for the Claude
+  stages, not a hard gate: when it runs out of capacity, fall through to
+  claude-opus-5 automatically (see the quota rule below). Implementation never
+  moves off Codex under any circumstance.
+- **Quota fallback is automatic — never a question for the user.** When a
+  plan/review spawn dies because the model ran out of capacity — in whatever
+  form the provider expresses it: a nonzero exit, an error flag, a refusal
+  naming a limit, a reset time, a prompt to buy credits, or wording nobody has
+  seen before — judge the meaning and treat it as a quota wall rather than a
+  crash. You are a model reading a message; do not pattern-match a phrase list.
+  (`spawn-worker.sh` exits 75 when its own matcher catches it, but that matcher
+  is a convenience, never the thing you rely on.) Then: respawn the same stage
+  immediately with `ORC_PLAN_MODEL=claude-opus-5` prepended, record
+  `quota-fallback: <date> <stage> fable→opus` in the mission notes and once in
+  DECISIONS.md, and tell the user in one line only AFTER the work is moving. It
+  is not a crash strike. The override is per-spawn and never persisted, so later
+  stages return to Fable once capacity is back. Park the mission only if the
+  fallback model is exhausted too, naming which quota needs topping up.
 - Brainstorm, plan, plan revision, review, and re-review:
   `claude -p --model claude-fable-5 --effort high`.
 - **ALL code implementation, fixes, tests that require writes, and commits happen

@@ -86,7 +86,7 @@ done
 # plan/review = Fable-5 high on claude; exec = gpt-5.6-sol reasoning-high on codex.
 FABLE_TOOLS=(Read Glob Grep Write Edit Skill)
 FABLE_TOOL_LIST="$(IFS=,; echo "${FABLE_TOOLS[*]}")"
-WORKER_FLAGS=(--model claude-fable-5 --effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
+WORKER_FLAGS=(--model "${ORC_PLAN_MODEL:-claude-fable-5}" --effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
 WORKER_FLAGS+=(--add-dir "$MISSION_DIR" --add-dir "$CONTROL_DIR")
 for ((i = 1; i < ${#WORKTREES[@]}; i++)); do
   WORKER_FLAGS+=(--add-dir "${WORKTREES[$i]}")
@@ -180,7 +180,7 @@ verify_worker_settings() {
 # retryable outcome (exit 75) instead of a crash.
 detect_quota() { # <files...> — returns 0 and prints the hint line if matched
   local HINT
-  HINT="$(grep -hoiE "(you've hit your [a-z]+ limit|session limit|usage limit|rate limit)[^\"]{0,80}" "$@" 2>/dev/null | head -1 || true)"
+  HINT="$(grep -hoiE "(you've (hit|reached) your [a-z0-9 -]+ limit|session limit|usage limit|rate limit|usage-credits)[^\"]{0,80}" "$@" 2>/dev/null | head -1 || true)"
   if [[ -n "$HINT" ]]; then
     echo "QUOTA_LIMIT detected — retry_hint: $HINT"
     return 0

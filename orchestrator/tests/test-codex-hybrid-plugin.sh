@@ -100,8 +100,16 @@ check "Pending legacy missions are detected without session history" \
 check "Go gate snapshots the approved contract outside worker roots" \
   contains "$SKILL" 'approved-design.md'
 
-check "shared launcher hardcodes Fable-5 high" \
-  contains "$SPAWN" 'WORKER_FLAGS=(--model claude-fable-5 --effort high'
+check "shared launcher defaults to Fable-5 high" \
+  contains "$SPAWN" 'WORKER_FLAGS=(--model "${ORC_PLAN_MODEL:-claude-fable-5}" --effort high'
+check "plan model is overridable only through the sanctioned variable" \
+  contains "$SPAWN" 'ORC_PLAN_MODEL:-claude-fable-5'
+check "quota detection covers reached-limit wording, not just hit-limit" \
+  contains "$SPAWN" "you've (hit|reached) your"
+check "Claude skill mandates automatic quota fallback to Opus" \
+  contains "$CLAUDE_SKILL" 'ORC_PLAN_MODEL=claude-opus-5'
+check "Codex skill mandates automatic quota fallback to Opus" \
+  contains "$SKILL" 'ORC_PLAN_MODEL=claude-opus-5'
 check "shared launcher hardcodes GPT-5.6-Sol high" \
   contains "$SPAWN" '-m gpt-5.6-sol'
 check "Fable launcher does not bypass permissions" \
