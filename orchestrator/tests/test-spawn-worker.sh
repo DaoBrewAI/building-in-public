@@ -18,6 +18,9 @@ printf 'APPROVED EXEC BRIEF\n' > "$CONTROL/brief-exec.md"
 printf 'UNTRUSTED EXEC BRIEF\n' > "$MD/brief-exec.md"
 printf 'FABLE BRIEF\n' > "$MD/brief.md"
 printf 'session_id: 00000000-0000-4000-8000-000000000001\nbackend: claude-headless\nstage: plan\n' > "$MD/session.txt"
+mkdir -p "$WT/.claude"
+printf '{}\n' > "$WT/.claude/settings.local.json"
+shasum -a 256 "$WT/.claude/settings.local.json" | awk '{print $1}' > "$CONTROL/worker-settings.sha256"
 
 FAKE_CODEX="$TMP/bin/fake-codex"
 cat > "$FAKE_CODEX" <<'FAKE'
@@ -65,6 +68,15 @@ check "Fable receives the planner brief" 'grep -q "FABLE BRIEF" "$TMP/claude-std
 CLAUDE_ARG_TEXT="$(tr '\n' ' ' < "$TMP/claude-args.log")"
 check "Fable has no Bash and no permission bypass" '[[ "$CLAUDE_ARG_TEXT" == *"Read"* && "$CLAUDE_ARG_TEXT" == *"Skill"* && "$CLAUDE_ARG_TEXT" != *"Bash"* && "$CLAUDE_ARG_TEXT" != *"dangerously-skip-permissions"* ]]'
 check "Fable pins Fable-5 high" '[[ "$CLAUDE_ARG_TEXT" == *"claude-fable-5"* && "$CLAUDE_ARG_TEXT" == *"high"* ]]'
+
+rm -f "$WT/.claude/settings.local.json"
+if PATH="$TMP/bin:$PATH" "$SPAWN" --mission-dir "$MD" --control-dir "$CONTROL" --worktree "$WT" --stage review --resume review >/dev/null 2>"$TMP/settings-missing-error"; then SETTINGS_MISSING_RC=0; else SETTINGS_MISSING_RC=$?; fi
+check "missing local worker settings block Fable resume" '[[ "$SETTINGS_MISSING_RC" -ne 0 ]] && grep -q "worker settings missing" "$TMP/settings-missing-error"'
+
+printf '{"tampered":true}\n' > "$WT/.claude/settings.local.json"
+if PATH="$TMP/bin:$PATH" "$SPAWN" --mission-dir "$MD" --control-dir "$CONTROL" --worktree "$WT" --stage review --resume review >/dev/null 2>"$TMP/settings-hash-error"; then SETTINGS_HASH_RC=0; else SETTINGS_HASH_RC=$?; fi
+check "tampered local worker settings block Fable resume" '[[ "$SETTINGS_HASH_RC" -ne 0 ]] && grep -q "worker settings hash mismatch" "$TMP/settings-hash-error"'
+printf '{}\n' > "$WT/.claude/settings.local.json"
 
 printf '%s\t%s\t%s\t%s\n' "$TMP/evil" evil "$BASE" "$REPO" > "$MD/worktrees.txt"
 if "$SPAWN" --mission-dir "$MD" --control-dir "$CONTROL" --worktree "$WT" >/dev/null 2>"$TMP/manifest-error"; then MANIFEST_RC=0; else MANIFEST_RC=$?; fi

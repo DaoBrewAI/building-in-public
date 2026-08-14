@@ -107,14 +107,20 @@ provisioning.
    `$HUB/control/<mission-slug>/worktrees.txt`, copy it byte-for-byte to the
    mission's worker-facing `worktrees.txt`, and record rows in MISSION.md. Never
    use the worker-facing copy as commit authority.
-3. The first repo is primary. If it already tracks `.claude/settings.json`,
-   stop: planting mission hooks would mask repository policy.
-4. Render `$PLUGIN_DIR/templates/worker-settings.json` into the primary
-   worktree's `.claude/settings.json`, filling worktrees, mission directory,
-   coordinator-owned control directory,
+3. The first repo is primary. Preserve any shared `.claude/settings.json`
+   byte-for-byte: it may enable project plugins and policies needed by the
+   mission.
+4. Run `$PLUGIN_DIR/scripts/install-worker-settings.sh` for the primary
+   worktree with `$PLUGIN_DIR/templates/worker-settings.json`, the colon-joined
+   worktrees, mission directory, coordinator-owned control directory,
    `$PLUGIN_DIR/scripts/worker-guard.sh`, and
-   `$PLUGIN_DIR/scripts/pipeline-gate.sh`. Require `jq` parsing, no unfilled
-   placeholders, and executable hook paths.
+   `$PLUGIN_DIR/scripts/pipeline-gate.sh`. It renders the hooks into
+   `.claude/settings.local.json`, adds that path to the worktree's local Git
+   exclude, freezes its SHA-256 in coordinator-owned control state for the
+   launcher to verify before every Fable turn, validates the JSON and hook
+   paths, and fails closed rather than overwrite a pre-existing local settings
+   file or follow a symlinked `.claude` directory. Never edit the shared
+   settings to install mission hooks.
 5. Copy the report template. Render the Fable brainstorm/plan/review brief from
    `$PLUGIN_DIR/templates/brief-codex.md` to mission `brief.md`. Render the Codex
    executor brief from `$PLUGIN_DIR/templates/brief-exec.md` to
@@ -246,7 +252,8 @@ impact, attempts, exact decision needed, and safe default.
    report with real `## Code review` and `## Verification` evidence. Missing
    worker-owned evidence returns to the backend that owns it.
 2. Verify every branch/base/diff stays inside declared scope and excludes the
-   planted `.claude/settings.json`. Code corrections always return to Codex.
+   planted `.claude/settings.local.json`. Code corrections always return to
+   Codex.
 3. For each repo in dependency order, require the user's live checkout to be
    clean and on its default branch. Never switch or clean it for them. Before
    merging, resume the same Codex executor for any verification that may write
@@ -255,8 +262,10 @@ impact, attempts, exact decision needed, and safe default.
    isolated; otherwise rely on the executor's fresh evidence plus Fable review.
    Merge `--no-ff --no-commit`, commit on a verified pass, or abort and resume
    Codex with the exact failure. Two failed acceptance cycles enter Phase 6f.
-4. Delete the planted settings, remove merged worktrees and branches, then run
-   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB` to find leftovers.
+4. Delete only the planted `.claude/settings.local.json` (and `.claude/` if it
+   is then empty), remove merged worktrees and branches, then run
+   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB` to find leftovers. Never
+   delete or edit the repository's shared `.claude/settings.json`.
 5. Report shipped changes, decisions, tests, and report follow-ups. Append one
    durable memory entry exactly once.
 6. Set state/phase accepted, archive the mission directory, regenerate the
