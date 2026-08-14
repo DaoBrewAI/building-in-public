@@ -274,6 +274,7 @@ never substitutes for user notification of a blocker.
 - Never edit or inspect a running stage between process-exit wakes.
 - Mission workers never ask the user directly; they use BLOCKED files.
 - Only the coordinator writes shared MEMORY.md, DECISIONS.md, and board.html.
+- Decision and memory numbers are host-prefixed: `D-<HOST>-<seq>` / `M-<HOST>-<seq>`. `<HOST>` is a short stable tag for THIS machine (`Linhans-MacBook-Pro.local` → `LMBP`, `LY_GAMING` → `LYG`; reuse the tag the hub already carries for this machine rather than minting a variant), and `<seq>` counts only entries bearing this host's tag, so concurrent hosts never collide. Never mint, renumber, or reuse another host's tag — a remote-authored entry is read-only, and its number is how other missions cite it. Cite bare legacy `D-<seq>`/`M-<seq>` entries by their existing number and never renumber them opportunistically.
 - Never bypass the OS sandbox, hook guard, pipeline gate, or commit broker.
 - Every Hybrid launch passes `--control-dir $HUB/control/<mission-slug>`; the
   control manifest and frozen approved contract are never worker writable.

@@ -29,7 +29,7 @@ Naming, internal structure, library choice among equivalents, test organization,
 
 ## Always, regardless of branch
 
-1. Append the ruling to DECISIONS.md: `## D-<seq> (<mission-slug>, <date>) — <question> / <answer> / decided-by: orchestrator|user`.
+1. Append the ruling to DECISIONS.md: `## D-<HOST>-<seq> (<mission-slug>, <date>) — <question> / <answer> / decided-by: orchestrator|user`, where `<HOST>` is this machine's short host tag (see the numbering rule in `orchestrating`) and `<seq>` counts only entries carrying that same tag. Never renumber or reuse another host's tag.
 2. Keep ANSWER files short: the decision, the rationale in one or two lines, and any concrete values the mission session needs. No essays.
 3. If the same mission blocks 3+ times on questions the brief should have answered, the brief was too thin — note it in DECISIONS.md and write richer digests for remaining missions.
 
