@@ -122,8 +122,13 @@ mission retrospective (22 BLOCKEDs, 19 eliminable):
    and Codex test evidence; commit only a verified merge, remove mission
    policy/worktrees, and archive state.
 
-Only one active mission may own a repo. Conflicting missions remain `pending`
-until the active mission is accepted or failed.
+Missions sharing a repo run in parallel by default — isolation is per-worktree,
+not per-repo, since each mission owns its own worktree and `orc/<mission-slug>`
+branch. A mission is held `pending` only when it would reuse another mission's
+worktree or branch, or when it genuinely depends on another's output (builds on
+unmerged commits, collides on the same files at merge, or shares a contract or
+migration chain). It then launches automatically once the blocker is accepted or
+failed.
 
 ## Hub layout
 

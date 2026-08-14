@@ -26,7 +26,9 @@ disk so the coordinator stays free between process-exit wakes.
 - Codex runs in `workspace-write` with only mission worktrees and the mission
   directory writable, network off by default. A trusted commit broker converts
   `COMMIT-REQUEST-<n>.json` files into commits.
-- Branches are `orc/<mission-slug>`. At most one active mission owns a repo.
+- Branches are `orc/<mission-slug>`. Missions sharing a repo run in PARALLEL by
+  default — isolation is per-worktree, not per-repo. Queue only on a real
+  dependency (see Phase 2).
 
 ## Resolve paths and hub
 
@@ -87,8 +89,18 @@ provisioning.
 ## Phase 2 — Provision guarded worktrees and briefs
 
 1. Require every repo to pass `git rev-parse`. Refuse tab/newline-containing
-   paths. If another mission in `running`, `planned`, `executed`, `rework`,
-   `blocked`, or `review` owns a repo, leave this mission pending.
+   paths. **Sharing a repo with another mission is allowed** — each mission owns
+   its own worktree and `orc/<mission-slug>` branch, so parallel missions never
+   write the same files. Leave this mission pending ONLY when (a) it would reuse
+   a worktree or branch another mission owns, or (b) a real output dependency
+   exists: it builds on the other's unmerged commits, edits the same files or
+   module in a way that collides at merge, changes or consumes a contract the
+   other side owns, or its verification only makes sense after the other lands
+   (two migrations in one repo collide on the revision chain — sequence those).
+   Name the blocking mission and the reason when you queue. Otherwise launch in
+   parallel and say so. If you cannot name the concrete artifact one mission
+   needs from the other, there is no dependency; when genuinely unsure whether
+   two will collide at merge, ask the user rather than serializing by reflex.
 2. Create `<umbrella>/.worktrees/<mission-slug>/<repo-name>` on
    `orc/<mission-slug>`. Record tab-separated
    `<worktree> <branch> <base-sha> <repo>` rows in
