@@ -82,11 +82,15 @@ for I in "${!WORKTREES[@]}"; do
   esac
 done
 
-# Stage model specs are fixed by the plugin (founder directives 2026-07-22 + 2026-08-07):
-# plan/review = Fable-5 high on claude; exec = gpt-5.6-sol reasoning-high on codex.
+# Stage model specs are fixed by the plugin (founder directives 2026-07-22,
+# 2026-08-07, and 2026-08-13): plan/review prefer Fable-5 and fall back to
+# Opus-5 only for a model-specific Fable quota; both stay high effort. Exec is
+# gpt-5.6-sol reasoning-high on codex.
+PLAN_MODEL="${PLAN_MODEL:-claude-fable-5}"
+PLAN_FALLBACK_MODEL="${PLAN_FALLBACK_MODEL:-claude-opus-5}"
 FABLE_TOOLS=(Read Glob Grep Write Edit Skill)
 FABLE_TOOL_LIST="$(IFS=,; echo "${FABLE_TOOLS[*]}")"
-WORKER_FLAGS=(--model claude-fable-5 --effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
+WORKER_FLAGS=(--effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
 WORKER_FLAGS+=(--add-dir "$MISSION_DIR" --add-dir "$CONTROL_DIR")
 for ((i = 1; i < ${#WORKTREES[@]}; i++)); do
   WORKER_FLAGS+=(--add-dir "${WORKTREES[$i]}")
@@ -180,9 +184,26 @@ verify_worker_settings() {
 # retryable outcome (exit 75) instead of a crash.
 detect_quota() { # <files...> — returns 0 and prints the hint line if matched
   local HINT
-  HINT="$(grep -hoiE "(you've hit your [a-z]+ limit|session limit|usage limit|rate limit)[^\"]{0,80}" "$@" 2>/dev/null | head -1 || true)"
+  HINT="$(grep -hoiE "((you've|you have)[[:space:]]+(hit|reached)[[:space:]]+your[[:space:]]+[a-z0-9 -]{1,20}[[:space:]]+limit|session limit|usage limit|rate limit)[^\"]{0,80}" "$@" 2>/dev/null | head -1 || true)"
   if [[ -n "$HINT" ]]; then
     echo "QUOTA_LIMIT detected — retry_hint: $HINT"
+    return 0
+  fi
+  return 1
+}
+
+# A quota that explicitly names the preferred planning model can be escaped by
+# switching models. Generic account/session/usage limits cannot, so they stay on
+# detect_quota's normal exit-75 retry path.
+detect_model_quota() { # <model> <files...>
+  local MODEL MODEL_PATTERN HINT
+  MODEL="$1"
+  shift
+  MODEL_PATTERN="${MODEL#claude-}"
+  MODEL_PATTERN="${MODEL_PATTERN//-/[[:space:]-]?}"
+  HINT="$(grep -hoiE "(you've|you have)[[:space:]]+(hit|reached)[[:space:]]+your[[:space:]]+${MODEL_PATTERN}[[:space:]]+(limit|quota)[^\"]{0,80}" "$@" 2>/dev/null | head -1 || true)"
+  if [[ -n "$HINT" ]]; then
+    echo "$HINT"
     return 0
   fi
   return 1
@@ -334,9 +355,20 @@ superseded: $OLD_ID $NOW"
   OUT="$(next_output)"
   cd "$PRIMARY"
   # Brief goes in on stdin — passing it as an argv word risks ARG_MAX.
-  ORC_WORKER=1 claude -p --session-id "$SESSION_ID" "${WORKER_FLAGS[@]}" \
+  ORC_WORKER=1 claude -p --session-id "$SESSION_ID" --model "$PLAN_MODEL" "${WORKER_FLAGS[@]}" \
     < "$MISSION_DIR/brief.md" \
     > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
+  if [[ "$RC" -ne 0 && "$PLAN_FALLBACK_MODEL" != "$PLAN_MODEL" ]] && \
+      detect_model_quota "$PLAN_MODEL" "$OUT" >/dev/null; then
+    echo "model_fallback: $PLAN_MODEL -> $PLAN_FALLBACK_MODEL $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
+    SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+    echo "session_id: $SESSION_ID" >> "$SESSION_FILE"
+    echo "retry_after_model_fallback: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
+    RC=0
+    ORC_WORKER=1 claude -p --session-id "$SESSION_ID" --model "$PLAN_FALLBACK_MODEL" "${WORKER_FLAGS[@]}" \
+      < "$MISSION_DIR/brief.md" \
+      > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
+  fi
 else
   if [[ ! -f "$SESSION_FILE" ]]; then
     echo "no session.txt to resume in $MISSION_DIR" >&2
@@ -356,9 +388,17 @@ else
   } >> "$SESSION_FILE"
   OUT="$(next_output)"
   cd "$PRIMARY"
-  ORC_WORKER=1 claude -p --resume "$SESSION_ID" "$RESUME_MSG" \
+  ORC_WORKER=1 claude -p --resume "$SESSION_ID" "$RESUME_MSG" --model "$PLAN_MODEL" \
     "${WORKER_FLAGS[@]}" \
     > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
+  if [[ "$RC" -ne 0 && "$PLAN_FALLBACK_MODEL" != "$PLAN_MODEL" ]] && \
+      detect_model_quota "$PLAN_MODEL" "$OUT" >/dev/null; then
+    echo "model_fallback: $PLAN_MODEL -> $PLAN_FALLBACK_MODEL $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
+    RC=0
+    ORC_WORKER=1 claude -p --resume "$SESSION_ID" "$RESUME_MSG" --model "$PLAN_FALLBACK_MODEL" \
+      "${WORKER_FLAGS[@]}" \
+      > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
+  fi
 fi
 
 # Surface the mission session's final text + exit metadata on stdout for the

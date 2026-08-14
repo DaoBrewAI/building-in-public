@@ -28,7 +28,9 @@ edition, with fixed backend ownership:
 
 1. The Codex app task coordinates state, worktrees, mediation, acceptance, and
    merge.
-2. A headless `claude-fable-5 --effort high` session brainstorms the request,
+2. A headless `claude-fable-5 --effort high` session brainstorms the request
+   (falling back once to `claude-opus-5 --effort high` only on a Fable-specific
+   model quota),
    writes the design and plan, and pauses at the founder `go` gate.
 3. A separate `codex exec -m gpt-5.6-sol` thread implements the whole plan and
    verifies it in a `workspace-write` sandbox.

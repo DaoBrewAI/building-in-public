@@ -100,8 +100,9 @@ check "Pending legacy missions are detected without session history" \
 check "Go gate snapshots the approved contract outside worker roots" \
   contains "$SKILL" 'approved-design.md'
 
-check "shared launcher hardcodes Fable-5 high" \
-  contains "$SPAWN" 'WORKER_FLAGS=(--model claude-fable-5 --effort high'
+check "shared launcher defaults to Fable-5 with Opus-5 fallback" \
+  contains "$SPAWN" 'PLAN_MODEL="${PLAN_MODEL:-claude-fable-5}"' && \
+  contains "$SPAWN" 'PLAN_FALLBACK_MODEL="${PLAN_FALLBACK_MODEL:-claude-opus-5}"'
 check "shared launcher hardcodes GPT-5.6-Sol high" \
   contains "$SPAWN" '-m gpt-5.6-sol'
 check "Fable launcher does not bypass permissions" \

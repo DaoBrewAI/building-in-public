@@ -69,6 +69,61 @@ CLAUDE_ARG_TEXT="$(tr '\n' ' ' < "$TMP/claude-args.log")"
 check "Fable has no Bash and no permission bypass" '[[ "$CLAUDE_ARG_TEXT" == *"Read"* && "$CLAUDE_ARG_TEXT" == *"Skill"* && "$CLAUDE_ARG_TEXT" != *"Bash"* && "$CLAUDE_ARG_TEXT" != *"dangerously-skip-permissions"* ]]'
 check "Fable pins Fable-5 high" '[[ "$CLAUDE_ARG_TEXT" == *"claude-fable-5"* && "$CLAUDE_ARG_TEXT" == *"high"* ]]'
 
+cat > "$TMP/bin/claude" <<'FAKE'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$ORC_FAKE_CLAUDE_ARGS"
+cat > "$ORC_FAKE_CLAUDE_STDIN"
+SESSION_ID=""; WANT_SESSION_ID=0
+for ARG in "$@"; do
+  if [[ "$WANT_SESSION_ID" -eq 1 ]]; then SESSION_ID="$ARG"; WANT_SESSION_ID=0; continue; fi
+  [[ "$ARG" == "--session-id" ]] && WANT_SESSION_ID=1
+done
+if [[ -n "$SESSION_ID" ]]; then
+  if grep -qx "$SESSION_ID" "$ORC_FAKE_CLAUDE_SESSION_IDS" 2>/dev/null; then
+    printf '%s\n' "Session ID $SESSION_ID is already in use"
+    exit 3
+  fi
+  printf '%s\n' "$SESSION_ID" >> "$ORC_FAKE_CLAUDE_SESSION_IDS"
+fi
+if [[ "${ORC_FAKE_GENERIC_QUOTA:-}" == "1" ]]; then
+  printf '%s\n' '{"is_error":true,"num_turns":1,"result":"Fable 5 is selected. You have reached your usage limit"}'
+  exit 1
+fi
+case " $* " in
+  *" --model claude-fable-5 "*)
+    printf '%s\n' '{"is_error":true,"num_turns":1,"result":"You have reached your Fable 5 limit"}'
+    exit 1
+    ;;
+  *" --model claude-opus-5 "*)
+    printf '%s\n' '{"is_error":false,"num_turns":1,"result":"PLAN READY ON OPUS"}'
+    ;;
+  *)
+    printf '%s\n' '{"is_error":true,"num_turns":1,"result":"unexpected model"}'
+    exit 2
+    ;;
+esac
+FAKE
+chmod +x "$TMP/bin/claude"
+export ORC_FAKE_CLAUDE_SESSION_IDS="$TMP/claude-session-ids.log"
+: > "$ORC_FAKE_CLAUDE_SESSION_IDS"
+: > "$TMP/claude-args.log"
+if PATH="$TMP/bin:$PATH" "$SPAWN" --mission-dir "$MD" --control-dir "$CONTROL" --worktree "$WT" >/dev/null; then FALLBACK_FRESH_RC=0; else FALLBACK_FRESH_RC=$?; fi
+check "fresh planning falls back from Fable quota to Opus" '[[ "$FALLBACK_FRESH_RC" -eq 0 ]] && grep -q "claude-fable-5" "$TMP/claude-args.log" && grep -q "claude-opus-5" "$TMP/claude-args.log"'
+check "fresh planning records the model fallback" 'grep -q "model_fallback: claude-fable-5 -> claude-opus-5" "$MD/session.txt"'
+check "fresh fallback mints a new Claude session ID" '[[ "$(grep -c "^session_id:" "$MD/session.txt")" -eq 2 ]] && [[ "$(sort -u "$ORC_FAKE_CLAUDE_SESSION_IDS" | wc -l | tr -d " ")" -eq 2 ]]'
+
+: > "$TMP/claude-args.log"
+export ORC_FAKE_GENERIC_QUOTA=1
+if PATH="$TMP/bin:$PATH" "$SPAWN" --mission-dir "$MD" --control-dir "$CONTROL" --worktree "$WT" >/dev/null; then GENERIC_QUOTA_RC=0; else GENERIC_QUOTA_RC=$?; fi
+unset ORC_FAKE_GENERIC_QUOTA
+check "generic usage quota does not switch to Opus" '[[ "$GENERIC_QUOTA_RC" -eq 75 ]] && grep -q "claude-fable-5" "$TMP/claude-args.log" && ! grep -q "claude-opus-5" "$TMP/claude-args.log"'
+
+: > "$TMP/claude-args.log"
+if PATH="$TMP/bin:$PATH" "$SPAWN" --mission-dir "$MD" --control-dir "$CONTROL" --worktree "$WT" --stage review --resume review >/dev/null; then FALLBACK_RESUME_RC=0; else FALLBACK_RESUME_RC=$?; fi
+check "review resume falls back from Fable quota to Opus" '[[ "$FALLBACK_RESUME_RC" -eq 0 ]] && grep -q "claude-fable-5" "$TMP/claude-args.log" && grep -q "claude-opus-5" "$TMP/claude-args.log"'
+check "review resume records the model fallback" '[[ "$(grep -c "model_fallback: claude-fable-5 -> claude-opus-5" "$MD/session.txt")" -eq 1 ]]'
+
 rm -f "$WT/.claude/settings.local.json"
 if PATH="$TMP/bin:$PATH" "$SPAWN" --mission-dir "$MD" --control-dir "$CONTROL" --worktree "$WT" --stage review --resume review >/dev/null 2>"$TMP/settings-missing-error"; then SETTINGS_MISSING_RC=0; else SETTINGS_MISSING_RC=$?; fi
 check "missing local worker settings block Fable resume" '[[ "$SETTINGS_MISSING_RC" -ne 0 ]] && grep -q "worker settings missing" "$TMP/settings-missing-error"'
