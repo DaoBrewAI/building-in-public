@@ -14,7 +14,7 @@
 #       --stage exec resumes the codex thread instead
 #
 # The FIRST --worktree is the primary: it is the session cwd; for claude stages it
-# holds the guard/gate hooks in its .claude/settings.json, for the exec stage it is
+# holds the guard/gate hooks in its .claude/settings.local.json; for the exec stage it is
 # the codex workspace-write sandbox root (other worktrees + mission dir via --add-dir).
 # The orchestrator launches this via Bash with run_in_background:true and is woken
 # when the process exits. On exit (any state) a macOS notification fires as the
@@ -148,6 +148,33 @@ verify_approved_contract() {
   (cd "$CONTROL_DIR" && shasum -a 256 -c approved.sha256 >/dev/null) || { echo "approved control artifact hash mismatch" >&2; return 1; }
 }
 
+verify_worker_settings() {
+  local SETTINGS STAMP EXPECTED ACTUAL
+  SETTINGS="$PRIMARY/.claude/settings.local.json"
+  STAMP="$CONTROL_DIR/worker-settings.sha256"
+  [[ -s "$SETTINGS" && ! -L "$SETTINGS" ]] || {
+    echo "worker settings missing, empty, or symlinked: $SETTINGS" >&2
+    return 1
+  }
+  [[ -s "$STAMP" && ! -L "$STAMP" ]] || {
+    echo "coordinator worker settings hash missing, empty, or symlinked: $STAMP" >&2
+    return 1
+  }
+  EXPECTED="$(tr -d '\n\r' < "$STAMP")"
+  if [[ "${#EXPECTED}" -ne 64 ]]; then
+    echo "invalid coordinator worker settings hash" >&2
+    return 1
+  fi
+  case "$EXPECTED" in
+    *[!0-9a-f]*) echo "invalid coordinator worker settings hash" >&2; return 1 ;;
+  esac
+  ACTUAL="$(shasum -a 256 "$SETTINGS" | awk '{print $1}')"
+  [[ "$ACTUAL" == "$EXPECTED" ]] || {
+    echo "worker settings hash mismatch: $SETTINGS" >&2
+    return 1
+  }
+}
+
 # P1-1 (2026-08-08 retrospective): a worker killed by a usage/session limit
 # exits nonzero with state stuck in running — surface it as a structured,
 # retryable outcome (exit 75) instead of a crash.
@@ -269,6 +296,7 @@ if [[ "$STAGE" == "exec" ]]; then
 fi
 
 # ------------------------------------------------------- plan/review (claude)
+verify_worker_settings || exit 1
 if [[ "$STAGE" == "review" ]]; then
   verify_approved_contract || exit 1
 fi

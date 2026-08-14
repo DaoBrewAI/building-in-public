@@ -10,6 +10,7 @@ CLAUDE_MANIFEST="$ROOT/.claude-plugin/plugin.json"
 CLAUDE_SKILL="$ROOT/claude-skills/orchestrating/SKILL.md"
 SPAWN="$ROOT/scripts/spawn-worker.sh"
 GUARD="$ROOT/scripts/worker-guard.sh"
+INSTALLER="$ROOT/scripts/install-worker-settings.sh"
 CODEX_BRIEF="$ROOT/templates/brief-codex.md"
 
 N=0
@@ -74,6 +75,14 @@ check "Codex skill provisions the executor brief" \
   contains "$SKILL" '$PLUGIN_DIR/templates/brief-exec.md'
 check "Codex skill provisions the Fable brainstorm/plan brief" \
   contains "$SKILL" '$PLUGIN_DIR/templates/brief-codex.md'
+check "Codex skill installs mission hooks without masking shared settings" \
+  contains "$SKILL" '$PLUGIN_DIR/scripts/install-worker-settings.sh'
+check "worker settings installer exists and is executable" \
+  test -x "$INSTALLER"
+check "Codex skill uses Claude local project settings" \
+  contains "$SKILL" '.claude/settings.local.json'
+check "Codex skill no longer rejects tracked shared settings" \
+  not_contains "$SKILL" 'If it already tracks `.claude/settings.json`'
 check "Codex skill enforces the planned human go gate" \
   contains "$SKILL" 'state=planned'
 check "Codex skill sends execution to the Codex stage" \
@@ -105,8 +114,12 @@ check "shared launcher resumes the original Codex thread" \
   contains "$SPAWN" 'exec resume "$THREAD_ID"'
 check "shared launcher runs the commit broker" \
   contains "$SPAWN" 'commit-broker.sh" --mission-dir "$MISSION_DIR" --control-dir "$CONTROL_DIR"'
+check "shared launcher verifies coordinator-owned worker settings hash" \
+  contains "$SPAWN" 'worker-settings.sha256'
 check "executor reads the immutable approved brief" \
   contains "$SPAWN" '< "$CONTROL_DIR/brief-exec.md"'
+check "executor is forbidden from touching planted local settings" \
+  contains "$ROOT/templates/brief-exec.md" '.claude/settings.local.json'
 check "launcher verifies the approved contract hashes" \
   contains "$SPAWN" 'shasum -a 256 -c approved.sha256'
 check "launcher rejects a hard-linked worker manifest" \

@@ -44,6 +44,15 @@ creates the commit outside the sandbox without handing Codex broader access.
 The broker trusts only `$HUB/control/<mission-slug>/worktrees.txt`, never the
 worker-writable copy.
 
+Mission hooks coexist with repository-owned Claude configuration. Shared,
+Git-tracked project settings remain in `.claude/settings.json`; Orchestrator
+installs guard and gate hooks in Claude's higher-precedence local project layer,
+`.claude/settings.local.json`, and excludes that temporary file through the
+worktree's Git metadata. Its SHA-256 is frozen in coordinator-owned control
+state and verified before every Fable plan/review turn. Provisioning uses an
+atomic no-clobber install and fails closed if local settings already exist, so
+Orchestrator never overwrites a developer's private configuration.
+
 The Hybrid launcher and state machine live in `scripts/` and `templates/` and
 are shared by both coordinator surfaces. New Codex missions use these shared
 assets. Model ownership is a plugin invariant and is not configurable per
@@ -155,6 +164,7 @@ failed.
 │   ├── approved-plan.md
 │   ├── brief-exec.md
 │   ├── approved.sha256
+│   ├── worker-settings.sha256
 │   └── review-diff-*.patch
 ├── DECISIONS.md
 ├── MEMORY.md

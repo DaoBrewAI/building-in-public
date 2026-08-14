@@ -19,7 +19,7 @@
 #   - worker-facing worktrees.txt still matches the coordinator-owned copy
 #   - worktree is one registered in $CONTROL_DIR/worktrees.txt
 #   - paths are relative, contain no "..", and resolve inside the worktree
-#   - no path is .claude/settings.json (the planted hooks)
+#   - no path is a shared or local Claude settings file
 #   - the worktree has no modifications OUTSIDE the requested paths
 #     (untracked-but-ignored files aside) — ask the executor to split requests
 
@@ -117,7 +117,10 @@ process_request() { # <request file>
     case "$P" in
       /*)                       reject "$N" "absolute path in manifest: $P (use worktree-relative paths)"; return 0 ;;
       *"/../"*|"../"*|*"/.."|"..") reject "$N" "path escapes the worktree: $P"; return 0 ;;
-      ".claude/settings.json")  reject "$N" "refusing to commit the planted .claude/settings.json"; return 0 ;;
+      ".claude/settings.json"|".claude/settings.local.json")
+        reject "$N" "refusing to commit Claude settings: $P"
+        return 0
+        ;;
     esac
     if [[ ! -e "$WT/$P" && -z "$(git -C "$WT" status --porcelain -- "$P" 2>/dev/null)" ]]; then
       reject "$N" "path has no changes and does not exist: $P"

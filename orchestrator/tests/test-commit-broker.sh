@@ -36,11 +36,14 @@ printf '{"worktree":"%s","paths":["x"],"message":"m"}' "$TMP/evil" > "$MD/COMMIT
 run_broker
 check "unregistered worktree" '[[ -f "$MD/COMMIT-REJECTED-2.json" && "$(jq -r .reason "$MD/COMMIT-REJECTED-2.json")" == *"not registered"* ]]'
 
-# 3. planted settings file -> REJECTED
-mkdir -p "$WT/.claude"; echo '{}' > "$WT/.claude/settings.json"
+# 3. shared and planted-local settings files -> REJECTED
+mkdir -p "$WT/.claude"; echo '{}' > "$WT/.claude/settings.json"; echo '{}' > "$WT/.claude/settings.local.json"
 printf '{"worktree":"%s","paths":[".claude/settings.json"],"message":"m"}' "$WT" > "$MD/COMMIT-REQUEST-3.json"
 run_broker
-check "settings refused" '[[ -f "$MD/COMMIT-REJECTED-3.json" ]]'
+check "shared settings refused" '[[ -f "$MD/COMMIT-REJECTED-3.json" ]]'
+printf '{"worktree":"%s","paths":[".claude/settings.local.json"],"message":"m"}' "$WT" > "$MD/COMMIT-REQUEST-3-local.json"
+run_broker
+check "local settings refused" '[[ -f "$MD/COMMIT-REJECTED-3-local.json" ]]'
 rm -rf "$WT/.claude"
 
 # 4. path escaping the worktree -> REJECTED
