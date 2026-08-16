@@ -6,6 +6,14 @@ Each guide, skill, or plugin lives in its own folder with a short README. Codex 
 
 ---
 
+## 🎮 Interactive Builds
+
+| Build | What it is | Try it |
+| :--- | :--- | :--- |
+| ⚔️ &nbsp;[**DaoBrew Causal Raid**](./causal-raid) | DaoBrew can feel abstract, so this one-minute browser raid makes its causal task loop easier to understand by turning it into something you can play. More importantly, it is fun. | [**Play now →**](https://daobrewai.github.io/building-in-public/causal-raid/) |
+
+---
+
 ## 🛠️ Skills
 
 | Skill | What it does |
