@@ -1,4 +1,4 @@
-# Quiet Neo-Brutalism · DaoBrew design language
+# 纸墨新粗野 · Taoist Neo-Brutalism
 
 - 📱 **阅读网页(点开直接渲染)**:
   https://daobrewai.github.io/building-in-public/neobrutal-design-system/report.html
