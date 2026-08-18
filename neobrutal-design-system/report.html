@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:">
+<title>纸墨新粗野 · DaoBrew 设计语言</title>
+<template id="graphify-source">
+Executive Summary
+DaoBrew 的界面设计语言定名「纸墨新粗野(Quiet Neo-Brutalism)」:以奶油纸色为底、墨色 3px 描边与无羽化硬投影为结构,饱和色只以小面积贴纸与图章出现,且每个颜色被一条语义铁律锁死(紫=身体信号,黄=人的批准/可执行,钴蓝=工作与 agent 会话,橙红=威胁/拦截,绿=会议/通过)。该语言首用于 2026-08-18 唯识俱乐部沙龙 deck,并将整体移植到 Sentinel Mac App(moonshot 分支换皮)。
+
+Conclusions
+1) 颜色即宣称:配色不是装饰,是系统敢盖什么章的可视化制度;黄章只属于人的批准,直接呈现产品最硬的边界。
+2) 淡雅的来源:大面积留白 + 素纸底,饱和色仅作小面积语义信号,墨线与硬影给出木刻版画式的笃定,而非荧光潮流感。
+3) 与「道/禅」的契合:纸为素底(无),墨线为戒(边界清楚不作伪饰),色即语义(无妄色),章为仪式(承认是动作不是默认),波与弦为贯穿母题(如涛波依水)。
+4) 与唯识及宁静任务管理的契合:底色安静、一屏一两个信号,页面本身示范注意力管理;紫色专属身体=前五识有专名,黄色专属人=批准权不外包。
+5) 交付:本报告页即样例实现;设计令牌、组件规格与 Do/Don't 已成文,供设计师(李丹)与 App 换皮直接采用。
+
+Decision Status
+已采用:沙龙 deck、组织主页、Causal Raid 提示均已按此语言上线;Sentinel Mac App 换皮(moonshot)立项进行中。色值与语义规则为当前权威版本,变更须同步 moonshot/ALIGNMENT-SPEC.md 的身体紫 #A66BC2 契约。
+
+Sources
+strategies/2026-08-18-weishi-taskmap-salon/weishi.html(deck 实现);moonshot/ALIGNMENT-SPEC.md(身体紫契约);DaobrewSentinelMac TaskMapDecisionAtlas.swift TaskMapUI.body #A66BC2;dataviz 调色板验证器通过记录(钴蓝/绿/紫/橙红于白底全项 PASS);参考:Gumroad 设计体系、neobrutalism 组件惯例、王利杰 Macro Alpha 弦论意象。
+</template>
+<style>
+:root{
+  --bg:#F7F2E7; --ink:#14120F; --paper:#FFFFFF;
+  --cobalt:#4B4BE8; --cobalt-soft:#E4E4FF;
+  --violet:#A66BC2; --violet-soft:#F1E4F7;
+  --red:#F2542D; --red-soft:#FFE1D6;
+  --green:#0BA84A; --green-soft:#DDF3E4;
+  --yellow:#FFC91F; --yellow-soft:#FFF0C2;
+  --muted:#6F6A5E; --line:#D8D2C2;
+  --bd:3px solid var(--ink); --sh:6px 6px 0 var(--ink); --sh-sm:3px 3px 0 var(--ink);
+  --sans:-apple-system,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif;
+  --kai:"Kaiti SC","STKaiti","BiauKai","KaiTi","Songti SC",serif;
+  --mono:"SF Mono","Menlo",monospace; --r:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.75;-webkit-font-smoothing:antialiased}
+main{width:min(94vw,1060px);margin:0 auto;padding:clamp(28px,5vh,64px) 0 4em}
+.brand{
+  display:inline-block;font-family:var(--kai);font-weight:700;letter-spacing:.3em;
+  background:var(--ink);color:var(--bg);padding:.28em .8em .28em 1.05em;border-radius:10px;
+  box-shadow:4px 4px 0 var(--cobalt);transform:rotate(-2deg);
+}
+h1{font-weight:700;font-size:clamp(32px,5vw,58px);line-height:1.2;margin:.7em 0 .35em}
+h1 .u{background:linear-gradient(transparent 58%,var(--yellow) 58%)}
+h2{font-weight:700;font-size:clamp(22px,3vw,34px);margin:2.2em 0 .6em}
+h2 .u{background:linear-gradient(transparent 58%,var(--yellow) 58%)}
+.lead{font-size:clamp(15px,1.5vw,19px);max-width:44em}
+.lead strong{background:linear-gradient(transparent 60%,var(--cobalt-soft) 60%)}
+.small{font-size:.82em;color:var(--muted)}
+.kai{font-family:var(--kai)}
+.badge{
+  display:inline-flex;font-size:.72em;letter-spacing:.12em;font-weight:700;
+  background:var(--paper);border:2.5px solid var(--ink);border-radius:999px;
+  padding:.3em 1em;box-shadow:var(--sh-sm);margin-bottom:1em;
+}
+/* palette cards */
+.pal{display:grid;grid-template-columns:1fr 1fr;gap:clamp(14px,2vw,24px);margin:1.4em 0}
+.pc{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);overflow:hidden}
+.pc .sw{height:86px;display:flex;align-items:flex-end;padding:.6em .9em;border-bottom:var(--bd)}
+.pc .sw .hex{font-family:var(--mono);font-weight:700;font-size:.85em;background:var(--paper);border:2px solid var(--ink);border-radius:7px;padding:.05em .5em;box-shadow:2px 2px 0 var(--ink)}
+.pc .bd2{padding:1em 1.2em}
+.pc .nm{font-weight:700;font-size:1.05em}
+.pc .rule{font-size:.85em;margin:.3em 0 .8em}
+.pc .rule b{background:linear-gradient(transparent 60%,var(--yellow-soft) 60%)}
+.pc .demo{border-top:2.5px dashed var(--line);padding-top:.9em;display:flex;gap:.7em;flex-wrap:wrap;align-items:center}
+/* demo atoms */
+.stick{display:inline-block;background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:.45em .9em;font-weight:700}
+.stick .sk{display:block;font-family:var(--mono);font-size:.6em;letter-spacing:.14em;opacity:.75}
+.stick .sv{font-family:var(--mono);font-size:1.2em}
+.stamp{display:inline-block;border:3px solid currentColor;border-radius:9px;padding:.1em .6em;font-weight:700;letter-spacing:.1em;font-size:.8em;transform:rotate(-2.5deg);background:var(--paper)}
+.chip{display:inline-block;border:2.5px solid var(--ink);border-radius:8px;padding:.1em .6em;font-weight:700;font-size:.8em}
+.bar{width:120px;height:12px;background:var(--bg);border:2px solid var(--ink);border-radius:6px;overflow:hidden}
+.bar i{display:block;height:100%;width:66%;background:var(--cobalt)}
+/* rules list */
+.laws{list-style:none;max-width:44em}
+.laws li{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:.7em 1.1em;margin:.7em 0;font-size:.95em}
+.laws li b{font-weight:700}
+/* spec */
+.spec{display:grid;grid-template-columns:1fr 1fr;gap:clamp(14px,2vw,24px)}
+.sp{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:1em 1.2em}
+.sp h3{font-size:.95em;font-weight:700;letter-spacing:.06em;margin-bottom:.5em}
+.sp ul{list-style:none;font-size:.86em}
+.sp li{padding:.25em 0}
+.sp.dont{background:var(--red-soft)}
+.sp.do{background:var(--green-soft)}
+pre{
+  background:var(--ink);color:var(--bg);border-radius:var(--r);border:var(--bd);box-shadow:var(--sh);
+  padding:1.1em 1.3em;font-family:var(--mono);font-size:.78em;line-height:1.7;overflow-x:auto;margin:1em 0;
+}
+.why{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);padding:1.3em 1.5em;margin:1.2em 0;max-width:52em}
+.why h3{font-weight:700;font-size:1.1em;margin-bottom:.4em}
+.why p{font-size:.95em}
+.why .q{font-family:var(--kai);font-weight:700;letter-spacing:.15em;color:var(--muted)}
+canvas{display:block;width:100%;height:100px;margin-top:3em}
+@media (max-width:760px){.pal,.spec{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <span class="brand">道 · 纸墨新粗野</span>
+  <h1>Quiet Neo-Brutalism<br><span class="u">底是纸,线是墨,色是语义,章是仪式</span></h1>
+  <p class="lead">DaoBrew 的界面语言。首用于 2026-08-18 唯识俱乐部沙龙 deck,即将整体移植到 Sentinel Mac App。这一页本身就是样例实现:你看到的每个元素,都在演示它自己的规格。</p>
+
+  <h2>调色板 · <span class="u">每个颜色是一条铁律</span></h2>
+  <div class="pal">
+
+    <div class="pc">
+      <div class="sw" style="background:var(--bg)"><span class="hex">#F7F2E7 · #FFFFFF</span></div>
+      <div class="bd2">
+        <div class="nm">奶油纸 + 纸白</div>
+        <div class="rule"><b>底色,永远安静。</b>大面积留白;饱和色不许铺底,只许小面积出现。</div>
+        <div class="demo"><span class="stick"><span class="sk">CARD</span><span class="sv">一屏一念</span></span><span class="small">卡片:纸白 + 墨边 + 硬影</span></div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="sw" style="background:var(--ink)"><span class="hex">#14120F</span></div>
+      <div class="bd2">
+        <div class="nm">墨</div>
+        <div class="rule"><b>结构与边界:3px 描边、无羽化硬投影、正文。</b>不用渐变,不用发光,影子也是诚实的。</div>
+        <div class="demo"><span class="chip" style="box-shadow:3px 3px 0 var(--ink)">3px 边 + 6px 影</span><span class="small">禁:阴影羽化、彩色描边</span></div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="sw" style="background:var(--violet)"><span class="hex">#A66BC2 · #F1E4F7</span></div>
+      <div class="bd2">
+        <div class="nm">紫 · 身体信号</div>
+        <div class="rule"><b>只给身体信号。</b>与 App 内 <span style="font-family:var(--mono)">TaskMapUI.body</span> 同一色号,是网页与产品的色彩契约。</div>
+        <div class="demo">
+          <span class="stick" style="background:var(--violet);color:#fff"><span class="sk">BODY · READINESS</span><span class="sv">73 ↓</span></span>
+          <span class="stamp" style="color:var(--violet)">BODY OVERLAP · 3d</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="sw" style="background:var(--yellow)"><span class="hex">#FFC91F · #FFF0C2</span></div>
+      <div class="bd2">
+        <div class="nm">黄 · 人的批准</div>
+        <div class="rule"><b>只给人的批准与可执行,以及高亮笔。</b>算法永远得不到黄色:批准权不外包。</div>
+        <div class="demo">
+          <span class="stamp" style="color:#8a6a00;background:var(--yellow-soft)">✓ HUMAN-ACCEPTED</span>
+          <span style="font-weight:700;background:linear-gradient(transparent 58%,var(--yellow) 58%)">重点句高亮</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="sw" style="background:var(--cobalt)"><span class="hex">#4B4BE8 · #E4E4FF</span></div>
+      <div class="bd2">
+        <div class="nm">钴蓝 · 工作</div>
+        <div class="rule"><b>工作侧:agent 会话、信息、进度。</b>主行动色,但不抢黄色的批准语义。</div>
+        <div class="demo">
+          <span class="stick" style="background:var(--cobalt);color:#fff"><span class="sk">AGENT SESSIONS</span><span class="sv">× 2</span></span>
+          <span class="bar"><i></i></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="sw" style="background:var(--red)"><span class="hex">#F2542D · #FFE1D6</span></div>
+      <div class="bd2">
+        <div class="nm">橙红 · 威胁与拦截</div>
+        <div class="rule"><b>只给坏消息:</b>跌破基线、闸门拦下、覆盖之外。它出现得越少,系统越可信。</div>
+        <div class="demo">
+          <span class="stamp" style="color:var(--red)">OUTSIDE COVERAGE</span>
+          <span class="chip" style="background:var(--red-soft)">低恢复日 ▲</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="sw" style="background:var(--green)"><span class="hex">#0BA84A · #DDF3E4</span></div>
+      <div class="bd2">
+        <div class="nm">绿 · 通过与会议</div>
+        <div class="rule"><b>闸门通过、会议记录。</b>肯定但不庆祝:通过只是资格,不是结论。</div>
+        <div class="demo">
+          <span class="stamp" style="color:var(--green)">✓ 通过</span>
+          <span class="stick" style="background:var(--green);color:#fff"><span class="sk">MEETINGS</span><span class="sv">× 1</span></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pc">
+      <div class="sw" style="background:var(--line)"><span class="hex">#6F6A5E · #D8D2C2</span></div>
+      <div class="bd2">
+        <div class="nm">暖灰 · 次要</div>
+        <div class="rule"><b>次要文字、分隔线、待定状态。</b>沉默的大多数:让少数信号有地方可响。</div>
+        <div class="demo"><span class="small">注释文字长这样</span><span class="stamp" style="color:#8A8577">PROPOSED</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <h2>五条铁律</h2>
+  <ul class="laws">
+    <li><b>色即语义。</b>不为好看上色;一个颜色一旦有了含义,别处不得再用。</li>
+    <li><b>黄只给人。</b>批准、确认、可执行:黄色是人的签名,算法永远拿不到。</li>
+    <li><b>紫只给身体。</b>#A66BC2 是网页与 App 的共同契约(TaskMapUI.body),身体信号有专名。</li>
+    <li><b>边界不作伪。</b>3px 墨边、硬投影、无渐变无发光;物有其形,影是实的。</li>
+    <li><b>章是仪式。</b>确认要盖章,虚构要标注,拦下要说明:承认是一个动作,不是默认。</li>
+  </ul>
+
+  <h2>为什么是<span class="u">这一套</span></h2>
+
+  <div class="why">
+    <h3>为什么适合 Yiming</h3>
+    <p>整场叙事讲的就是「系统敢盖什么章」:这套语言把主张变成视觉制度,<strong>颜色即宣称,盖章才算数</strong>。贴纸的微旋转、大问号、÷10 又留住即兴与顽皮:严谨的规则 + 顽皮的手感,和讲话的人是同一个气质。</p>
+  </div>
+
+  <div class="why">
+    <h3>为什么合「道」、有禅意</h3>
+    <p>纸是素底,一切色从素上生起,如念头从静中生起;墨线是戒,边界清楚、不含糊、不假光晕;<strong>色即语义,无妄色</strong>,是一种少欲;章是仪式,承认是动作;贯穿的波与弦:<span class="q">如涛波依水</span>。</p>
+  </div>
+
+  <div class="why">
+    <h3>为什么配唯识、配一个宁静的任务管理产品</h3>
+    <p>这套配色本身就是产品主张的现场示范:<strong>底色安静,一屏只有一两个饱和信号,注意力自然落在有语义的地方</strong>。紫只给身体=前五识有专名;黄只给人=批准权不外包;大面积留白=一屏一念。用户的感受应该是:世界没有变少,但吵的东西没了。</p>
+  </div>
+
+  <h2>给设计与实现的规格</h2>
+  <pre>--bg:#F7F2E7;  --paper:#FFFFFF;  --ink:#14120F;
+--cobalt:#4B4BE8/#E4E4FF;   --violet:#A66BC2/#F1E4F7;
+--yellow:#FFC91F/#FFF0C2;   --red:#F2542D/#FFE1D6;
+--green:#0BA84A/#DDF3E4;    --muted:#6F6A5E;  --line:#D8D2C2;
+
+border: 3px solid var(--ink);          /* 卡片 3px,小件 2-2.5px */
+shadow: 6px 6px 0 var(--ink);          /* 大件 6px,小件 3px,零羽化 */
+radius: 12px;                          /* 小件 8-10px,一套到底 */
+rotate: ±1° ~ ±3°;                     /* 只给贴纸与图章,正文不转 */
+type:   PingFang 700 大标题 / 楷体只给经文与落款 / mono 只给数据</pre>
+
+  <div class="spec">
+    <div class="sp do">
+      <h3>Do</h3>
+      <ul>
+        <li>大面积纸底 + 小面积语义色</li>
+        <li>状态用图章表达(通过 / 拦下 / 已确认)</li>
+        <li>硬投影表示「可按」「在场」</li>
+        <li>空状态也用卡片认真排(说清为什么是空)</li>
+        <li>数据一律 mono,标题一律加粗</li>
+      </ul>
+    </div>
+    <div class="sp dont">
+      <h3>Don't</h3>
+      <ul>
+        <li>渐变、发光、毛玻璃、阴影羽化</li>
+        <li>把黄色用在任何非人为批准的地方</li>
+        <li>紫色挪作他用(它属于身体)</li>
+        <li>荧光大色块铺底(那是另一派新粗野)</li>
+        <li>正文倾斜、超过 ±3° 的旋转</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="small" style="margin-top:2.5em">对照实现:沙龙 deck(weishi-taskmap-salon)· 组织主页 daobrewai.github.io · Sentinel Mac App 换皮(moonshot,进行中)。身体紫契约见 moonshot/ALIGNMENT-SPEC.md。</p>
+</main>
+<canvas id="s" width="1400" height="100" aria-hidden="true"></canvas>
+<script>
+(function(){
+  var cv=document.getElementById("s"),bx=cv.getContext("2d"),W=cv.width,H=cv.height,M=H/2,t=0;
+  var reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function draw(){
+    bx.clearRect(0,0,W,H);
+    var g=bx.createLinearGradient(0,0,W,0);
+    g.addColorStop(0,"#4B4BE8");g.addColorStop(.55,"#A66BC2");g.addColorStop(1,"#F2542D");
+    for(var s=0;s<3;s++){
+      bx.beginPath();
+      for(var x=0;x<=W;x+=4){
+        var p=x/W;
+        var rl=Math.sin(Math.PI/2*Math.min(1,p*9)),rr=Math.sin(Math.PI/2*Math.min(1,(1-p)*9));
+        var A=H*.32*(1-p*.4)*rl*rr;
+        var y=M+A*Math.sin(.011*(1+9*p*p)*x - t*(1+2*p))+(s-1)*1.5;
+        x===0?bx.moveTo(x,y):bx.lineTo(x,y);
+      }
+      bx.strokeStyle=s===1?g:"rgba(20,18,15,"+(0.15+s*.05)+")";
+      bx.lineWidth=s===1?2.2:1.1;
+      bx.stroke();
+    }
+  }
+  draw();
+  if(!reduce) setInterval(function(){t+=.045;draw();},40);
+})();
+</script>
+</body>
+</html>
