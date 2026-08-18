@@ -1,0 +1,2373 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:; connect-src 'self'">
+<title>唯识 × Task Map · 当身体先于语言知道一件事</title>
+<style>
+/* ---------- tokens · loud neo-brutalism, single light theme ---------- */
+:root{
+  --bg:#F7F2E7; --ink:#14120F; --paper:#FFFFFF;
+  --cobalt:#4B4BE8; --cobalt-soft:#E4E4FF;
+  --violet:#A66BC2; --violet-soft:#F1E4F7;
+  --red:#F2542D; --red-soft:#FFE1D6;
+  --green:#0BA84A; --green-soft:#DDF3E4;
+  --yellow:#FFC91F; --yellow-soft:#FFF0C2;
+  --gray:#8A8577; --muted:#6F6A5E; --line:#D8D2C2;
+  --bd:3px solid var(--ink);
+  --sh:6px 6px 0 var(--ink); --sh-sm:3px 3px 0 var(--ink);
+  --sans:"PingFang SC","Hiragino Sans GB","Source Han Sans SC","Noto Sans CJK SC",-apple-system,"Helvetica Neue",sans-serif;
+  --kai:"Kaiti SC","STKaiti","BiauKai","DFKai-SB","KaiTi","Songti SC",serif;
+  --mono:"SF Mono","Menlo","PingFang SC",monospace;
+  --r:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--ink); font-family:var(--sans);
+  overflow:hidden; -webkit-font-smoothing:antialiased;
+  font-size:clamp(14px,1.15vw,19px); line-height:1.7;
+}
+::selection{background:var(--yellow-soft)}
+#water{position:fixed;inset:0;z-index:0;display:block}
+/* ---------- HUD ---------- */
+#hud{
+  position:fixed;top:0;left:0;right:0;z-index:40;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:clamp(12px,1.4vw,22px) clamp(20px,2.6vw,44px);
+  pointer-events:none;
+}
+#brand{
+  font-family:var(--kai);font-size:1.2em;font-weight:700;letter-spacing:.35em;
+  background:var(--ink);color:var(--bg);padding:.25em .7em .25em 1em;
+  border-radius:10px;box-shadow:4px 4px 0 var(--cobalt);transform:rotate(-2deg);
+}
+#actlabel{
+  color:var(--ink);font-size:.78em;letter-spacing:.1em;font-weight:700;
+  background:var(--paper);border:2.5px solid var(--ink);border-radius:999px;
+  padding:.3em 1.1em;box-shadow:var(--sh-sm);transition:opacity .5s;
+}
+#actlabel:empty{opacity:0}
+#bar{position:fixed;top:0;left:0;height:7px;background:var(--cobalt);border-bottom:3px solid var(--ink);z-index:41;width:0;transition:width .45s cubic-bezier(.22,1,.36,1)}
+#hint{
+  position:fixed;right:clamp(20px,2.6vw,44px);bottom:clamp(16px,1.8vw,30px);z-index:40;
+  color:var(--muted);font-size:.72em;letter-spacing:.08em;transition:opacity 1s;
+}
+#hint.gone{opacity:0}
+#hint kbd{font-family:var(--mono);border:2px solid var(--ink);background:var(--paper);border-radius:6px;padding:.05em .5em;margin:0 .2em;color:var(--ink);box-shadow:2px 2px 0 var(--ink)}
+/* ---------- scenes / deck ---------- */
+.scene{
+  position:fixed;inset:0;z-index:10;
+  opacity:0;visibility:hidden;transform:translateY(14px);
+  transition:opacity .7s ease,transform .7s cubic-bezier(.22,1,.36,1),visibility 0s .7s;
+  display:flex;flex-direction:column;justify-content:center;
+  padding:clamp(56px,6.5vh,92px) clamp(24px,5vw,100px);
+}
+.scene.active{opacity:1;visibility:visible;transform:none;transition-delay:0s}
+.scene::after{
+  content:attr(data-mark);position:absolute;right:-.05em;bottom:-.18em;z-index:-1;
+  font-family:var(--kai);font-weight:700;font-size:46vh;line-height:1;
+  color:transparent;-webkit-text-stroke:3px rgba(75,75,232,.10);pointer-events:none;
+}
+[data-step]{opacity:0;transform:translateY(16px);transition:opacity .6s ease,transform .6s cubic-bezier(.22,1,.36,1)}
+[data-step].on{opacity:1;transform:none}
+.step-solo .stage,.step-solo .stagewrap{position:relative;min-height:76vh;display:block}
+.step-solo [data-step]{
+  position:absolute;left:0;right:0;top:50%;
+  transform:translateY(calc(-50% + 22px));visibility:hidden;pointer-events:none;
+  transition:opacity .6s ease,transform .6s cubic-bezier(.22,1,.36,1),visibility 0s .6s;
+}
+.step-solo [data-step].on{
+  transform:translateY(-50%);visibility:visible;pointer-events:auto;transition-delay:0s;
+}
+/* ---------- type ---------- */
+h1{font-weight:700;font-size:clamp(38px,5.8vw,96px);line-height:1.16;letter-spacing:.01em}
+h2{font-weight:700;font-size:clamp(25px,3.3vw,54px);line-height:1.26;letter-spacing:.01em;margin-bottom:.5em}
+h2 .u{background:linear-gradient(transparent 58%,var(--yellow) 58%)}
+.kai{font-family:var(--kai)}
+.quote{
+  font-family:var(--kai);font-size:clamp(34px,4.4vw,72px);letter-spacing:.12em;
+  color:var(--ink);line-height:1.5;font-weight:700;
+}
+.cite{color:var(--muted);font-size:.74em;letter-spacing:.08em;margin-top:.9em}
+.lead{font-size:clamp(16px,1.5vw,24px);color:var(--ink);max-width:36em;line-height:1.85}
+.lead strong{font-weight:700;background:linear-gradient(transparent 60%,var(--cobalt-soft) 60%)}
+.lead .hi-red{font-weight:700;background:linear-gradient(transparent 60%,var(--red-soft) 60%)}
+.lead .hi-y{font-weight:700;background:linear-gradient(transparent 58%,var(--yellow) 58%)}
+.small{font-size:.8em;color:var(--muted)}
+.num{font-family:var(--mono)}
+/* ---------- shared components ---------- */
+.card{
+  background:var(--paper);border:var(--bd);border-radius:var(--r);
+  box-shadow:var(--sh);padding:clamp(18px,2vw,32px);
+}
+.badge{
+  display:inline-flex;align-items:center;gap:.45em;
+  font-size:.72em;letter-spacing:.12em;font-weight:700;color:var(--ink);
+  background:var(--paper);border:2.5px solid var(--ink);border-radius:999px;
+  padding:.32em 1em;box-shadow:var(--sh-sm);
+}
+.badge.real{background:var(--green-soft)}
+.badge.fict{border-style:dashed;background:var(--yellow-soft)}
+.stamp{
+  display:inline-block;border:3px solid currentColor;border-radius:9px;
+  padding:.08em .55em;font-weight:700;letter-spacing:.12em;font-size:.78em;
+  transform:rotate(-2.5deg);background:var(--paper);
+}
+.stamp.gray{color:var(--gray)}
+.stamp.red{color:var(--red)}
+.stamp.green{color:var(--green)}
+.stamp.violet{color:var(--violet)}
+.stamp.yellow{color:var(--ink);background:var(--yellow)}
+.evd{
+  display:inline-block;font-size:.62em;letter-spacing:.08em;vertical-align:.25em;
+  padding:.12em .6em;border-radius:7px;margin-left:.6em;white-space:nowrap;
+  border:2.5px solid var(--ink);font-weight:700;
+}
+.evd.meta{background:var(--cobalt-soft)}
+.evd.exp{background:var(--yellow-soft)}
+.evd.theo{background:var(--paper);border-style:dashed;color:var(--muted)}
+.btn{
+  font:inherit;font-weight:700;color:var(--ink);background:var(--paper);
+  border:var(--bd);border-radius:var(--r);padding:.65em 1.7em;cursor:pointer;
+  letter-spacing:.08em;box-shadow:var(--sh);
+  transition:transform .12s,box-shadow .12s,background .2s;
+}
+.btn:hover{transform:translate(-2px,-2px);box-shadow:8px 8px 0 var(--ink)}
+.btn:active{transform:translate(3px,3px);box-shadow:1px 1px 0 var(--ink)}
+.btn.primary{background:var(--yellow)}
+.btn.sel{background:var(--cobalt-soft)}
+body.tired .btn.sel{background:var(--red-soft)}
+.stick{
+  display:inline-block;background:var(--paper);border:var(--bd);border-radius:var(--r);
+  box-shadow:var(--sh);padding:.6em 1.1em;font-weight:700;
+}
+.stick .sk{font-size:.68em;letter-spacing:.14em;color:var(--muted);display:block}
+.stick .sv{font-family:var(--mono);font-size:1.5em}
+/* ---------- s0 · one day ---------- */
+#s0 .daywrap{display:flex;gap:clamp(18px,2.6vw,48px);align-items:flex-end;flex-wrap:wrap;margin-top:1.4em}
+.bigstat{
+  background:var(--violet);color:#fff;border:var(--bd);border-radius:var(--r);
+  box-shadow:var(--sh);padding:1em 1.4em;transform:rotate(-2deg);
+}
+.bigstat .k{display:block;font-size:.7em;letter-spacing:.2em;font-weight:700;opacity:.85}
+.bigstat .v{display:block;font-family:var(--mono);font-weight:700;font-size:clamp(44px,5vw,84px);line-height:1.1}
+.bigstat .s{display:block;font-family:var(--mono);font-size:.8em;opacity:.85}
+.traces{display:flex;gap:clamp(12px,1.6vw,26px);flex-wrap:wrap;margin:1.6em 0}
+.traces .stick:nth-child(1){background:var(--cobalt);color:#fff;transform:rotate(-1.5deg)}
+.traces .stick:nth-child(1) .sk{color:rgba(255,255,255,.8)}
+.traces .stick:nth-child(2){background:var(--green);color:#fff;transform:rotate(1.2deg)}
+.traces .stick:nth-child(2) .sk{color:rgba(255,255,255,.8)}
+.traces .stick:nth-child(3){transform:rotate(-.8deg)}
+.traces .stick:nth-child(4){background:var(--violet);color:#fff;transform:rotate(1.6deg)}
+.traces .stick:nth-child(4) .sk{color:rgba(255,255,255,.8)}
+#s0 .grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:clamp(24px,4vw,72px);align-items:center}
+/* abundance -> coordinator diagram */
+.abun{display:flex;flex-direction:column;gap:clamp(10px,1.6vh,20px);max-width:56em;margin-top:.4em}
+.arow{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(9em,auto);gap:clamp(14px,2vw,34px);align-items:center}
+.clu{display:flex;flex-wrap:wrap;gap:6px;align-content:center}
+.clu i{
+  width:clamp(18px,1.9vw,30px);height:clamp(18px,1.9vw,30px);border-radius:6px;
+  border:2px solid var(--ink);box-shadow:2px 2px 0 var(--ink);position:relative;display:inline-block;
+}
+.clu i:nth-child(3n){transform:rotate(4deg)}
+.clu i:nth-child(3n+1){transform:rotate(-3deg)}
+.clu[data-kind="page"] i{background:linear-gradient(#fff 30%,var(--line) 30%,var(--line) 38%,#fff 38%,#fff 55%,var(--line) 55%,var(--line) 63%,#fff 63%)}
+.clu[data-kind="vid"] i{background:var(--ink)}
+.clu[data-kind="vid"] i::after{
+  content:"";position:absolute;left:38%;top:30%;
+  border-left:.45em solid #fff;border-top:.28em solid transparent;border-bottom:.28em solid transparent;
+}
+.clu[data-kind="agt"] i{background:var(--cobalt-soft)}
+.clu[data-kind="agt"] i::after{
+  content:"";position:absolute;inset:30%;background:var(--cobalt);border-radius:50%;border:1.5px solid var(--ink);
+}
+.arr{width:clamp(34px,3.5vw,60px);height:3px;background:var(--ink);position:relative}
+.arr::after{
+  content:"";position:absolute;right:-2px;top:50%;transform:translateY(-50%);
+  border-left:12px solid var(--ink);border-top:8px solid transparent;border-bottom:8px solid transparent;
+}
+.co{
+  font-weight:700;font-size:clamp(18px,1.9vw,30px);text-align:center;
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+  padding:.35em .9em;transform:rotate(-1.2deg);
+}
+.co.dark{background:var(--ink);color:var(--bg);transform:rotate(1deg)}
+.co.q{background:var(--yellow);font-size:clamp(24px,2.6vw,42px);transform:rotate(-2.5deg)}
+.expcard h3{font-weight:700;letter-spacing:.1em;font-size:1em;margin-bottom:.9em;display:flex;align-items:center;gap:.7em}
+.expcard h3::before{content:"";width:.8em;height:.8em;background:var(--yellow);border:2.5px solid var(--ink);border-radius:5px;flex:none}
+.expcard ol{list-style:none;counter-reset:x}
+.expcard li{counter-increment:x;display:flex;gap:1em;align-items:baseline;padding:.5em 0}
+.expcard li::before{
+  content:counter(x);font-family:var(--mono);font-weight:700;font-size:.78em;
+  background:var(--yellow-soft);border:2.5px solid var(--ink);border-radius:9px;
+  width:1.9em;height:1.9em;display:inline-flex;align-items:center;justify-content:center;
+  flex:none;transform:translateY(-.1em);
+}
+.expcard li em{font-style:normal;font-weight:700;background:linear-gradient(transparent 60%,var(--cobalt-soft) 60%)}
+.expcard .safety{font-size:.8em;color:var(--muted);line-height:1.8;margin-top:1.1em;padding-top:1em;border-top:2.5px dashed var(--line)}
+#breath{display:flex;flex-direction:column;align-items:center;gap:1em}
+#bstring{
+  width:clamp(280px,26vw,440px);height:auto;
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+}
+.bmeta{display:flex;align-items:baseline;gap:.6em}
+.bmeta #bphase{font-family:var(--kai);font-weight:700;font-size:1.6em}
+.bmeta #bcount{font-weight:700;font-size:1.2em;color:var(--muted)}
+/* ---------- s1 science ---------- */
+#s1 .grid{display:grid;grid-template-columns:minmax(0,6fr) minmax(0,5fr);gap:clamp(24px,4vw,80px);align-items:center}
+.sleepswitch{display:flex;gap:1em;margin:1.2em 0 1.6em}
+.sleepswitch .btn{font-family:var(--mono);font-size:.9em}
+.taskcard{
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+  padding:clamp(18px,2vw,32px);max-width:30em;
+  transition:box-shadow .5s,transform .5s,background .5s;
+}
+.taskcard .tt{font-size:clamp(19px,1.8vw,30px);font-weight:700}
+.taskcard .meta{color:var(--muted);font-size:.8em;margin-top:.4em}
+.taskcard .feel{
+  margin-top:1.3em;padding-top:1.1em;border-top:2.5px dashed var(--line);
+  display:flex;align-items:baseline;justify-content:space-between;gap:1em;
+}
+.taskcard .feel .fword{font-family:var(--kai);font-size:1.6em;font-weight:700;color:var(--cobalt);transition:color .5s}
+.taskcard .feel .fnote{font-size:.72em;color:var(--muted);text-align:right;line-height:1.6}
+body.tired .taskcard{box-shadow:6px 6px 0 var(--red);transform:translateY(-3px);background:var(--red-soft)}
+body.tired .taskcard .fword{color:var(--red)}
+.brainbox svg{width:100%;height:auto;display:block}
+.brainbox .amyg{fill:#FFE1D6;stroke:#14120F;transition:transform 1s cubic-bezier(.34,1.4,.4,1);transform-origin:calc(50% + 90px) 50%}
+.brainbox .pfc{fill:#E4E4FF;stroke:#14120F}
+.brainbox .link{stroke:#14120F;transition:opacity 1s}
+.brainbox .blabel{fill:#14120F;font-size:13px;font-weight:700;letter-spacing:1px}
+.brainbox .bstat{fill:#6F6A5E;font-size:10.5px;font-family:var(--mono)}
+body.tired .brainbox .amyg{transform:scale(1.6)}
+body.tired .brainbox .link{opacity:.12}
+body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
+.honest{list-style:none;max-width:42em;counter-reset:h}
+.honest li{
+  counter-increment:h;background:var(--paper);border:var(--bd);border-radius:var(--r);
+  box-shadow:var(--sh-sm);padding:.9em 1.2em .9em 3.2em;margin:.9em 0;position:relative;
+}
+.honest li::before{
+  content:counter(h);position:absolute;left:1em;top:.95em;
+  font-family:var(--mono);font-weight:700;font-size:.8em;
+  background:var(--yellow-soft);border:2.5px solid var(--ink);border-radius:9px;
+  width:1.8em;height:1.8em;display:flex;align-items:center;justify-content:center;
+}
+.bound{display:flex;gap:1.2em;margin:1.4em 0;flex-wrap:wrap}
+.bound .b{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:.8em 1.3em;font-size:.92em}
+.bound .b .h{letter-spacing:.1em;color:var(--muted);font-size:.75em;font-weight:700;margin-bottom:.25em}
+.bound .no{background:var(--red-soft)}
+.bound .yes{background:var(--green-soft)}
+.bound .b .v{font-weight:700}
+/* ---------- s2 causality ---------- */
+.lanes{display:grid;grid-template-columns:auto 1fr;gap:.7em 1.4em;align-items:center;margin:1.5em 0}
+.lanes .lt{font-size:.85em;font-weight:700;white-space:nowrap}
+.lanes .cells{display:flex;gap:6px}
+.lanes .c{width:clamp(17px,1.8vw,28px);height:clamp(17px,1.8vw,28px);border-radius:7px;background:var(--paper);border:2px solid var(--line)}
+.lanes .c.hit{background:var(--cobalt-soft);border-color:var(--ink)}
+.lanes .c.low{background:var(--red-soft);border-color:var(--ink)}
+.ratio{display:flex;align-items:center;gap:clamp(20px,3vw,54px);margin:1.6em 0;flex-wrap:wrap}
+.frac{text-align:center;font-family:var(--mono);background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:.8em 1.2em}
+.frac .top,.frac .bot{font-size:clamp(14px,1.2vw,19px);padding:.3em .8em}
+.frac .top{color:var(--red);font-weight:700;border-bottom:3px solid var(--ink)}
+.frac .cap{font-family:var(--sans);font-size:.68em;color:var(--muted);margin-top:.4em}
+.dial{position:relative;width:clamp(160px,15vw,230px)}
+.dial svg{width:100%;height:auto;display:block}
+.dial .arc-t{stroke:#D8D2C2;fill:none}
+.dial .arc-f{stroke:#4B4BE8;fill:none;stroke-linecap:round;transition:stroke-dashoffset 1.8s cubic-bezier(.3,1,.4,1)}
+.dial .dv{fill:#14120F;font-family:var(--mono);font-size:26px;font-weight:700}
+.dial .dt{fill:#6F6A5E;font-size:10px;letter-spacing:1px}
+.dial .thr{stroke:#F2542D}
+.gates{display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(10px,1.2vw,20px);margin:1.5em 0;align-items:stretch}
+.gate{
+  background:var(--paper);border:var(--bd);border-radius:var(--r);
+  padding:clamp(12px,1.1vw,20px) clamp(10px,1vw,16px);
+  opacity:.35;transform:translateY(10px);
+  transition:opacity .45s,transform .45s,box-shadow .45s;
+  display:flex;flex-direction:column;gap:.5em;
+}
+.gate .gn{font-size:.95em;font-weight:700;line-height:1.4}
+.gate .gd{font-size:.8em;color:var(--muted);line-height:1.6;flex:1}
+.gate .gcau{
+  font-size:.68em;line-height:1.55;color:var(--muted);
+  border-top:2px dashed var(--line);padding-top:.5em;
+}
+.gate .gcau b{font-family:var(--mono);color:var(--cobalt);letter-spacing:.02em}
+.gate.lit{opacity:1;transform:none;box-shadow:var(--sh-sm)}
+.ladder{display:grid;grid-template-columns:repeat(5,1fr);gap:clamp(10px,1.2vw,20px);align-items:end;margin:2.6em 0 1em;position:relative}
+.rung{
+  background:var(--paper);border:var(--bd);border-radius:var(--r);
+  padding:1em .9em .9em;position:relative;
+  transition:opacity .5s,box-shadow .5s;opacity:.35;
+}
+.rung.lit{opacity:1;box-shadow:var(--sh-sm)}
+.rung .rc{font-family:var(--mono);font-weight:700;font-size:.72em;color:var(--muted);letter-spacing:.1em}
+.rung .rn{font-weight:700;font-size:.95em;margin:.25em 0 .2em}
+.rung .rq{font-size:.72em;color:var(--muted);line-height:1.55}
+.rung.r0{height:7.5em}.rung.r1{height:9em}.rung.r2{height:10.5em}.rung.r3{height:12em}.rung.r4{height:13.5em}
+.rung.ghost{border-style:dashed;opacity:.25;background:var(--bg)}
+.rung.ghost.lit{opacity:.6}
+.lid{position:absolute;left:-5%;right:-5%;top:-1em;height:.65em;border-radius:5px;background:var(--ink);opacity:0;transition:opacity .6s .4s}
+.lidnote{
+  position:absolute;top:-3.1em;left:50%;transform:translateX(-50%) rotate(-2deg);
+  white-space:nowrap;font-size:.7em;font-weight:700;letter-spacing:.1em;
+  background:var(--yellow);border:2.5px solid var(--ink);border-radius:9px;padding:.2em .8em;
+  opacity:0;transition:opacity .6s .8s;
+}
+.rung.lit .lid,.rung.lit .lidnote{opacity:1}
+.cells9{display:flex;gap:5px;margin-top:.6em}
+.cells9 .cc{width:.9em;height:.9em;border-radius:4px;border:2px solid var(--line);background:var(--paper);transition:background .4s,border-color .4s}
+.cells9 .cc.f{background:var(--green-soft);border-color:var(--ink)}
+.cells9 .cc.x{background:var(--red-soft);border-color:var(--ink)}
+.iv{display:grid;grid-template-columns:1fr 1fr;gap:clamp(16px,2vw,40px);max-width:58em;margin:1.4em 0}
+.iv .col{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:1.1em 1.4em}
+.iv .col h4{font-weight:700;letter-spacing:.06em;font-size:.95em;margin-bottom:.6em}
+.iv .col.ok{background:var(--green-soft)}
+.iv .col.no{background:var(--yellow-soft)}
+.iv .col ul{list-style:none;font-size:.88em}
+.iv .col li{padding:.35em 0}
+.iv .col li .why{color:var(--muted);font-size:.85em}
+/* ---------- s3 demo ---------- */
+#s3 .chartwrap{
+  margin:1.3em 0;max-width:min(92vw,1250px);
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+  padding:clamp(12px,1.3vw,22px);
+}
+#s3 svg text{font-family:var(--mono)}
+.axis{fill:#6F6A5E;font-size:11.5px}
+.strip-title{fill:#14120F;font-size:13px;font-weight:700;letter-spacing:.5px}
+.anno{fill:#F2542D;font-size:12px;font-weight:700}
+.datahead{display:flex;align-items:center;gap:1em;flex-wrap:wrap;margin-bottom:.4em}
+.statrow{display:flex;gap:clamp(14px,2vw,34px);margin:1.3em 0;flex-wrap:wrap}
+.stat{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:.7em 1.2em}
+.stat .v{font-family:var(--mono);font-weight:700;font-size:clamp(22px,2.4vw,38px)}
+.stat .v em{font-style:normal;font-size:.55em;color:var(--muted);margin-left:.15em}
+.stat .k{font-size:.72em;color:var(--muted);font-weight:700;margin-top:.15em}
+.stat.low{background:var(--violet-soft)}
+/* ranking */
+.rank{max-width:min(92vw,1100px)}
+.rank .rrow{
+  display:grid;grid-template-columns:2.2em minmax(14em,20em) 1fr auto;gap:1em;align-items:center;
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);
+  padding:.42em 1em;margin:.45em 0;font-size:.88em;
+  opacity:0;transform:translateX(-14px);transition:opacity .5s,transform .5s;
+}
+.rank .rrow.on2{opacity:1;transform:none}
+.rank .rrow .pos{font-family:var(--mono);font-weight:700;font-size:1.1em}
+.rank .rrow .rt{font-weight:700;line-height:1.35}
+.rank .rrow .bar{height:14px;background:var(--bg);border:2px solid var(--ink);border-radius:6px;overflow:hidden}
+.rank .rrow .bar i{display:block;height:100%;background:var(--cobalt)}
+.rank .rrow .fx{font-family:var(--mono);font-size:.72em;color:var(--muted);white-space:nowrap}
+.rank .rrow .fx b{color:var(--violet)}
+.rank .rrow.accr{background:var(--yellow-soft)}
+.covcard{
+  display:inline-flex;gap:1em;flex-wrap:wrap;margin-top:.8em;
+  font-family:var(--mono);font-size:.75em;font-weight:700;
+  background:var(--paper);border:2.5px dashed var(--ink);border-radius:10px;padding:.5em 1em;
+}
+.covcard .cs{color:var(--green)}
+.covcard .cu{color:var(--red)}
+/* demo map */
+.demogrid{display:grid;grid-template-columns:minmax(0,7fr) minmax(0,5fr);gap:clamp(14px,1.6vw,28px);align-items:start;max-width:min(94vw,1360px)}
+.mapwrap{position:relative}
+#maplinks{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0}
+.tmap{position:relative;z-index:1;display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(10px,1.2vw,20px);align-items:stretch}
+.tmap .root{
+  background:var(--paper);border:2.5px solid var(--ink);border-radius:var(--r);box-shadow:var(--sh-sm);
+  padding:.6em .8em;font-size:.78em;cursor:pointer;position:relative;
+  transition:transform .15s,box-shadow .15s,background .3s;
+}
+.tmap .root:hover{transform:translate(-2px,-2px);box-shadow:5px 5px 0 var(--ink)}
+.tmap .root.sel{background:var(--cobalt-soft);box-shadow:5px 5px 0 var(--cobalt)}
+.tmap .root.pulse{background:var(--violet-soft)}
+.tmap .root .rt{font-weight:700;line-height:1.35}
+.tmap .root .rg{font-family:var(--mono);font-size:.74em;color:var(--muted);margin-top:.35em}
+.tmap .root .sbar{height:7px;background:var(--bg);border:2px solid var(--ink);border-radius:4px;margin-top:.5em;overflow:hidden}
+.tmap .root .sbar i{display:block;height:100%;background:var(--cobalt)}
+.tmap .root.acc{background:var(--yellow-soft)}
+.tmap .root .cobadge{
+  display:none;position:absolute;top:-.9em;right:-.5em;transform:rotate(3deg);
+  background:var(--violet);color:#fff;border:2.5px solid var(--ink);border-radius:9px;
+  font-size:.74em;font-weight:700;padding:.05em .5em;box-shadow:2px 2px 0 var(--ink);
+}
+.bodyon .tmap .root .cobadge{display:block}
+.tmap .hub{
+  background:var(--cobalt);color:#fff;border-radius:var(--r);box-shadow:var(--sh);border:var(--bd);
+  padding:.9em 1em;text-align:center;display:flex;flex-direction:column;justify-content:center;
+}
+.tmap .hub .ht{font-weight:700;letter-spacing:.18em;font-size:1em}
+.tmap .hub .hd{font-family:var(--mono);font-size:.62em;opacity:.85;margin-top:.3em}
+.bodybar{display:flex;gap:.45em;flex-wrap:wrap;margin-top:.9em;align-items:center}
+.bodybar .bl{font-size:.75em;font-weight:700;margin-right:.3em}
+.bodybar .bday{
+  font-family:var(--mono);font-size:.72em;font-weight:700;cursor:pointer;
+  border:2px solid var(--ink);border-radius:8px;
+  padding:.15em .55em;box-shadow:2px 2px 0 var(--ink);
+  transition:transform .12s;background:var(--paper);color:var(--ink);
+}
+.bodybar .bday.t-multi{background:var(--violet);color:#fff}
+.bodybar .bday.t-single{background:var(--violet-soft)}
+.bodybar .bday.t-none{background:var(--paper)}
+.bodybar .bday.t-out{background:var(--bg);border-style:dashed;box-shadow:none;color:var(--muted)}
+.bodybar .bday:hover{transform:translate(-1px,-1px)}
+.bodybar .bday.sel{outline:3px solid var(--yellow)}
+.panel{
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+  padding:clamp(14px,1.5vw,24px);min-height:22em;font-size:.88em;
+}
+.panel .ph{font-weight:700;font-size:1.2em;line-height:1.4}
+.panel .prow{margin:.7em 0;display:flex;gap:.5em;flex-wrap:wrap;align-items:center}
+.panel .why{display:inline-block;border:2px solid var(--ink);border-radius:8px;background:var(--cobalt-soft);padding:.05em .6em;font-size:.8em;font-weight:700;margin:.15em .2em .15em 0}
+.panel .sec{font-size:.72em;font-weight:700;letter-spacing:.1em;color:var(--muted);margin:1.1em 0 .4em}
+.panel .etl{position:relative;height:64px}
+.panel .etl svg{width:100%;height:100%;display:block}
+.panel .bb{
+  font-family:var(--mono);font-size:.8em;border-top:2.5px dashed var(--line);
+  margin-top:1em;padding-top:.8em;
+}
+.panel .bb b{color:var(--violet)}
+.panel .empty{color:var(--muted);padding:2em 0;text-align:center}
+.panel .dk{display:grid;grid-template-columns:1fr 1fr;gap:.5em 1.2em;font-family:var(--mono);font-size:.85em;margin:.6em 0}
+.panel .dk .dv2{font-weight:700}
+.democtl{display:flex;gap:1em;align-items:center;flex-wrap:wrap;margin:.4em 0 .9em}
+#bodytoggle.onb{background:var(--violet);color:#fff}
+/* ---------- s4 correspondence ---------- */
+.maprows{display:flex;flex-direction:column;gap:clamp(10px,1.3vh,18px);max-width:64em}
+.mr{
+  display:grid;grid-template-columns:minmax(9em,auto) 1fr;gap:clamp(10px,1.4vw,26px);
+  align-items:center;background:var(--paper);border:var(--bd);border-radius:var(--r);
+  box-shadow:var(--sh-sm);padding:.75em 1.2em;
+}
+.mr .nm{font-family:var(--kai);font-weight:700;font-size:clamp(17px,1.8vw,28px);white-space:nowrap}
+.mr .sys{font-size:.92em;line-height:1.7}
+.mr .sys b{font-weight:700}
+.mr.b1{background:var(--violet-soft)}
+.mr.b2{background:var(--cobalt-soft)}
+.mr.b3{background:var(--red-soft)}
+.mr.b4{background:var(--yellow-soft)}
+#calmstring{
+  width:min(88vw,1100px);height:auto;display:block;margin-top:1.4em;
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+}
+/* ---------- appendix ---------- */
+#appendix{
+  position:fixed;inset:0;z-index:60;background:rgba(247,242,231,.97);
+  display:none;overflow:auto;padding:clamp(30px,5vh,70px) clamp(24px,8vw,140px);
+}
+#appendix.open{display:block}
+#appendix .inner{max-width:62em;margin:0 auto}
+#appendix h2{margin:1.2em 0 .4em}
+#appendix .close{
+  position:fixed;top:20px;right:30px;font:inherit;font-weight:700;font-size:.85em;
+  cursor:pointer;background:var(--paper);border:var(--bd);border-radius:999px;
+  padding:.4em 1.2em;box-shadow:var(--sh-sm);
+}
+.qcards{display:grid;grid-template-columns:repeat(3,1fr);gap:1.2em;margin:1em 0 1.6em}
+.qcards .qc{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:1em 1.2em}
+.qcards .qc .qq{font-family:var(--kai);font-weight:700;font-size:1.25em;letter-spacing:.1em}
+.qcards .qc .qn{font-size:.78em;color:var(--muted);margin-top:.5em;line-height:1.7}
+#appendix table{
+  width:100%;border-collapse:separate;border-spacing:0;margin:1em 0 2em;font-size:.82em;
+  background:var(--paper);border:var(--bd);border-radius:var(--r);overflow:hidden;box-shadow:var(--sh-sm);
+}
+#appendix th{text-align:left;background:var(--yellow-soft);font-weight:700;letter-spacing:.08em;font-size:.85em;padding:.7em .9em;border-bottom:3px solid var(--ink)}
+#appendix td{padding:.7em .9em;vertical-align:top;line-height:1.6}
+#appendix tbody tr:not(:last-child) td{border-bottom:1px solid var(--line)}
+#appendix td .nm{font-weight:700}
+#appendix td.mono{font-family:var(--mono);font-size:.9em;white-space:nowrap}
+/* ---------- tooltip ---------- */
+#tip{
+  position:fixed;z-index:50;pointer-events:none;opacity:0;transition:opacity .15s;
+  background:var(--paper);border:2.5px solid var(--ink);border-radius:9px;box-shadow:var(--sh-sm);
+  padding:.6em .9em;font-size:.72em;line-height:1.7;color:var(--muted);
+  font-family:var(--mono);white-space:nowrap;
+}
+#tip .d{color:var(--ink);font-weight:700}
+/* ---------- reduced motion / mobile ---------- */
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}
+}
+@media (max-width:900px){
+  body{overflow:auto}
+  .scene{position:relative;inset:auto;min-height:100dvh;opacity:1;visibility:visible;transform:none}
+  .scene::after{display:none}
+  [data-step]{opacity:1!important;transform:none!important;position:static!important;visibility:visible!important;margin:7vh 0}
+  .step-solo .stage,.step-solo .stagewrap{min-height:0}
+  #s0 .grid,#s1 .grid,.iv,.demogrid{grid-template-columns:1fr}
+  .mr{grid-template-columns:1fr}
+  .gates{grid-template-columns:1fr 1fr}
+  .ladder{grid-template-columns:repeat(5,minmax(90px,1fr));overflow-x:auto;padding-top:3em}
+  .tmap{grid-template-columns:1fr 1fr}
+  .tmap .hub{grid-column:1/-1;order:-1}
+  #maplinks{display:none}
+  #hint{display:none}
+  .qcards{grid-template-columns:1fr}
+  .rank .rrow{grid-template-columns:2em 1fr;grid-template-rows:auto auto auto}
+  .rank .rrow .bar,.rank .rrow .fx{grid-column:1/-1}
+}
+</style>
+</head>
+<body data-palette="#4B4BE8,#0BA84A,#A66BC2,#F2542D">
+<canvas id="water" aria-hidden="true"></canvas>
+
+<header id="hud">
+  <span id="brand">唯 识</span>
+  <span id="actlabel"></span>
+</header>
+<div id="bar"></div>
+<div id="hint"><kbd>→</kbd>推进<kbd>←</kbd>回退<kbd>↑</kbd><kbd>↓</kbd>切幕<kbd>A</kbd>附录</div>
+
+<!-- ================= S0 · 一天 ================= -->
+<section class="scene step-solo" id="s0" data-steps="4" data-title="" data-mark="身">
+  <div class="stage">
+
+    <div data-step="0">
+      <div class="badge">静心院沙龙 · 二〇二六年八月十八日</div>
+      <h1 style="margin-top:.5em">一天下来,<br>我留下了四种信号</h1>
+      <div class="traces" style="margin-top:1.4em">
+        <span class="stick"><span class="sk">AGENT SESSIONS</span><span class="sv">× 2</span></span>
+        <span class="stick"><span class="sk">MEETING</span><span class="sv">× 1</span></span>
+        <span class="stick"><span class="sk">CALENDAR</span><span class="sv">× 1</span></span>
+        <span class="stick"><span class="sk">BODY · READINESS</span><span class="sv">73 ↓</span></span>
+      </div>
+      <p class="lead">agent 会话、会议记录、日历,和一条紫色的身体线(08/12 真实数据)。<br>它们都是日常自动发生的事件,<strong>默默记录着我们怎么应对这个被自己念头渲染出来的世界</strong>。其中那条紫色的,叫生物因果信号。</p>
+    </div>
+
+    <div data-step="1">
+      <h1>第二天早上,<br>先做哪件事?</h1>
+      <p class="lead" style="margin:1em 0 1.6em">四种信号都在,却没有一个直接告诉我答案。说话的是我的判断,还是我的疲惫?</p>
+      <p class="lead"><span class="hi-y">我们做的产品,把这些信号自动排成任务的先后。</span>今晚最后会点开给大家看。</p>
+      <div class="paths" style="margin-top:1.8em;display:flex;gap:1.4em;flex-wrap:wrap">
+        <button class="btn primary" id="go-walk">跟着走</button>
+        <button class="btn" id="go-live">直接看 Demo</button>
+      </div>
+    </div>
+
+    <div data-step="2">
+      <h2>市场越丰裕,<span class="u">协调的生意越大</span></h2>
+      <div class="abun">
+        <div class="arow">
+          <div class="clu" data-kind="page"></div>
+          <div class="arr"></div>
+          <div class="co">Google</div>
+        </div>
+        <div class="arow">
+          <div class="clu" data-kind="vid"></div>
+          <div class="arr"></div>
+          <div class="co dark">TikTok</div>
+        </div>
+        <div class="arow">
+          <div class="clu" data-kind="agt"></div>
+          <div class="arr"></div>
+          <div class="co q">?</div>
+        </div>
+      </div>
+      <div class="daywrap" style="margin-top:1.2em;align-items:center">
+        <div class="bigstat" style="background:var(--cobalt);transform:rotate(1.5deg);padding:.6em 1em">
+          <span class="k">TOKEN PRICE</span>
+          <span class="v" style="font-size:clamp(30px,3vw,52px)">÷10</span>
+          <span class="s">every year</span>
+        </div>
+        <p class="lead" style="max-width:22em"><strong>贵的不再是做事,是 attention 放在哪。</strong></p>
+      </div>
+    </div>
+
+    <div data-step="3">
+      <h2>先借大家一分钟,吸四秒,吐八秒</h2>
+      <div class="grid">
+        <div class="expcard card">
+          <h3>四八呼吸</h3>
+          <ol>
+            <li>坐直,肩膀放松,东西放下</li>
+            <li>用鼻子<em>吸气四秒</em>,看着弦升上去</li>
+            <li>用嘴<em>慢慢吐八秒</em>,看着弦落下来</li>
+            <li>三轮之后,<em>再想一下你今天最挂心的那件事</em></li>
+          </ol>
+          <p class="safety">节奏不舒服就回到自然呼吸,全程可随时退出。是体验,不是诊断。彩蛋:DaoBrew 最早的产品,就是教人呼吸的。</p>
+        </div>
+        <div id="breath">
+          <canvas id="bstring" width="440" height="180" aria-label="呼吸弦:吸气上行四秒,吐气下行八秒"></canvas>
+          <div class="bmeta"><span id="bphase">·</span><span id="bcount" class="num"></span></div>
+          <button class="btn" id="ringgo">开始 · 三轮</button>
+          <p class="small" style="max-width:16em;text-align:center">同一件挂心的事,呼吸前后,分量一样吗?</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ================= S1 · 科学 ================= -->
+<section class="scene step-solo" id="s1" data-steps="4" data-title="科学 · 身体怎么改写同一件事" data-mark="境">
+  <div class="stage">
+
+    <div data-step="0">
+      <h2>同一封邮件,<span class="u">谁半夜把它改凶了?</span></h2>
+      <div class="grid">
+        <div>
+          <div class="badge fict">示例任务 · 群体实验结论,非个人诊断</div>
+          <div class="sleepswitch" role="group" aria-label="切换昨晚睡眠状态">
+            <button class="btn sel" id="sw-rest">昨晚 8.5 小时</button>
+            <button class="btn" id="sw-tired">昨晚 4.2 小时</button>
+          </div>
+          <div class="taskcard">
+            <div class="tt">回复那封拖了三天的邮件</div>
+            <div class="meta">明早要答复 · 不算难,但躲不掉</div>
+            <div class="feel">
+              <span class="fword" id="feelword">十分钟能搞定</span>
+              <span class="fnote">此刻它「显得」如何<br>(示意,非系统输出)</span>
+            </div>
+          </div>
+          <p class="small" style="margin-top:1em">两个睡眠数字都取自我后面 Demo 的真实记录:最长 9.9 小时,最短 4.2 小时。</p>
+        </div>
+        <p class="lead">邮件没变。变的是<strong>看邮件的那个你</strong>:睡饱的你觉得十分钟能回,没睡的你觉得它像一场审判。</p>
+      </div>
+    </div>
+
+    <div data-step="1">
+      <h2>没睡好的那天,你的大脑里发生了什么</h2>
+      <div class="grid">
+        <div class="brainbox card">
+          <svg viewBox="0 0 460 220" role="img" aria-label="睡眠剥夺下杏仁核反应放大、前额叶调节减弱示意图">
+            <line class="link" id="blink" x1="140" y1="110" x2="300" y2="110" stroke-width="2.5"/>
+            <circle class="pfc" cx="110" cy="110" r="46" stroke-width="2.5"/>
+            <circle class="amyg" cx="320" cy="110" r="26" stroke-width="2.5"/>
+            <text class="blabel" x="110" y="106" text-anchor="middle">前额叶</text>
+            <text class="bstat" x="110" y="124" text-anchor="middle">负责踩刹车</text>
+            <text class="blabel" x="320" y="106" text-anchor="middle">杏仁核</text>
+            <text class="bstat warnb" x="320" y="124" text-anchor="middle" id="amygstat">报警正常</text>
+            <text class="bstat" x="218" y="94" text-anchor="middle" id="linkstat">刹车线路在线</text>
+          </svg>
+        </div>
+        <div>
+          <p class="lead">科学家让五千多个健康人少睡觉,这样的实验五十年里反复做了 154 次,结论一致:<strong>睡眠损失会压低好心情、抬高焦虑</strong>。做一次准一次,不是巧合。</p>
+          <p class="lead" style="margin-top:1em">缺觉时,报警的杏仁核反应放大约 <strong class="num">60%</strong>,踩刹车的前额叶跟它断线。所以列表上每件事都显得更凶。睡一场深觉,线路第二天修复。</p>
+          <p class="cite">Palmer et al. 2024 · Yoo et al. 2007 · Ben Simon et al. 2020</p>
+        </div>
+      </div>
+    </div>
+
+    <div data-step="2">
+      <h2>三条边界,也是产品的三条规矩</h2>
+      <ul class="honest">
+        <li><strong>身体信号读不出你在想什么。</strong>它连你是愤怒还是兴奋都分不清,更读不出哪个任务重要。所以它永远不碰「任务是什么」。<span class="evd meta">上百项研究的共识</span></li>
+        <li><strong>身体状态改变的是「威胁感」,不保证判断更对。</strong>所以它只做一件事:在你可能放大威胁的时候,提醒你重看一眼,不替你决定。<span class="evd theo">睡眠实验的边界</span></li>
+        <li><strong>一次巧妙的实验靠不住。</strong>power pose、面部反馈这些名场面都没能复现。所以我们只信反复验证,系统里的证据也要一次一次攒。<span class="evd exp">复现危机的教训</span></li>
+      </ul>
+    </div>
+
+    <div data-step="3">
+      <h2>所以,身体只做有证据做的事</h2>
+      <div class="bound">
+        <div class="b no"><div class="h">不许碰</div><div class="v">任务是什么(membership)</div></div>
+        <div class="b yes"><div class="h">只能调</div><div class="v">为什么是现在(why-now)</div></div>
+      </div>
+      <p class="lead">当你的状态可能在放大威胁,产品只轻轻问一句:<br><strong>这个判断,是你做的,还是你的疲惫替你做的?</strong>要不要睡一觉再看。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ================= S2 · 因果 ================= -->
+<section class="scene step-solo" id="s2" data-steps="6" data-title="因果 · 什么时候才有资格说「是它害的」" data-mark="因">
+  <div class="stagewrap">
+
+    <div data-step="0">
+      <div class="badge fict">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em">「肯定是深夜改稿害的!」</h2>
+      <div class="lanes" id="lanes0"></div>
+      <p class="lead">三周里,「深夜改稿」和「第二天恢复差」多次撞在同一天。人脑一秒钟就定了案。<br>可同一晚你还熬了夜、见了朋友、吃了火锅,到底是哪一个?这一层只配叫<strong>共现</strong>:只做背景,不参与排序。</p>
+    </div>
+
+    <div data-step="1">
+      <div class="badge fict">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em">查账:<span class="u">用除法,不用直觉</span></h2>
+      <div class="ratio">
+        <div class="frac">
+          <div class="top">恢复差的日子里,「深夜改稿」出现率</div>
+          <div class="bot">正常日子里,「深夜改稿」出现率</div>
+          <div class="cap">正常日,就是人脑习惯丢掉的分母</div>
+        </div>
+        <div class="dial">
+          <svg viewBox="0 0 120 78">
+            <path class="arc-t" d="M12,66 A52,52 0 0 1 108,66" stroke-width="6"/>
+            <path class="arc-f" id="dialfill" d="M12,66 A52,52 0 0 1 108,66" stroke-width="6" stroke-dasharray="163.4" stroke-dashoffset="163.4"/>
+            <line class="thr" x1="86" y1="22" x2="93" y2="13" stroke-width="2.5"/>
+            <text class="dt" x="99" y="11">2.0×门槛</text>
+            <text class="dv" x="60" y="56" text-anchor="middle" id="dialnum">0.0×</text>
+            <text class="dt" x="60" y="70" text-anchor="middle">对照率</text>
+          </svg>
+        </div>
+        <p class="lead" style="max-width:20em">还要同时凑齐:<br><span class="num">≥ 3</span> 个真实覆盖日<br>每个支持日 <span class="num">≥ 2</span> 个独立来源互相印证</p>
+      </div>
+      <p class="lead">比率防「话多的一天淹没统计」;天数防「一次巧合当规律」;来源防「孤证」。</p>
+    </div>
+
+    <div data-step="2">
+      <div class="badge fict">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em">七道闸门,各防一种错</h2>
+      <div class="gates" id="gates"></div>
+      <p class="lead" id="gateverdict" style="opacity:0;transition:opacity .8s">七门全过,它也只敢盖四个字:<span class="stamp green">归因候选</span>。被动记录永远排不掉共同原因,这个天花板写死在代码里。</p>
+    </div>
+
+    <div data-step="3">
+      <div class="badge fict">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em">阶梯只能攒着上,降级是自动的</h2>
+      <div class="ladder" id="ladder">
+        <div class="rung r0"><div class="rc">C0</div><div class="rn">无数据</div><div class="rq">什么都还没有</div></div>
+        <div class="rung r1"><div class="rc">C1</div><div class="rn">相关 / 共现</div><div class="rq">「我觉得」,只做背景</div></div>
+        <div class="rung r2"><div class="lid"></div><div class="lidnote">被动观察的天花板 · 代码封顶</div><div class="rc">C2</div><div class="rn">归因候选</div><div class="rq">账查过了,值得怀疑</div></div>
+        <div class="rung r3 ghost"><div class="rc">C3</div><div class="rn">因果假设</div><div class="rq">改变条件后,2 次独立确认</div><div class="cells9" id="cellsA"></div></div>
+        <div class="rung r4 ghost"><div class="rc">C4</div><div class="rn">已验证模式</div><div class="rq">5 次确认零矛盾;两次矛盾,一夜打回</div><div class="cells9" id="cellsB"></div></div>
+      </div>
+      <p class="lead">C3、C4 靠后续真实事件驱动,每夜重算,<strong>不许手工加分</strong>。</p>
+    </div>
+
+    <div data-step="4">
+      <div class="badge fict">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em">什么才算干预</h2>
+      <div class="iv">
+        <div class="col ok">
+          <h4>算:改的是原因那一侧</h4>
+          <ul>
+            <li>把深夜改稿固定挪到上午</li>
+            <li>取消或移交那个承诺</li>
+            <li>改会议结构,让截稿周不再通宵</li>
+          </ul>
+        </div>
+        <div class="col no">
+          <h4>不算:补的是结果那一侧</h4>
+          <ul>
+            <li>多睡一觉 <span class="why">舒服,但验证不了原因</span></li>
+            <li>心里踏实了 <span class="why">感觉不是证据</span></li>
+            <li>事后挑个变好的指标 <span class="why">判定标准必须在干预前写死</span></li>
+          </ul>
+        </div>
+      </div>
+      <p class="lead">验证的单位不是「好日子」,是<strong>同样的坏条件再来一次时,身体这次怎么说</strong>。</p>
+    </div>
+
+    <div data-step="5">
+      <p class="quote">现行熏种子<br>种子生现行</p>
+      <p class="lead" style="margin-top:1.2em">行为沉淀成习惯,习惯又塑造下一次行为。<br><strong>熏习需要重复,呈现不等于定论。</strong>这是类比,不是互证。</p>
+      <p class="small" style="margin-top:1.4em">完整的七道闸门 × 宣称阶梯对照表,按 <span class="num">A</span> 键查看附录。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ================= S3 · Demo ================= -->
+<section class="scene step-solo" id="s3" data-steps="5" data-title="Demo · 真实信号 × 真实 Task Map" data-mark="实">
+  <div class="stagewrap">
+
+    <div data-step="0">
+      <div class="datahead">
+        <h2 style="margin:0">四种信号,同一根时间轴</h2>
+        <span class="badge real">REAL · AGENT SESSIONS / MEETINGS / CALENDAR / BODY</span>
+      </div>
+      <div class="chartwrap" id="chart-lanes"></div>
+      <p class="lead">这些事件每天自动发生,默默记录着我们怎么应对各自的世界。紫色 ▲ 是身体侧的低恢复日(只跟我自己的基线比)。<strong>黑圈,是工作证据和低恢复撞在同一天的日子。</strong></p>
+    </div>
+
+    <div data-step="1">
+      <div class="datahead">
+        <h2 style="margin:0">现在,任务是怎么排的</h2>
+        <span class="badge">ENGINE SCORE · FROZEN GENERATION</span>
+      </div>
+      <div class="rank" id="rank"></div>
+      <div class="covcard" id="covcard">SOURCES&nbsp; <span class="cs">agent_session ✓</span> <span class="cs">meeting_notes ✓</span> <span class="cs">calendar ✓</span> <span class="cs">body · oura ✓</span></div>
+      <p class="lead" style="margin-top:.9em">这份排序来自工作侧证据。<strong>今晚示范的,是把生物因果信号叠上去之后,它会怎么变。</strong></p>
+    </div>
+
+    <div data-step="2">
+      <div class="datahead">
+        <h2 style="margin:0">其中一条信号:我的身体,52 天</h2>
+        <span class="badge real">REAL DATA · OURA · FROZEN 2026-08-17</span>
+      </div>
+      <div class="chartwrap" id="chart-readiness"></div>
+      <div class="statrow">
+        <div class="stat"><div class="v num">79</div><div class="k">READINESS MEAN</div></div>
+        <div class="stat"><div class="v num">70<em>ms</em></div><div class="k">HRV MEAN</div></div>
+        <div class="stat low"><div class="v num">4.2<em>h</em></div><div class="k">SHORTEST NIGHT</div></div>
+        <div class="stat low"><div class="v num">6<em>d</em></div><div class="k">CONSECUTIVE BELOW BASELINE</div></div>
+      </div>
+    </div>
+
+    <div data-step="3">
+      <div class="datahead">
+        <h2 style="margin:0">可以点:<span class="u">Task Map × 身体信号</span></h2>
+        <span class="badge">FROZEN · AUG 17, 23:41 · LAST FULL GENERATION</span>
+      </div>
+      <div class="democtl">
+        <button class="btn" id="bodytoggle">OVERLAY BODY SIGNAL</button>
+        <span class="small">点任一工作线看证据与优先级 · 点下方日期看那天发生了什么</span>
+      </div>
+      <div class="demogrid">
+        <div>
+          <div class="mapwrap">
+            <svg id="maplinks"></svg>
+            <div class="tmap" id="tmap"></div>
+          </div>
+          <div class="bodybar" id="bodybar"></div>
+        </div>
+        <div class="panel" id="panel"><div class="empty">Click a workstream, or a day below</div></div>
+      </div>
+    </div>
+
+    <div data-step="4" class="fin" style="max-width:38em">
+      <p class="quote">宁可只说共现<br>也不编一个因果</p>
+      <p class="lead" style="margin-top:1.2em">刚才所有联动都停在共现层:七道闸门还在前面等它。<br>身体可以先响,但不替你判案。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ================= S4 · 对应 · 收束 ================= -->
+<section class="scene step-solo" id="s4" data-steps="5" data-title="收束 · 念头渲染世界" data-mark="识">
+  <div class="stage">
+
+    <div data-step="0">
+      <div class="badge fict">意象 · 弦论</div>
+      <h2 style="margin-top:.6em">弦论说:万物的差异,<span class="u">只是振动频率的差异</span></h2>
+      <canvas id="calmstring" width="1100" height="230" aria-label="一根频率渐升的振动弦"></canvas>
+      <p class="lead" style="margin-top:1.1em;font-size:clamp(19px,1.8vw,29px)"><strong>你也是弦。</strong>念头,是弦上的一次振动。</p>
+    </div>
+
+    <div data-step="1">
+      <div class="badge fict">比喻</div>
+      <h2 style="margin-top:.6em">阿赖耶识,像一个参数空间</h2>
+      <p class="lead">经验、习气、倾向,都是参数;每一个念头,是这套参数<strong>渲染出来的一帧</strong>。<br>同一件事进来,参数不同,渲染出来的世界就不同。</p>
+      <p class="lead" style="margin-top:1em"><span class="hi-y">频率变了,世界就换了脸色。</span>刚才的呼吸,你们已经亲手试过一次。</p>
+    </div>
+
+    <div data-step="2">
+      <h2>我们管理的,<span class="u">从来不是任务</span></h2>
+      <p class="lead">是自己的念头,是 attention 放在哪。<br>把最糟心的事找出来:身体在响的、优先级最高的,交给 AI 去执行。不是为了做更多的事,是为了那件更老的事:</p>
+      <p class="quote" style="margin-top:.6em">变清静</p>
+      <p class="lead" style="margin-top:.8em">就像刚才的呼吸:你改的只是频率,身体跟着松了。念头也一样。</p>
+    </div>
+
+    <div data-step="3">
+      <h2>这套分层,<span class="u">一千三百年前就画好了</span></h2>
+      <div class="maprows">
+        <div class="mr b1"><span class="nm">前五识</span><span class="sys">刚才那条<b>紫色的身体线</b>:心率、HRV、睡眠,感官第一时间「感到」的</span></div>
+        <div class="mr b2"><span class="nm">第六意识</span><span class="sys">会议、agent 会话、日历长成的那张<b>任务地图</b>:想事、排事的那层</span></div>
+        <div class="mr b3"><span class="nm">第七末那识</span><span class="sys"><b>why-now</b>:「这事对我意味着什么」,也是疲惫放大焦虑的地方</span></div>
+        <div class="mr b4"><span class="nm">第八阿赖耶识</span><span class="sys"><b>参数空间</b>:证据要攒,升级靠重复。现行熏种子,种子生现行</span></div>
+      </div>
+      <p class="small" style="margin-top:1.2em">工程对应,不是教义。接下来交给老师。</p>
+    </div>
+
+    <div data-step="4" class="fin">
+      <p class="quote kai">如涛波依水</p>
+      <p class="lead" style="margin-top:1.2em">身体的紧、念头的急、任务的重,是同一条河上同时翻起的波浪。<br>谢谢大家。</p>
+    </div>
+
+  </div>
+</section>
+
+<!-- ================= 附录 ================= -->
+<aside id="appendix" aria-label="附录">
+  <button class="close" id="appx-close">关闭 Esc</button>
+  <div class="inner">
+    <h2>附录 · 经文出处</h2>
+    <div class="qcards">
+      <div class="qc"><div class="qq">触谓三和</div><div class="qn">《成唯识论》卷三:根、境、识更相随顺,故名三和。一次「感到」由三个条件共同成立,不是身体上报、意识批阅。</div></div>
+      <div class="qc"><div class="qq">率尔 → 寻求 → 决定</div><div class="qn">《瑜伽师地论》三心,窥基五心章。初触境的率尔心尚无意义判断;意义在几拍之后成形。</div></div>
+      <div class="qc"><div class="qq">执受根身 · 同安危</div><div class="qn">《成唯识论》卷二。阿赖耶识摄有根身为自体,与身体安危与共;「恒转如瀑流」,是流不是库。</div></div>
+    </div>
+    <h2>附录 · 七道证据闸门</h2>
+    <table>
+      <thead><tr><th style="width:11em">闸门</th><th>防什么错</th><th style="width:16em">通过标准</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">citation</td><td><span class="nm">防编故事:</span>每条归因必须能在原始会议记录里逐字找到出处</td><td>引文可回溯</td></tr>
+        <tr><td class="mono">title_ban</td><td><span class="nm">防贴标签:</span>日历标题只能当背景,不能当结论</td><td>不以事件标题立论</td></tr>
+        <tr><td class="mono">time_plausibility</td><td><span class="nm">防翻旧账:</span>证据必须落在信号当天的本地日</td><td>当日证据;多日历史只算复现背景</td></tr>
+        <tr><td class="mono">biometrics_firewall</td><td><span class="nm">防脑补身体:</span>身体模式必须来自真实设备数据,不能从文字里想象</td><td>体征数据实测</td></tr>
+        <tr><td class="mono">recurrence_cross_source</td><td><span class="nm">防孤证:</span>需要第二来源独立印证同一线索</td><td>跨来源复现</td></tr>
+        <tr><td class="mono">non_clinical_language</td><td><span class="nm">防越权诊断:</span>出现临床措辞直接整条拒绝</td><td>禁 caused / diagnose / burnout 等</td></tr>
+        <tr><td class="mono">enrichment gate</td><td><span class="nm">防话多的一天、单次巧合、孤证:</span>用对照率不用原始计数</td><td class="mono">≥2.0× · ≥3 backed days · 每日≥2 来源</td></tr>
+      </tbody>
+    </table>
+    <h2>附录 · 宣称阶梯</h2>
+    <table>
+      <thead><tr><th style="width:11em">级别</th><th>口语版</th><th style="width:18em">升降规则</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">correlation</td><td>「我觉得」:只做背景,不参与排序,永不晋级</td><td>共现即得</td></tr>
+        <tr><td class="mono">attribution_candidate</td><td>「账查过了,值得怀疑」:被动观察的天花板</td><td>七门全过;仍携带共同原因与回归均值两个警示标志</td></tr>
+        <tr><td class="mono">causal_hypothesis</td><td>「改过条件、验证过两次」:才能据此给建议</td><td class="mono">确认≥2 且矛盾≤1</td></tr>
+        <tr><td class="mono">validated_pattern</td><td>「五次都对、一次没错」:才允许个性化</td><td class="mono">确认≥5 且矛盾=0;矛盾≥2 自动回落</td></tr>
+      </tbody>
+    </table>
+  </div>
+</aside>
+
+<div id="tip"></div>
+
+<script>
+"use strict";
+/* ---------- frozen data (injected) ---------- */
+const OURA = [{"d":"2026-06-25","rs":79,"ss":67,"hrv":76,"rhr":44,"tmp":-0.47,"slp":6.51,"stress":0},{"d":"2026-06-26","rs":86,"ss":69,"hrv":85,"rhr":42,"tmp":-0.33,"slp":6.03,"stress":0},{"d":"2026-06-27","rs":87,"ss":87,"hrv":66,"rhr":46,"tmp":0.46,"slp":9.91,"stress":0},{"d":"2026-06-28","rs":77,"ss":67,"hrv":75,"rhr":41,"tmp":-0.27,"slp":7.39,"stress":0},{"d":"2026-06-29","rs":86,"ss":74,"hrv":73,"rhr":43,"tmp":0.01,"slp":7.69,"stress":0},{"d":"2026-06-30","rs":80,"ss":63,"hrv":67,"rhr":41,"tmp":-0.37,"slp":6.22,"stress":3600},{"d":"2026-07-01","rs":72,"ss":54,"hrv":64,"rhr":42,"tmp":-0.75,"slp":5.3,"stress":4500},{"d":"2026-07-02","rs":83,"ss":80,"hrv":58,"rhr":45,"tmp":0.16,"slp":7.17,"stress":3600},{"d":"2026-07-03","rs":73,"ss":75,"hrv":50,"rhr":45,"tmp":0.07,"slp":6.17,"stress":3600},{"d":"2026-07-04","rs":79,"ss":62,"hrv":74,"rhr":40,"tmp":-0.21,"slp":5.29,"stress":2700},{"d":"2026-07-05","rs":73,"ss":82,"hrv":57,"rhr":47,"tmp":0.56,"slp":8.51,"stress":4500},{"d":"2026-07-06","rs":82,"ss":80,"hrv":66,"rhr":45,"tmp":-0.01,"slp":7.14,"stress":11700},{"d":"2026-07-07","rs":81,"ss":68,"hrv":70,"rhr":44,"tmp":0.07,"slp":6.93,"stress":1800},{"d":"2026-07-08","rs":86,"ss":79,"hrv":78,"rhr":41,"tmp":-0.32,"slp":8.59,"stress":11700},{"d":"2026-07-09","rs":79,"ss":70,"hrv":67,"rhr":45,"tmp":-0.17,"slp":6.87,"stress":5400},{"d":"2026-07-10","rs":75,"ss":59,"hrv":90,"rhr":41,"tmp":-0.34,"slp":5.45,"stress":900},{"d":"2026-07-12","rs":74,"ss":63,"hrv":62,"rhr":43,"tmp":0.17,"slp":5.12,"stress":7200},{"d":"2026-07-13","rs":81,"ss":73,"hrv":68,"rhr":42,"tmp":0.42,"slp":8.16,"stress":3600},{"d":"2026-07-14","rs":81,"ss":73,"hrv":66,"rhr":45,"tmp":0.34,"slp":7.38,"stress":4500},{"d":"2026-07-15","rs":73,"ss":55,"hrv":68,"rhr":44,"tmp":-0.33,"slp":5.22,"stress":3600},{"d":"2026-07-16","rs":79,"ss":75,"hrv":69,"rhr":41,"tmp":0.13,"slp":9.0,"stress":5400},{"d":"2026-07-17","rs":76,"ss":64,"hrv":73,"rhr":43,"tmp":-0.16,"slp":5.43,"stress":0},{"d":"2026-07-18","rs":73,"ss":63,"hrv":74,"rhr":44,"tmp":0.07,"slp":5.1,"stress":2700},{"d":"2026-07-19","rs":85,"ss":74,"hrv":90,"rhr":41,"tmp":0.19,"slp":8.94,"stress":16200},{"d":"2026-07-20","rs":81,"ss":76,"hrv":111,"rhr":38,"tmp":-0.22,"slp":7.66,"stress":4500},{"d":"2026-07-21","rs":80,"ss":80,"hrv":75,"rhr":44,"tmp":0.37,"slp":7.98,"stress":9000},{"d":"2026-07-22","rs":79,"ss":73,"hrv":67,"rhr":45,"tmp":0.26,"slp":6.87,"stress":900},{"d":"2026-07-23","rs":88,"ss":77,"hrv":71,"rhr":41,"tmp":0.1,"slp":8.63,"stress":2700},{"d":"2026-07-24","rs":80,"ss":75,"hrv":80,"rhr":41,"tmp":0.46,"slp":7.88,"stress":3600},{"d":"2026-07-25","rs":81,"ss":81,"hrv":85,"rhr":42,"tmp":0.38,"slp":7.98,"stress":4500},{"d":"2026-07-26","rs":88,"ss":82,"hrv":68,"rhr":43,"tmp":0.25,"slp":8.72,"stress":10800},{"d":"2026-07-27","rs":85,"ss":81,"hrv":66,"rhr":44,"tmp":0.2,"slp":8.53,"stress":3600},{"d":"2026-07-28","rs":73,"ss":63,"hrv":53,"rhr":46,"tmp":0.1,"slp":6.06,"stress":3600},{"d":"2026-07-29","rs":84,"ss":76,"hrv":58,"rhr":45,"tmp":0.22,"slp":8.33,"stress":9000},{"d":"2026-07-31","rs":82,"ss":82,"hrv":66,"rhr":46,"tmp":0.3,"slp":8.03,"stress":9900},{"d":"2026-08-01","rs":83,"ss":77,"hrv":60,"rhr":44,"tmp":0.28,"slp":8.18,"stress":6300},{"d":"2026-08-02","rs":80,"ss":77,"hrv":72,"rhr":44,"tmp":0.18,"slp":7.51,"stress":11700},{"d":"2026-08-03","rs":77,"ss":79,"hrv":54,"rhr":47,"tmp":0.23,"slp":7.93,"stress":7200},{"d":"2026-08-04","rs":80,"ss":65,"hrv":69,"rhr":44,"tmp":0.2,"slp":7.36,"stress":2700},{"d":"2026-08-05","rs":86,"ss":72,"hrv":79,"rhr":42,"tmp":0.16,"slp":6.71,"stress":9000},{"d":"2026-08-06","rs":75,"ss":70,"hrv":61,"rhr":45,"tmp":0.45,"slp":6.85,"stress":9900},{"d":"2026-08-07","rs":80,"ss":58,"hrv":74,"rhr":42,"tmp":0.06,"slp":6.42,"stress":9900},{"d":"2026-08-08","rs":79,"ss":74,"hrv":69,"rhr":44,"tmp":0.01,"slp":7.46,"stress":9900},{"d":"2026-08-09","rs":77,"ss":63,"hrv":75,"rhr":43,"tmp":0.03,"slp":5.88,"stress":12600},{"d":"2026-08-10","rs":73,"ss":70,"hrv":60,"rhr":47,"tmp":0.39,"slp":7.09,"stress":9000},{"d":"2026-08-11","rs":72,"ss":59,"hrv":65,"rhr":42,"tmp":0.07,"slp":4.18,"stress":2700},{"d":"2026-08-12","rs":73,"ss":85,"hrv":63,"rhr":45,"tmp":0.54,"slp":8.82,"stress":5400},{"d":"2026-08-13","rs":70,"ss":82,"hrv":48,"rhr":48,"tmp":0.24,"slp":8.38,"stress":3600},{"d":"2026-08-14","rs":67,"ss":60,"hrv":86,"rhr":43,"tmp":0.07,"slp":4.34,"stress":10800},{"d":"2026-08-15","rs":84,"ss":81,"hrv":79,"rhr":42,"tmp":0.15,"slp":7.48,"stress":3600},{"d":"2026-08-16","rs":81,"ss":78,"hrv":77,"rhr":43,"tmp":-0.39,"slp":6.84,"stress":8100},{"d":"2026-08-17","rs":79,"ss":90,"hrv":59,"rhr":43,"tmp":-0.03,"slp":8.52,"stress":0}];
+const DEMO = {
+ "provenance": {
+  "generation": "8a83ec75…(2026-08-17T23:41:06Z, last complete map before the 08-18 rebuild)",
+  "oura": "API v2 export, personally authorized, frozen 2026-08-17",
+  "baselineRule": "trailing 14 recorded days: median - 0.75*stdev, needs >=7 prior values"
+ },
+ "sourceCoverageStart": {
+  "meeting": "2026-07-21",
+  "agent": "2026-07-23",
+  "calendar": "2026-08-04"
+ },
+ "roots": [
+  {
+   "titleEN": "Rebuild the app on the new algorithm (clear legacy tasks)",
+   "titleZH": "实现新算法并清空旧任务后重建应用",
+   "rootScore": 0.27,
+   "taskScoreTotal": 0.142,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.99,
+    "recurrence": 0.286,
+    "sourcePriority": 0,
+    "staleOpen": 0.002,
+    "total": 0.142
+   },
+   "whyNow": [
+    "source-backed root evidence",
+    "top actionable task",
+    "recurs across work context"
+   ],
+   "accepted": true,
+   "openState": "open",
+   "cites": [
+    {
+     "d": "2026-08-17",
+     "k": "manual"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "manual"
+    }
+   ]
+  },
+  {
+   "titleEN": "Investor narrative & DaoBrew market opportunity",
+   "titleZH": "投资人叙事与 DaoBrew 市场机会",
+   "rootScore": 0.374,
+   "taskScoreTotal": 0.206,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.571,
+    "sourcePriority": 0,
+    "staleOpen": 0.4,
+    "total": 0.206
+   },
+   "whyNow": [
+    "recurs across work context",
+    "top actionable task",
+    "source-backed root evidence"
+   ],
+   "accepted": false,
+   "openState": "possibly_open",
+   "cites": [
+    {
+     "d": "2026-08-06",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-05",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-06",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-05",
+     "k": "claude_session"
+    }
+   ]
+  },
+  {
+   "titleEN": "Sentinel Detonation demo runbook",
+   "titleZH": "Sentinel Detonation Demo 执行流程",
+   "rootScore": 0.362,
+   "taskScoreTotal": 0.249,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.571,
+    "sourcePriority": 0,
+    "staleOpen": 0.834,
+    "total": 0.249
+   },
+   "whyNow": [
+    "top actionable task",
+    "recurs across work context",
+    "source-backed root evidence"
+   ],
+   "accepted": false,
+   "openState": "possibly_open",
+   "cites": [
+    {
+     "d": "2026-07-26",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-07-23",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-07-26",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-07-23",
+     "k": "claude_session"
+    }
+   ]
+  },
+  {
+   "titleEN": "Landing page update & release",
+   "titleZH": "Landing Page 版本更新与发布",
+   "rootScore": 0.472,
+   "taskScoreTotal": 0.288,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.857,
+    "sourcePriority": 0,
+    "staleOpen": 0.792,
+    "total": 0.288
+   },
+   "whyNow": [
+    "recurs across work context",
+    "top actionable task",
+    "source-backed root evidence"
+   ],
+   "accepted": false,
+   "openState": "possibly_open",
+   "cites": [
+    {
+     "d": "2026-07-25",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-07-30",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-07-26",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-07-25",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-07-30",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-07-26",
+     "k": "claude_session"
+    }
+   ]
+  },
+  {
+   "titleEN": "Workstream: keep the two repos separate",
+   "titleZH": "Workstream: 保持两个 repo 分开",
+   "rootScore": 0.41,
+   "taskScoreTotal": 0.142,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.99,
+    "recurrence": 0.286,
+    "sourcePriority": 0,
+    "staleOpen": 0.003,
+    "total": 0.142
+   },
+   "whyNow": [
+    "recurs across work context",
+    "source-backed root evidence",
+    "top actionable task"
+   ],
+   "accepted": false,
+   "openState": "possibly_open",
+   "cites": [
+    {
+     "d": "2026-08-16",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-02",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-16",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "codex_session"
+    }
+   ]
+  },
+  {
+   "titleEN": "Competitive research & strategic positioning",
+   "titleZH": "DaoBrew 竞品研究与战略定位",
+   "rootScore": 0.465,
+   "taskScoreTotal": 0.284,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 1,
+    "sourcePriority": 0,
+    "staleOpen": 0.537,
+    "total": 0.284
+   },
+   "whyNow": [
+    "recurs across work context",
+    "top actionable task",
+    "source-backed root evidence"
+   ],
+   "accepted": false,
+   "openState": "possibly_open",
+   "cites": [
+    {
+     "d": "2026-08-12",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-01",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-06",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-13",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-07",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-12",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-01",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-06",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-13",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-07",
+     "k": "claude_session"
+    }
+   ]
+  },
+  {
+   "titleEN": "Reasoning Brain: refreshable, executable, decayable",
+   "titleZH": "构建可刷新 可执行 可消退的 Reasoning Brain",
+   "rootScore": 0.459,
+   "taskScoreTotal": 0.262,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.857,
+    "sourcePriority": 0,
+    "staleOpen": 0.534,
+    "total": 0.262
+   },
+   "whyNow": [
+    "recurs across work context",
+    "top actionable task",
+    "source-backed root evidence"
+   ],
+   "accepted": false,
+   "openState": "possibly_open",
+   "cites": [
+    {
+     "d": "2026-08-02",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-01",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-02",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-02",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-01",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-02",
+     "k": "codex_session"
+    }
+   ]
+  },
+  {
+   "titleEN": "Task Map data truncation, task semantics & RB demo",
+   "titleZH": "TaskMap 数据截断、任务语义与 Reasoning Brain Demo",
+   "rootScore": 0.469,
+   "taskScoreTotal": 0.282,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.857,
+    "sourcePriority": 0,
+    "staleOpen": 0.734,
+    "total": 0.282
+   },
+   "whyNow": [
+    "recurs across work context",
+    "top actionable task",
+    "source-backed root evidence"
+   ],
+   "accepted": false,
+   "openState": "possibly_open",
+   "cites": [
+    {
+     "d": "2026-07-26",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-02",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-07-26",
+     "k": "claude_session"
+    },
+    {
+     "d": "2026-08-02",
+     "k": "codex_session"
+    },
+    {
+     "d": "2026-08-17",
+     "k": "claude_session"
+    }
+   ]
+  }
+ ],
+ "lowDays": [
+  {
+   "d": "2026-07-03",
+   "rs": 73,
+   "baseline": 81.5,
+   "slp": 6.17,
+   "hrv": 50,
+   "signals": {},
+   "tier": "outside_coverage",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-07-05",
+   "rs": 73,
+   "baseline": 79.5,
+   "slp": 8.51,
+   "hrv": 57,
+   "signals": {},
+   "tier": "outside_coverage",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-07-10",
+   "rs": 75,
+   "baseline": 80.5,
+   "slp": 5.45,
+   "hrv": 90,
+   "signals": {},
+   "tier": "outside_coverage",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-07-12",
+   "rs": 74,
+   "baseline": 79.5,
+   "slp": 5.12,
+   "hrv": 62,
+   "signals": {},
+   "tier": "outside_coverage",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-07-15",
+   "rs": 73,
+   "baseline": 79.5,
+   "slp": 5.22,
+   "hrv": 68,
+   "signals": {},
+   "tier": "outside_coverage",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-07-18",
+   "rs": 73,
+   "baseline": 79.0,
+   "slp": 5.1,
+   "hrv": 74,
+   "signals": {},
+   "tier": "outside_coverage",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-07-28",
+   "rs": 73,
+   "baseline": 80.5,
+   "slp": 6.06,
+   "hrv": 53,
+   "signals": {
+    "meeting": 1
+   },
+   "tier": "single_source",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-08-03",
+   "rs": 77,
+   "baseline": 81.5,
+   "slp": 7.93,
+   "hrv": 54,
+   "signals": {},
+   "tier": "no_work_evidence",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-08-06",
+   "rs": 75,
+   "baseline": 81.5,
+   "slp": 6.85,
+   "hrv": 61,
+   "signals": {
+    "agent": 4,
+    "calendar": 1
+   },
+   "tier": "multi_source",
+   "rootsWithEvidence": [
+    "Investor narrative & DaoBrew market opportunity",
+    "Competitive research & strategic positioning"
+   ]
+  },
+  {
+   "d": "2026-08-09",
+   "rs": 77,
+   "baseline": 80.5,
+   "slp": 5.88,
+   "hrv": 75,
+   "signals": {},
+   "tier": "no_work_evidence",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-08-10",
+   "rs": 73,
+   "baseline": 80.0,
+   "slp": 7.09,
+   "hrv": 60,
+   "signals": {
+    "meeting": 1,
+    "calendar": 1
+   },
+   "tier": "multi_source",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-08-11",
+   "rs": 72,
+   "baseline": 80.0,
+   "slp": 4.18,
+   "hrv": 65,
+   "signals": {
+    "calendar": 1
+   },
+   "tier": "single_source",
+   "rootsWithEvidence": []
+  },
+  {
+   "d": "2026-08-12",
+   "rs": 73,
+   "baseline": 79.5,
+   "slp": 8.82,
+   "hrv": 63,
+   "signals": {
+    "agent": 2,
+    "meeting": 1,
+    "calendar": 1
+   },
+   "tier": "multi_source",
+   "rootsWithEvidence": [
+    "Competitive research & strategic positioning"
+   ]
+  },
+  {
+   "d": "2026-08-13",
+   "rs": 70,
+   "baseline": 79.5,
+   "slp": 8.38,
+   "hrv": 48,
+   "signals": {
+    "agent": 2,
+    "meeting": 1,
+    "calendar": 1
+   },
+   "tier": "multi_source",
+   "rootsWithEvidence": [
+    "Competitive research & strategic positioning"
+   ]
+  },
+  {
+   "d": "2026-08-14",
+   "rs": 67,
+   "baseline": 78.0,
+   "slp": 4.34,
+   "hrv": 86,
+   "signals": {
+    "calendar": 1
+   },
+   "tier": "single_source",
+   "rootsWithEvidence": []
+  }
+ ],
+ "coOccurrenceDays": [
+  "2026-07-28",
+  "2026-08-06",
+  "2026-08-10",
+  "2026-08-11",
+  "2026-08-12",
+  "2026-08-13",
+  "2026-08-14"
+ ],
+ "taskRanking": [
+  {
+   "titleEN": "Landing page update & release",
+   "score": 0.288,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.857,
+    "sourcePriority": 0,
+    "staleOpen": 0.792,
+    "total": 0.288
+   },
+   "accepted": false
+  },
+  {
+   "titleEN": "Competitive research & strategic positioning",
+   "score": 0.284,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 1,
+    "sourcePriority": 0,
+    "staleOpen": 0.537,
+    "total": 0.284
+   },
+   "accepted": false
+  },
+  {
+   "titleEN": "Task Map data truncation, task semantics & RB demo",
+   "score": 0.282,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.857,
+    "sourcePriority": 0,
+    "staleOpen": 0.734,
+    "total": 0.282
+   },
+   "accepted": false
+  },
+  {
+   "titleEN": "Reasoning Brain: refreshable, executable, decayable",
+   "score": 0.262,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.857,
+    "sourcePriority": 0,
+    "staleOpen": 0.534,
+    "total": 0.262
+   },
+   "accepted": false
+  },
+  {
+   "titleEN": "Sentinel Detonation demo runbook",
+   "score": 0.249,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.571,
+    "sourcePriority": 0,
+    "staleOpen": 0.834,
+    "total": 0.249
+   },
+   "accepted": false
+  },
+  {
+   "titleEN": "Investor narrative & DaoBrew market opportunity",
+   "score": 0.206,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.8,
+    "recurrence": 0.571,
+    "sourcePriority": 0,
+    "staleOpen": 0.4,
+    "total": 0.206
+   },
+   "accepted": false
+  },
+  {
+   "titleEN": "Rebuild the app on the new algorithm (clear legacy tasks)",
+   "score": 0.142,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.99,
+    "recurrence": 0.286,
+    "sourcePriority": 0,
+    "staleOpen": 0.002,
+    "total": 0.142
+   },
+   "accepted": true
+  },
+  {
+   "titleEN": "Workstream: keep the two repos separate",
+   "score": 0.142,
+   "factors": {
+    "bodyBonus": 0,
+    "deadlinePressure": 0,
+    "dependencyImpact": 0,
+    "evidenceStrength": 0.99,
+    "recurrence": 0.286,
+    "sourcePriority": 0,
+    "staleOpen": 0.003,
+    "total": 0.142
+   },
+   "accepted": false
+  }
+ ],
+ "workDays": {
+  "2026-07-21": {
+   "meeting": 1
+  },
+  "2026-07-23": {
+   "agent": 2,
+   "meeting": 1
+  },
+  "2026-07-25": {
+   "agent": 2
+  },
+  "2026-07-26": {
+   "agent": 6
+  },
+  "2026-07-28": {
+   "meeting": 1
+  },
+  "2026-07-29": {
+   "meeting": 1
+  },
+  "2026-07-30": {
+   "agent": 2,
+   "meeting": 1
+  },
+  "2026-07-31": {
+   "meeting": 1
+  },
+  "2026-08-01": {
+   "agent": 4
+  },
+  "2026-08-02": {
+   "agent": 7,
+   "meeting": 1
+  },
+  "2026-08-04": {
+   "meeting": 1
+  },
+  "2026-08-05": {
+   "agent": 2,
+   "calendar": 1
+  },
+  "2026-08-06": {
+   "agent": 4,
+   "calendar": 1
+  },
+  "2026-08-07": {
+   "agent": 2,
+   "meeting": 1,
+   "calendar": 1
+  },
+  "2026-08-08": {
+   "calendar": 1
+  },
+  "2026-08-10": {
+   "meeting": 1,
+   "calendar": 1
+  },
+  "2026-08-11": {
+   "calendar": 1
+  },
+  "2026-08-12": {
+   "agent": 2,
+   "meeting": 1,
+   "calendar": 1
+  },
+  "2026-08-13": {
+   "agent": 2,
+   "meeting": 1,
+   "calendar": 1
+  },
+  "2026-08-14": {
+   "calendar": 1
+  },
+  "2026-08-15": {
+   "calendar": 1
+  },
+  "2026-08-16": {
+   "agent": 2,
+   "calendar": 1
+  },
+  "2026-08-17": {
+   "manual": 2,
+   "agent": 10,
+   "meeting": 1,
+   "calendar": 1
+  }
+ }
+};
+
+/* ---------- helpers ---------- */
+const $ = s=>document.querySelector(s);
+const $$ = s=>Array.from(document.querySelectorAll(s));
+const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const MOBILE = matchMedia("(max-width: 900px)").matches;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const WHY={"source-backed root evidence":"Source-backed evidence","top actionable task":"Top actionable","recurs across work context":"Recurs across contexts"};
+const TIER={multi_source:"multi-source support",single_source:"single source",no_work_evidence:"no work evidence",outside_coverage:"outside coverage"};
+
+/* baseline: trailing 14 recorded days' median ± 0.75σ, needs ≥7 prior values (matches audit method) */
+function baselines(data){
+  const out=[];
+  for(let i=0;i<data.length;i++){
+    const w=data.slice(Math.max(0,i-14),i).map(x=>x.rs).filter(v=>v!=null);
+    if(w.length>=7){
+      const s=[...w].sort((a,b)=>a-b);
+      const med=s.length%2?s[(s.length-1)/2]:(s[s.length/2-1]+s[s.length/2])/2;
+      const mean=w.reduce((a,b)=>a+b,0)/w.length;
+      const sd=Math.sqrt(w.reduce((a,b)=>a+(b-mean)**2,0)/(w.length-1));
+      out.push({med,sd,low:med-0.75*sd});
+    } else out.push(null);
+  }
+  return out;
+}
+const BASE = baselines(OURA);
+const isLow = i => BASE[i] && OURA[i].rs!=null && OURA[i].rs < BASE[i].low;
+const LOWMAP = Object.fromEntries(DEMO.lowDays.map(L=>[L.d,L]));
+
+/* ---------- water engine · flat woodcut bands, violet = body ---------- */
+const Water=(()=>{
+  const cv=$("#water"), cx=cv.getContext("2d");
+  let W=0,H=0,t=0,ripples=[];
+  const MODES={
+    calm:{amp:30,freq:1.0,speed:.3,tint:0,dataAmp:0,y:.82},
+    chop:{amp:38,freq:2.1,speed:1.0,tint:1,dataAmp:0,y:.82},
+    still:{amp:12,freq:0.8,speed:.22,tint:0,dataAmp:0,y:.9},
+    data:{amp:9,freq:1.0,speed:.3,tint:0,dataAmp:1,y:.92},
+  };
+  let cur={...MODES.calm}, tgt={...MODES.calm};
+  function resize(){
+    const d=Math.min(devicePixelRatio||1,2);
+    W=innerWidth;H=innerHeight;
+    cv.width=W*d;cv.height=H*d;cv.style.width=W+"px";cv.style.height=H+"px";
+    cx.setTransform(d,0,0,d,0,0);
+  }
+  addEventListener("resize",resize);resize();
+  function set(m){ if(MODES[m]) tgt={...MODES[m]}; }
+  function ripple(xr,yr){ ripples.push({x:xr*W,y:yr*H,born:performance.now()}); }
+  function dataEnvelope(x){
+    const n=OURA.length, f=x/W*(n-1), i=Math.max(0,Math.min(n-2,Math.floor(f))), u=f-i;
+    const dev=j=>{ const b=BASE[j], v=OURA[j].rs; if(!b||v==null) return .3; return Math.min(2.2,Math.abs(v-b.med)/Math.max(3,b.sd)); };
+    return lerp(dev(i),dev(i+1),u);
+  }
+  const FILLS=[["#F6EEF9","#EDDDF4","#DFC8EA"],["#FFEBE2","#FFD9C8","#F8C1A9"]];
+  function bandY(x,l){
+    let a=cur.amp*(1-l*.18);
+    if(cur.dataAmp>0) a=lerp(a, 6+dataEnvelope(x)*22, cur.dataAmp);
+    return H*cur.y + (l-1)*H*.045
+      + Math.sin(x*0.006*cur.freq + t + l*1.3)*a
+      + Math.sin(x*0.013*cur.freq - t*1.6 + l*2.1)*a*.45
+      + Math.sin(x*0.027*cur.freq + t*2.3 + l*.7)*a*.2;
+  }
+  function frame(dt){
+    t+=dt*cur.speed;
+    for(const k in cur) cur[k]=lerp(cur[k],tgt[k],Math.min(1,dt*1.4));
+    cx.clearRect(0,0,W,H);
+    for(let l=0;l<3;l++){
+      cx.beginPath();
+      for(let x=0;x<=W;x+=6){ const y=bandY(x,l); x===0?cx.moveTo(x,y):cx.lineTo(x,y); }
+      cx.lineTo(W,H);cx.lineTo(0,H);cx.closePath();
+      cx.fillStyle=cur.tint<.5?FILLS[0][l]:FILLS[1][l];
+      cx.fill();
+      cx.beginPath();
+      for(let x=0;x<=W;x+=6){ const y=bandY(x,l); x===0?cx.moveTo(x,y):cx.lineTo(x,y); }
+      cx.strokeStyle=l===2?"rgba(20,18,15,.85)":"rgba(20,18,15,.28)";
+      cx.lineWidth=l===2?2.5:1.5;
+      cx.stroke();
+    }
+    const nowp=performance.now();
+    ripples=ripples.filter(r=>nowp-r.born<3000);
+    for(const r of ripples){
+      const age=(nowp-r.born)/1000, rad=22+age*150, a=.55*Math.exp(-1.4*age);
+      cx.beginPath();cx.arc(r.x,r.y,rad,0,Math.PI*2);
+      cx.strokeStyle=`rgba(20,18,15,${a})`;cx.lineWidth=2;cx.stroke();
+    }
+  }
+  let last=performance.now();
+  function loop(now){
+    const dt=Math.min(.05,(now-last)/1000);last=now;
+    frame(dt);
+    if(!REDUCE) requestAnimationFrame(loop);
+  }
+  if(REDUCE){ frame(.016); } else requestAnimationFrame(loop);
+  return {set,ripple};
+})();
+
+/* ---------- deck ---------- */
+const SCENES=$$(".scene");
+const FLAT=[];
+SCENES.forEach((sc,si)=>{ const n=+sc.dataset.steps||1; for(let st=0;st<n;st++) FLAT.push({si,st}); });
+let g=0;
+const WATERMODE=["calm","calm","still","data","calm"];
+const S={DAY:0,SCI:1,CAUSE:2,DEMO:3,CLOSE:4};
+function apply(){
+  const {si,st}=FLAT[g];
+  SCENES.forEach((sc,i)=>{
+    sc.classList.toggle("active",i===si);
+    const solo=sc.classList.contains("step-solo");
+    $$("#"+sc.id+" [data-step]").forEach(el=>{
+      const k=+el.dataset.step;
+      el.classList.toggle("on", i===si && (solo ? k===st : k<=st));
+    });
+  });
+  $("#actlabel").textContent=SCENES[si].dataset.title||"";
+  $("#bar").style.width=((g+1)/FLAT.length*100)+"%";
+  hooks(si,st);
+}
+function go(n){ g=Math.max(0,Math.min(FLAT.length-1,n)); apply(); }
+function step(d){ go(g+d); }
+function scene(d){
+  const {si}=FLAT[g];
+  const ni=Math.max(0,Math.min(SCENES.length-1,si+d));
+  go(FLAT.findIndex(f=>f.si===ni));
+}
+function jumpScene(i){ const k=FLAT.findIndex(f=>f.si===i); if(k>=0) go(k); }
+
+/* ---------- per-step hooks ---------- */
+let lastKey="";
+function hooks(si,st){
+  const key=si+":"+st;
+  Water.set( si===S.SCI && document.body.classList.contains("tired") ? "chop" : WATERMODE[si] );
+  if(key===lastKey) return; lastKey=key;
+  if(si===S.CAUSE&&st===1) runDial();
+  if(si===S.CAUSE&&st===2) runGates();
+  if(si===S.CAUSE&&st===3) runLadder();
+  if(si===S.DEMO&&st===0) buildLanes();
+  if(si===S.DEMO&&st===1) runRank();
+  if(si===S.DEMO&&st===2) buildReadiness();
+  if(si===S.DEMO&&st===3) buildDemo();
+}
+
+/* ---------- input ---------- */
+addEventListener("keydown",e=>{
+  // some presenter clickers deliver only keyCode
+  const k=e.key||({32:" ",37:"ArrowLeft",38:"ArrowUp",39:"ArrowRight",40:"ArrowDown",33:"PageUp",34:"PageDown",27:"Escape",36:"Home",65:"a"})[e.keyCode]||"";
+  if(k==="Escape"){ $("#appendix").classList.remove("open"); return; }
+  if(k==="a"||k==="A"){ $("#appendix").classList.toggle("open"); return; }
+  if($("#appendix").classList.contains("open")) return;
+  if(["ArrowRight"," ","PageDown"].includes(k)){ e.preventDefault(); step(1); }
+  else if(["ArrowLeft","PageUp"].includes(k)){ e.preventDefault(); step(-1); }
+  else if(k==="ArrowDown"){ e.preventDefault(); scene(1); }
+  else if(k==="ArrowUp"){ e.preventDefault(); scene(-1); }
+  else if(k==="Home"){ go(0); }
+  else if(/^[1-5]$/.test(k)){ jumpScene(+k-1); }
+  $("#hint").classList.add("gone");
+});
+$("#go-walk").addEventListener("click",()=>{ MOBILE ? $("#s0").scrollIntoView({behavior:"smooth"}) : step(1); });
+$("#go-live").addEventListener("click",()=>{ MOBILE ? $("#s3").scrollIntoView({behavior:"smooth"}) : go(FLAT.findIndex(f=>f.si===S.DEMO)+3); });
+$("#appx-close").addEventListener("click",()=>$("#appendix").classList.remove("open"));
+
+/* ---------- s0: 4-8 breathing string ---------- */
+/* one string drawn as several offset strands (pencil feel); inhale bows it up 4s, exhale lets it down 8s */
+const Breath=(()=>{
+  const cv=$("#bstring"),bx=cv.getContext("2d"),W=cv.width,H=cv.height,MID=H/2;
+  let running=false;
+  function draw(amp,jit){
+    bx.clearRect(0,0,W,H);
+    bx.strokeStyle="rgba(20,18,15,.12)";bx.lineWidth=1;
+    bx.beginPath();bx.moveTo(14,MID);bx.lineTo(W-14,MID);bx.stroke();
+    for(let s=0;s<4;s++){
+      bx.beginPath();
+      for(let x=14;x<=W-14;x+=4){
+        const p=(x-14)/(W-28);
+        const bow=Math.sin(Math.PI*p)*amp;
+        const wob=Math.sin(x*.09+s*2.1)*jit*(1-Math.abs(2*p-1));
+        const y=MID-bow+wob+(s-1.5)*1.6;
+        x===14?bx.moveTo(x,y):bx.lineTo(x,y);
+      }
+      bx.strokeStyle=s===1?"rgba(166,107,194,.95)":"rgba(20,18,15,"+(0.16+s*0.05)+")";
+      bx.lineWidth=s===1?2.5:1.3;
+      bx.stroke();
+    }
+    bx.fillStyle="#14120F";
+    [[14,MID],[W-14,MID]].forEach(([x,y])=>{bx.beginPath();bx.arc(x,y,4,0,7);bx.fill();});
+  }
+  draw(0,2);
+  function run(cycles){
+    if(running) return; running=true;
+    const btn=$("#ringgo"); btn.disabled=true;
+    const IN=4000,OUT=8000,t0=performance.now();
+    const AMP=H*.34;
+    (function tick(now){
+      const el=now-t0, total=cycles*(IN+OUT);
+      if(el>=total||REDUCE){
+        draw(0,2);$("#bphase").textContent="·";$("#bcount").textContent="";
+        btn.disabled=false;running=false;Water.ripple(.75,.5);return;
+      }
+      const ph=el%(IN+OUT), LO=-AMP*0.55, ease=p=>0.5-0.5*Math.cos(Math.PI*p);
+      let pos,label,remain;
+      if(ph<IN){ const p=ph/IN; pos=LO+(AMP-LO)*ease(p); label="吸"; remain=Math.ceil((IN-ph)/1000); }
+      else{ const p=(ph-IN)/OUT; pos=AMP-(AMP-LO)*ease(p); label="吐"; remain=Math.ceil((OUT-(ph-IN))/1000); }
+      draw(pos*Math.min(1,el/800), 1.5);
+      $("#bphase").textContent=label;$("#bcount").textContent=remain;
+      requestAnimationFrame(tick);
+    })(t0);
+  }
+  return {run,draw};
+})();
+$("#ringgo").addEventListener("click",()=>Breath.run(3));
+
+/* ---------- s4: chirp string (frequency rises along the string, pencil strands) ---------- */
+const CalmString=(()=>{
+  const cv=$("#calmstring"); if(!cv) return {tick:()=>{}};
+  const bx=cv.getContext("2d"),W=cv.width,H=cv.height,MID=H/2;
+  let t=0;
+  function draw(){
+    bx.clearRect(0,0,W,H);
+    const grad=bx.createLinearGradient(20,0,W-20,0);
+    grad.addColorStop(0,"#4B4BE8");grad.addColorStop(.5,"#A66BC2");grad.addColorStop(1,"#F2542D");
+    for(let s=0;s<4;s++){
+      bx.beginPath();
+      for(let x=20;x<=W-20;x+=3){
+        const p=(x-20)/(W-40);
+        const rampL=Math.sin(Math.PI/2*Math.min(1,p*7));
+        const rampR=Math.sin(Math.PI/2*Math.min(1,(1-p)*7));
+        const A=H*.32*(1-p*.45)*rampL*rampR;
+        const k=.012*(1+10*p*p);
+        const y=MID+A*Math.sin(k*x - t*(1+2*p))+(s-1.5)*1.5;
+        x===20?bx.moveTo(x,y):bx.lineTo(x,y);
+      }
+      bx.strokeStyle=s===1?grad:"rgba(20,18,15,"+(0.14+s*0.05)+")";
+      bx.lineWidth=s===1?2.5:1.2;
+      bx.globalAlpha=s===1?.95:1;
+      bx.stroke();bx.globalAlpha=1;
+    }
+    bx.fillStyle="#14120F";
+    [[20,MID],[W-20,MID]].forEach(([x,y])=>{bx.beginPath();bx.arc(x,y,4.5,0,7);bx.fill();});
+  }
+  function tick(){
+    if(!REDUCE && cv.getBoundingClientRect().width>0){ t+=.05; }
+    draw();
+  }
+  draw();
+  if(!REDUCE) setInterval(tick,40);
+  return {tick,draw};
+})();
+
+/* ---------- s1: sleep switch ---------- */
+function setTired(b){
+  document.body.classList.toggle("tired",b);
+  $("#sw-rest").classList.toggle("sel",!b);
+  $("#sw-tired").classList.toggle("sel",b);
+  $("#feelword").textContent=b?"像一场审判":"十分钟能搞定";
+  $("#amygstat").textContent=b?"反应放大 +60%":"报警正常";
+  $("#linkstat").textContent=b?"刹车线路掉线":"刹车线路在线";
+  if(FLAT[g].si===S.SCI) Water.set(b?"chop":"calm");
+}
+$("#sw-rest").addEventListener("click",()=>setTired(false));
+$("#sw-tired").addEventListener("click",()=>setTired(true));
+
+/* ---------- s2: fixture lanes (fictional, labeled) ---------- */
+const FIX_DAYS=21;
+const FIX_WORK=[2,5,9,12,16,19];
+const FIX_LOW =[3,6,8,10,13,17,20];
+(function buildFixLanes(){
+  const host=$("#lanes0");
+  const mk=(label,set,cls)=>{
+    const lt=document.createElement("div");lt.className="lt";lt.textContent=label;host.appendChild(lt);
+    const cs=document.createElement("div");cs.className="cells";
+    for(let i=0;i<FIX_DAYS;i++){const c=document.createElement("div");c.className="c"+(set.includes(i)?" "+cls:"");cs.appendChild(c);}
+    host.appendChild(cs);
+  };
+  mk("深夜改稿",FIX_WORK,"hit");
+  mk("次日恢复差",FIX_LOW,"low");
+})();
+function runDial(){
+  const fill=$("#dialfill"),num=$("#dialnum");
+  const target=2.4,max=3;
+  fill.style.strokeDashoffset=String(163.4*(1-target/max));
+  const t0=performance.now();
+  (function tick(now){
+    const p=Math.min(1,(now-t0)/1800),v=target*(1-Math.pow(1-p,3));
+    num.textContent=v.toFixed(1)+"×";
+    if(p<1&&!REDUCE) requestAnimationFrame(tick); else num.textContent=target.toFixed(1)+"×";
+  })(t0);
+}
+const GATES=[
+  ["引用检查","AI 不许编故事:归因必须能在原始记录里逐字找到出处","Provenance","数据溯源:进不了溯源链的证据,不进模型"],
+  ["标题禁令","日历写着「周会」不等于原因就是周会","Measurement validity","测量效度:标签不是变量本身"],
+  ["时间合理性","上个月的烦恼,解释不了今天的身体","Temporality · Bradford Hill","因果判定第一条:原因先于结果,且挨得够近"],
+  ["身体防火墙","不许从文字里脑补「你看起来很累」","No imputed exposure","暴露必须实测,不能从文本推断生理"],
+  ["跨来源复现","一条会议记录不够,要第二来源独立印证","Triangulation","三角验证:独立来源指向同一事实才算数"],
+  ["非临床语言","系统不是医生,措辞越界整条拒绝","Scope of inference","推断不越界:结论不超出数据支持的范围"],
+  ["富集门","2.0× 对照率 · ≥3 覆盖日 · 每日 ≥2 来源","Case-control contrast","病例对照思想:比的是比率,不是次数"],
+];
+(function buildGates(){
+  const host=$("#gates");
+  GATES.forEach(([n,d,ct,cl])=>{
+    const el=document.createElement("div");el.className="gate";
+    el.innerHTML=`<div class="gn">${n}</div><div class="gd">${d}</div><div class="gcau"><b>${ct}</b><br>${cl}</div><div class="gs"><span class="stamp gray">待检</span></div>`;
+    host.appendChild(el);
+  });
+})();
+let gateT=[],ladderT=[];
+function runGates(){
+  gateT.forEach(clearTimeout);gateT=[];
+  const gs=$$("#gates .gate");
+  gs.forEach(el=>{el.classList.remove("lit");el.querySelector(".gs").innerHTML='<span class="stamp gray">待检</span>';});
+  $("#gateverdict").style.opacity="0";
+  gs.forEach((el,i)=>gateT.push(setTimeout(()=>{
+    el.classList.add("lit");el.querySelector(".gs").innerHTML='<span class="stamp green">✓ 通过</span>';
+    if(i===gs.length-1) gateT.push(setTimeout(()=>{$("#gateverdict").style.opacity="1";},500));
+  }, REDUCE?0:400+i*520)));
+}
+function runLadder(){
+  ladderT.forEach(clearTimeout);ladderT=[];
+  const rungs=$$("#ladder .rung");
+  rungs.forEach(r=>r.classList.remove("lit"));
+  rungs.forEach((r,i)=>ladderT.push(setTimeout(()=>r.classList.add("lit"), REDUCE?0:300+i*450)));
+  const mk=(host,n)=>{host.innerHTML="";for(let i=0;i<n;i++){const c=document.createElement("div");c.className="cc";host.appendChild(c);}return $$("#"+host.id+" .cc");};
+  const A=mk($("#cellsA"),2), B=mk($("#cellsB"),5);
+  A.forEach((c,i)=>ladderT.push(setTimeout(()=>c.classList.add("f"), REDUCE?0:2600+i*400)));
+  B.forEach((c,i)=>ladderT.push(setTimeout(()=>{
+    if(i<3) c.classList.add("f");
+    else { c.classList.add("x"); if(i===4) ladderT.push(setTimeout(()=>{B.forEach(x=>x.classList.remove("f"));},700)); }
+  }, REDUCE?0:3600+i*400)));
+}
+
+/* ---------- s3: charts ---------- */
+const NS="http://www.w3.org/2000/svg";
+function svgEl(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+const tip=$("#tip");
+function showTip(html,x,y){tip.innerHTML=html;tip.style.opacity="1";
+  const r=tip.getBoundingClientRect();
+  tip.style.left=Math.min(innerWidth-r.width-14,x+14)+"px";
+  tip.style.top=Math.max(8,y-r.height-12)+"px";}
+function hideTip(){tip.style.opacity="0";}
+function fmtDay(d){return d.slice(5).replace("-","/");}
+
+let builtR=false;
+function buildReadiness(){
+  if(builtR) return; builtR=true;
+  const host=$("#chart-readiness"), W2=Math.max(640,Math.min(innerWidth*.88,1250)), H2=250,
+        P={l:46,r:16,t:20,b:30}, iw=W2-P.l-P.r, ih=H2-P.t-P.b;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W2} ${H2}`,width:"100%",role:"img","aria-label":"52-day readiness with personal baseline band"},host);
+  const lo=60,hi=92, X=i=>P.l+i/(OURA.length-1)*iw, Y=v=>P.t+(1-(v-lo)/(hi-lo))*ih;
+  [60,70,80,90].forEach(v=>{
+    svgEl("line",{x1:P.l,x2:W2-P.r,y1:Y(v),y2:Y(v),stroke:"#F0EBDD"},svg);
+    svgEl("text",{x:P.l-8,y:Y(v)+3,"text-anchor":"end",class:"axis"},svg).textContent=v;
+  });
+  let dTop="",dBot=[];
+  OURA.forEach((o,i)=>{ if(BASE[i]){ dTop+=(dTop?"L":"M")+X(i)+","+Y(BASE[i].med+0.75*BASE[i].sd);
+      dBot.push(X(i)+","+Y(BASE[i].low)); }});
+  if(dTop) svgEl("path",{d:dTop+"L"+dBot.reverse().join("L")+"Z",fill:"#EFE8D6",opacity:.85},svg);
+  let dl="";
+  OURA.forEach((o,i)=>{ if(o.rs!=null) dl+=(dl?"L":"M")+X(i)+","+Y(o.rs); });
+  svgEl("path",{d:dl,fill:"none",stroke:"#A66BC2","stroke-width":2.5,"stroke-linejoin":"round"},svg);
+  OURA.forEach((o,i)=>{ if(isLow(i)){
+    svgEl("circle",{cx:X(i),cy:Y(o.rs),r:4.5,fill:"#F2542D",stroke:"#14120F","stroke-width":2},svg);
+    svgEl("path",{d:`M${X(i)-4},${H2-P.b+15}l4,-7l4,7z`,fill:"#F2542D",stroke:"#14120F","stroke-width":1},svg);
+  }});
+  // streak annotation 8/09-8/14 (6 consecutive low days per the same baseline rule)
+  const i0=OURA.findIndex(o=>o.d==="2026-08-09"), i1=OURA.findIndex(o=>o.d==="2026-08-14");
+  if(i0>0&&i1>0){
+    svgEl("line",{x1:X(i0),x2:X(i1),y1:P.t+8,y2:P.t+8,stroke:"#F2542D","stroke-width":2.5},svg);
+    svgEl("text",{x:(X(i0)+X(i1))/2,y:P.t+2,"text-anchor":"middle",class:"anno"},svg).textContent="6 consecutive days below baseline";
+  }
+  OURA.forEach((o,i)=>{ if(o.d.endsWith("-01")||i===0||i===OURA.length-1)
+    svgEl("text",{x:X(i),y:H2-6,"text-anchor":i===OURA.length-1?"end":"middle",class:"axis"},svg).textContent=fmtDay(o.d); });
+  svgEl("text",{x:P.l,y:12,class:"strip-title"},svg).textContent="READINESS · band = personal baseline (median of last 14 records ± 0.75σ)";
+  OURA.forEach((o,i)=>{
+    const r=svgEl("rect",{x:X(i)-iw/OURA.length/2,y:0,width:iw/OURA.length,height:H2,fill:"transparent"},svg);
+    r.addEventListener("mousemove",e=>{
+      const b=BASE[i];
+      showTip(`<span class="d">${o.d}</span><br>readiness ${o.rs??"·"} ${isLow(i)?"<span style='color:#F2542D'>below baseline</span>":""}<br>sleep ${o.slp??"·"} h · HRV ${o.hrv??"·"} ms${b?`<br>baseline ${b.med.toFixed(0)}`:""}`,e.clientX,e.clientY);
+    });
+    r.addEventListener("mouseleave",hideTip);
+  });
+}
+
+let builtM=false;
+function buildMulti(){
+  if(builtM) return; builtM=true;
+  const host=$("#chart-multi"), W2=Math.max(640,Math.min(innerWidth*.88,1250));
+  const rows=[
+    {k:"slp",t:"SLEEP h",lo:3,hi:10.5,ticks:[4,7,10],type:"bar"},
+    {k:"hrv",t:"NIGHT HRV ms",lo:40,hi:115,ticks:[50,80,110],type:"line"},
+    {k:"rhr",t:"LOWEST HR bpm",lo:38,hi:60,ticks:[40,50,60],type:"line"},
+  ];
+  const RH=112,P={l:46,r:16,t:18,b:6},iw=W2-P.l-P.r;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W2} ${rows.length*RH+22}`,width:"100%",role:"img","aria-label":"Sleep, HRV and heart-rate strips"},host);
+  rows.forEach((row,ri)=>{
+    const oy=ri*RH, ih=RH-P.t-P.b-14;
+    const X=i=>P.l+i/(OURA.length-1)*iw, Y=v=>oy+P.t+(1-(v-row.lo)/(row.hi-row.lo))*ih;
+    svgEl("text",{x:P.l,y:oy+12,class:"strip-title"},svg).textContent=row.t;
+    row.ticks.forEach(v=>{
+      svgEl("line",{x1:P.l,x2:W2-P.r,y1:Y(v),y2:Y(v),stroke:"#F0EBDD"},svg);
+      svgEl("text",{x:P.l-8,y:Y(v)+3,"text-anchor":"end",class:"axis"},svg).textContent=v;
+    });
+    if(row.type==="bar"){
+      const bw=Math.max(3,iw/OURA.length-3);
+      OURA.forEach((o,i)=>{ const v=o[row.k]; if(v==null)return;
+        svgEl("rect",{x:X(i)-bw/2,y:Y(v),width:bw,height:oy+P.t+ih-Y(v),rx:2,
+          fill:v<5?"#F2542D":"#DCC2E8"},svg); });
+    } else {
+      let d="";OURA.forEach((o,i)=>{const v=o[row.k];if(v==null)return;d+=(d?"L":"M")+X(i)+","+Y(v);});
+      svgEl("path",{d,fill:"none",stroke:ri===1?"#A66BC2":"#14120F","stroke-width":2,opacity:ri===2?.55:1},svg);
+    }
+  });
+  const X=i=>P.l+i/(OURA.length-1)*iw;
+  OURA.forEach((o,i)=>{ if(o.d.endsWith("-01")||i===0||i===OURA.length-1)
+    svgEl("text",{x:X(i),y:rows.length*RH+14,"text-anchor":i===OURA.length-1?"end":"middle",class:"axis"},svg).textContent=fmtDay(o.d); });
+}
+
+/* ---------- s3: work lanes with tier marks ---------- */
+let builtW=false;
+function buildLanes(){
+  if(builtW) return; builtW=true;
+  const host=$("#chart-lanes"), W2=Math.max(640,Math.min(innerWidth*.88,1250));
+  const lanes=[
+    {k:"agent",t:"AGENT SESSIONS",fill:"#4B4BE8"},
+    {k:"meeting",t:"MEETINGS",fill:"#0BA84A"},
+    {k:"calendar",t:"CALENDAR",fill:"#B9B29E"},
+  ];
+  const RH=34,P={l:130,r:16,t:26,b:60},iw=W2-P.l-P.r,H2=P.t+lanes.length*RH+RH+P.b;
+  const svg=svgEl("svg",{viewBox:`0 0 ${W2} ${H2}`,width:"100%",role:"img","aria-label":"Work signals and low-recovery days on one axis"},host);
+  const X=i=>P.l+i/(OURA.length-1)*iw;
+  // coverage shading: before work sources begin
+  const iCov=OURA.findIndex(o=>o.d>="2026-07-21");
+  if(iCov>0){
+    svgEl("rect",{x:P.l,y:P.t-8,width:X(iCov)-P.l,height:lanes.length*RH+RH+8,fill:"#14120F",opacity:.05},svg);
+    svgEl("text",{x:(P.l+X(iCov))/2,y:P.t+6,"text-anchor":"middle",class:"axis"},svg).textContent="before source coverage";
+  }
+  svgEl("text",{x:P.l,y:14,class:"strip-title"},svg).textContent="ONE TIMELINE · 06/25 → 08/17 · dashed ring = work evidence on a low-recovery day";
+  lanes.forEach((ln,li)=>{
+    const y=P.t+li*RH+RH/2;
+    svgEl("text",{x:P.l-10,y:y+4,"text-anchor":"end",class:"axis"},svg).textContent=ln.t;
+    svgEl("line",{x1:P.l,x2:W2-P.r,y1:y,y2:y,stroke:"#F0EBDD"},svg);
+    OURA.forEach((o,i)=>{
+      const w=DEMO.workDays[o.d]; if(!w||!w[ln.k]) return;
+      const n=w[ln.k], s=n>=4?9:n>=2?7:5;
+      svgEl("rect",{x:X(i)-s/2,y:y-s/2,width:s,height:s,rx:2,fill:ln.fill,stroke:"#14120F","stroke-width":1.5},svg);
+    });
+  });
+  const by=P.t+lanes.length*RH+RH/2;
+  svgEl("text",{x:P.l-10,y:by+4,"text-anchor":"end",class:"axis"},svg).textContent="LOW RECOVERY ▲";
+  svgEl("line",{x1:P.l,x2:W2-P.r,y1:by,y2:by,stroke:"#F0EBDD"},svg);
+  OURA.forEach((o,i)=>{ if(isLow(i)){
+    const L=LOWMAP[o.d]||{};
+    const fill=L.tier==="multi_source"?"#A66BC2":L.tier==="single_source"?"#DCC2E8":L.tier==="no_work_evidence"?"#B9B29E":"#E5DFD0";
+    svgEl("path",{d:`M${X(i)-5},${by+5}l5,-9l5,9z`,fill,stroke:"#14120F","stroke-width":1.5},svg);
+  }});
+  // co-occurrence rings; label only the start of each consecutive run
+  OURA.forEach((o,i)=>{
+    const L=LOWMAP[o.d];
+    const co=L&&(L.tier==="multi_source"||L.tier==="single_source");
+    if(co){
+      svgEl("rect",{x:X(i)-8,y:P.t-8,width:16,height:lanes.length*RH+RH+8,rx:8,fill:"none",stroke:"#14120F","stroke-width":2.5,"stroke-dasharray":"3 4"},svg);
+      const pd=i>0?LOWMAP[OURA[i-1].d]:null;
+      const prevCo=pd&&(pd.tier==="multi_source"||pd.tier==="single_source");
+      let runEnd=i;
+      while(runEnd+1<OURA.length){ const nd=LOWMAP[OURA[runEnd+1].d]; if(nd&&(nd.tier==="multi_source"||nd.tier==="single_source")) runEnd++; else break; }
+      if(!prevCo){
+        const label=runEnd>i?fmtDay(o.d)+" ~ "+fmtDay(OURA[runEnd].d):fmtDay(o.d);
+        svgEl("text",{x:(X(i)+X(runEnd))/2,y:H2-40,"text-anchor":"middle",class:"anno"},svg).textContent=label;
+      }
+    }
+  });
+  // tier legend
+  const leg=[["#A66BC2","multi-source ×4"],["#DCC2E8","single ×3"],["#B9B29E","no evidence ×2"],["#E5DFD0","outside coverage ×6"]];
+  let lx=P.l;
+  leg.forEach(([c,t])=>{
+    svgEl("path",{d:`M${lx},${H2-14}l5,-9l5,9z`,fill:c,stroke:"#14120F","stroke-width":1.5},svg);
+    const txt=svgEl("text",{x:lx+16,y:H2-15,class:"axis"},svg);txt.textContent=t;
+    lx+=16+t.length*7+26;
+  });
+  OURA.forEach((o,i)=>{ if(o.d.endsWith("-01")||i===0||i===OURA.length-1)
+    svgEl("text",{x:X(i),y:P.t+lanes.length*RH+RH+16,"text-anchor":i===OURA.length-1?"end":"middle",class:"axis"},svg).textContent=fmtDay(o.d); });
+}
+
+/* ---------- s3: ranking ---------- */
+let builtK=false,rankT=[];
+function runRank(){
+  const host=$("#rank");
+  if(!builtK){
+    builtK=true;
+    DEMO.taskRanking.forEach((r,i)=>{
+      const row=document.createElement("div");
+      row.className="rrow"+(r.accepted?" accr":"");
+      const f=r.factors||{};
+      const fx=[["evidence",f.evidenceStrength],["recurrence",f.recurrence],["stale",f.staleOpen]]
+        .filter(x=>x[1]).map(x=>`${x[0]} +${(x[1]*100).toFixed(1)}`).join(" · ");
+      row.innerHTML=`<span class="pos">${i+1}</span>
+        <span class="rt">${r.titleEN}${r.accepted?' <span class="stamp yellow" style="font-size:.72em">✓ HUMAN-ACCEPTED</span>':""}</span>
+        <span class="bar"><i style="width:${Math.round((r.score||0)/0.3*100)}%"></i></span>
+        <span class="fx">${(r.score||0).toFixed(3)} · ${fx}</span>`;
+      host.appendChild(row);
+    });
+  }
+  rankT.forEach(clearTimeout);rankT=[];
+  $$("#rank .rrow").forEach((row,i)=>{
+    row.classList.remove("on2");
+    rankT.push(setTimeout(()=>row.classList.add("on2"), REDUCE?0:200+i*180));
+  });
+}
+
+/* ---------- s3: interactive demo map ---------- */
+let builtD=false, selRoot=null, selDay=null;
+const rootCoDays = r => [...new Set(r.cites.filter(c=>LOWMAP[c.d]).map(c=>c.d))].sort();
+function buildDemo(){
+  if(builtD){ requestAnimationFrame(drawMapLinks); return; }
+  builtD=true;
+  renderTmap();
+  const bar=$("#bodybar");
+  const bl=document.createElement("span");bl.className="bl";bl.textContent="LOW-RECOVERY DAYS";bar.appendChild(bl);
+  DEMO.lowDays.forEach(L=>{
+    const el=document.createElement("span");
+    el.className="bday t-"+({multi_source:"multi",single_source:"single",no_work_evidence:"none",outside_coverage:"out"})[L.tier];
+    el.textContent=fmtDay(L.d);
+    el.addEventListener("click",()=>{
+      selDay=selDay===L.d?null:L.d;
+      $$("#bodybar .bday").forEach(x=>x.classList.toggle("sel",x.textContent===fmtDay(selDay||"")));
+      $$("#tmap .root").forEach((rc,ri)=>{
+        const r=DEMO.roots[mapIdx[ri]];
+        rc.classList.toggle("pulse", !!selDay && r.cites.some(c=>c.d===selDay));
+      });
+      renderDayPanel(selDay?L:null);
+    });
+    bar.appendChild(el);
+  });
+  $("#bodytoggle").addEventListener("click",e=>{
+    const wrap=$(".demogrid").parentElement;
+    const on=!wrap.classList.contains("bodyon");
+    wrap.classList.toggle("bodyon",on);
+    e.currentTarget.classList.toggle("onb",on);
+    e.currentTarget.textContent=on?"HIDE BODY SIGNAL":"OVERLAY BODY SIGNAL";
+  });
+}
+let mapIdx=[];
+function renderTmap(){
+  const host=$("#tmap");host.innerHTML="";mapIdx=[];
+  const maxScore=Math.max(...DEMO.roots.map(r=>r.rootScore));
+  const mk=(r,idx)=>{
+    const el=document.createElement("div");
+    el.className="root"+(r.accepted?" acc":"")+(selRoot===r?" sel":"");
+    const co=rootCoDays(r);
+    el.innerHTML=`<div class="rt">${r.titleEN}</div>
+      <div class="rg">${r.cites.length} citations · ${r.accepted?'accepted':'proposed'}</div>
+      <div class="sbar"><i style="width:${Math.round(r.rootScore/maxScore*100)}%"></i></div>
+      ${co.length?`<span class="cobadge">${co.length}d low-recovery overlap</span>`:""}`;
+    el.addEventListener("click",()=>{selRoot=r;renderTmap();renderPanel(r);});
+    mapIdx.push(idx);
+    return el;
+  };
+  DEMO.roots.slice(0,4).forEach((r,i)=>host.appendChild(mk(r,i)));
+  const hub=document.createElement("div");
+  hub.className="hub";
+  hub.innerHTML=`<div class="ht">TASK MAP</div><div class="hd">FROZEN · AUG 17 23:41</div>`;
+  host.insertBefore(hub,host.children[4]||null);
+  DEMO.roots.slice(4).forEach((r,i)=>host.appendChild(mk(r,i+4)));
+  requestAnimationFrame(drawMapLinks);
+}
+function renderPanel(r){
+  const p=$("#panel");
+  if(!r){p.innerHTML='<div class="empty">Click a workstream, or a day below</div>';return;}
+  const co=rootCoDays(r);
+  const days=[...new Set(r.cites.map(c=>c.d))].sort();
+  const t0=new Date("2026-07-20T00:00:00Z"), t1=new Date("2026-08-18T00:00:00Z");
+  const XT=d=>8+(new Date(d+"T00:00:00Z")-t0)/(t1-t0)*84;
+  let dots="";
+  days.forEach(d=>{
+    const n=r.cites.filter(c=>c.d===d).length;
+    dots+=`<circle cx="${XT(d).toFixed(1)}" cy="22" r="${n>=4?5:n>=2?4:3}" fill="#4B4BE8" stroke="#14120F" stroke-width="1.5"></circle>`;
+    if(LOWMAP[d]) dots+=`<circle cx="${XT(d).toFixed(1)}" cy="22" r="8.5" fill="none" stroke="#A66BC2" stroke-width="2.5" stroke-dasharray="2 3"></circle>`;
+    dots+=`<text x="${XT(d).toFixed(1)}" y="38" text-anchor="middle" style="font-size:5.5px;fill:#6F6A5E;font-family:monospace">${d.slice(5)}</text>`;
+  });
+  p.innerHTML=`
+    <div class="ph">${r.titleEN}</div>
+    <div class="prow">
+      ${r.accepted?'<span class="stamp yellow">✓ HUMAN-ACCEPTED</span>':'<span class="stamp gray">PROPOSED</span>'}
+      ${co.length?'<span class="stamp violet">BODY OVERLAP · '+co.length+'d</span>':""}
+    </div>
+    <div class="sec">WHY NOW (engine output)</div>
+    <div>${(r.whyNow||[]).map(w=>`<span class="why">${WHY[w]||w}</span>`).join("")}</div>
+    <div class="sec">EVIDENCE · ${r.cites.length} citations over ${days.length} days (agent sessions / manual)</div>
+    <div class="etl"><svg viewBox="0 0 100 44">${dots}</svg></div>
+    ${co.length?`<div class="sec" style="color:var(--violet)">SAME-DAY WITH LOW RECOVERY: ${co.map(fmtDay).join(" · ")}</div>
+    <div class="small">Co-occurrence only. Candidate status still needs: ≥2.0× enrichment, ≥3 backed days, ≥2 sources per day, and all seven gates.</div>`:""}
+    <div class="bb">body connected via <b>Oura</b> · joined on this page, day by day</div>`;
+}
+function renderDayPanel(L){
+  if(!L){ if(!selRoot) renderPanel(null); return; }
+  selRoot=null; renderTmap();
+  const p=$("#panel");
+  const sig=L.signals||{}, tierLabel=TIER[L.tier];
+  const roots=(L.rootsWithEvidence||[]);
+  p.innerHTML=`
+    <div class="ph">${L.d} · a low-recovery day</div>
+    <div class="prow">
+      <span class="stamp violet">READINESS ${L.rs} < ${L.baseline}</span>
+      <span class="stamp ${L.tier==='multi_source'?'violet':L.tier==='single_source'?'gray':'red'}">${tierLabel.toUpperCase()}</span>
+    </div>
+    <div class="dk">
+      <span>sleep</span><span class="dv2">${L.slp??"·"} h</span>
+      <span>night HRV</span><span class="dv2">${L.hrv??"·"} ms</span>
+      <span>agent sessions</span><span class="dv2">${sig.agent||0}</span>
+      <span>meetings</span><span class="dv2">${sig.meeting||0}</span>
+      <span>calendar</span><span class="dv2">${sig.calendar||0}</span>
+    </div>
+    ${roots.length?`<div class="sec">WORKSTREAMS WITH EVIDENCE THAT DAY</div>
+      <div>${roots.map(t=>`<span class="why">${t}</span>`).join("")}</div>`
+      :L.tier==="outside_coverage"
+      ?`<div class="sec" style="color:var(--red)">NO ANSWER AVAILABLE</div><div class="small">Work sources begin later (meetings 07-21 · agent sessions 07-23 · calendar 08-04). The system says "unknown" instead of inventing one.</div>`
+      :`<div class="sec" style="color:var(--muted)">NO WORK EVIDENCE RECORDED THIS DAY</div>`}
+    <div class="bb">co-occurrence is background (C1) · never a verdict</div>`;
+}
+function drawMapLinks(){
+  const svg=$("#maplinks"), wrap=svg.parentElement, hub=wrap.querySelector(".hub");
+  if(!hub) return;
+  const wr=wrap.getBoundingClientRect();
+  if(wr.width<10) return;
+  svg.setAttribute("viewBox",`0 0 ${wr.width} ${wr.height}`);
+  svg.innerHTML="";
+  const hr=hub.getBoundingClientRect(), hx=hr.left-wr.left+hr.width/2, hy=hr.top-wr.top+hr.height/2;
+  wrap.querySelectorAll(".root").forEach(el=>{
+    const r=el.getBoundingClientRect(), x=r.left-wr.left+r.width/2, y=r.top-wr.top+r.height/2;
+    svgEl("line",{x1:hx,y1:hy,x2:x,y2:y,stroke:"#14120F","stroke-width":2,"stroke-dasharray":"1 7","stroke-linecap":"round",opacity:.55},svg);
+  });
+}
+addEventListener("resize",()=>{ if(builtD) drawMapLinks(); });
+
+/* ---------- boot ---------- */
+if(!MOBILE){
+  g=Math.max(0,Math.min(FLAT.length-1,+(sessionStorage.getItem("weishi-g")||0)));
+  try{sessionStorage.removeItem("weishi-g");}catch(e){}
+  apply();
+} else {
+  buildReadiness();buildLanes();runRank();buildDemo();
+  runDial();runGates();runLadder();
+  $("#actlabel").textContent="";
+}
+/* populate abundance clusters (websites / videos / agents, growing counts) */
+$$(".clu").forEach(c=>{
+  const n={page:9,vid:11,agt:14}[c.dataset.kind]||9;
+  for(let i=0;i<n;i++) c.appendChild(document.createElement("i"));
+});
+/* deck state and mobile layout are exclusive; re-init cleanly when the breakpoint flips */
+matchMedia("(max-width: 900px)").addEventListener("change",()=>{
+  try{sessionStorage.setItem("weishi-g",String(g));}catch(e){}
+  location.reload();
+});
+</script>
+</body>
+</html>
