@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "causal-raid/**"
+      - "weishi-taskmap-salon/**"
       - ".github/pages-index.html"
       - ".github/workflows/deploy-causal-raid-pages.yml"
   workflow_dispatch:
@@ -52,6 +53,8 @@ jobs:
         run: |
           mkdir -p _site/causal-raid
           cp -R causal-raid/dist/. _site/causal-raid/
+          mkdir -p _site/weishi-taskmap-salon
+          cp -R weishi-taskmap-salon/. _site/weishi-taskmap-salon/
           cp .github/pages-index.html _site/index.html
           touch _site/.nojekyll
 
