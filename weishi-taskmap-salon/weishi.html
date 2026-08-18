@@ -162,6 +162,8 @@ body.tired .btn.sel{background:var(--red-soft)}
 .traces .stick:nth-child(3){transform:rotate(-.8deg)}
 .traces .stick:nth-child(4){background:var(--violet);color:#fff;transform:rotate(1.6deg)}
 .traces .stick:nth-child(4) .sk{color:rgba(255,255,255,.8)}
+.stick .sg{display:block;font-size:.68em;font-weight:500;color:var(--muted);margin-top:.3em;letter-spacing:0}
+.traces .stick:nth-child(1) .sg,.traces .stick:nth-child(2) .sg,.traces .stick:nth-child(4) .sg{color:rgba(255,255,255,.88)}
 #s0 .grid{display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:clamp(24px,4vw,72px);align-items:center}
 /* abundance -> coordinator diagram */
 .abun{display:flex;flex-direction:column;gap:clamp(10px,1.6vh,20px);max-width:56em;margin-top:.4em}
@@ -295,7 +297,7 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 }
 .gate .gcau b{font-family:var(--mono);color:var(--cobalt);letter-spacing:.02em}
 .gate.lit{opacity:1;transform:none;box-shadow:var(--sh-sm)}
-.ladder{display:grid;grid-template-columns:repeat(5,1fr);gap:clamp(10px,1.2vw,20px);align-items:end;margin:2.6em 0 1em;position:relative}
+.ladder{display:grid;grid-template-columns:repeat(4,1fr);gap:clamp(10px,1.2vw,20px);align-items:end;margin:2.6em 0 1em;position:relative}
 .rung{
   background:var(--paper);border:var(--bd);border-radius:var(--r);
   padding:1em .9em .9em;position:relative;
@@ -446,9 +448,46 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 .mr.b2{background:var(--cobalt-soft)}
 .mr.b3{background:var(--red-soft)}
 .mr.b4{background:var(--yellow-soft)}
+.pluckwrap{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:clamp(14px,1.8vw,28px);align-items:stretch;margin-top:1.2em;max-width:min(92vw,1320px)}
 #calmstring{
-  width:min(88vw,1100px);height:auto;display:block;margin-top:1.4em;
+  width:100%;height:auto;display:block;cursor:ns-resize;touch-action:none;
   background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+}
+.pside{display:flex;flex-direction:column;gap:1em;justify-content:center}
+.pstat{
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);
+  padding:.7em 1.2em;min-width:9em;text-align:center;transition:background .6s;
+}
+.pstat .pk{display:block;font-family:var(--mono);font-size:.66em;font-weight:700;letter-spacing:.16em;color:var(--muted)}
+.pstat .pv{display:block;font-weight:700;font-size:clamp(22px,2.2vw,34px);transition:color .6s}
+.pluckwrap.calm .pstat{background:var(--violet-soft)}
+.pluckwrap.calm .pstat .pv{color:var(--violet)}
+.pluckwrap.chaos .pstat{background:var(--red-soft)}
+.pluckwrap.chaos .pstat .pv{color:var(--red)}
+/* alaya parameter-space animation */
+.alaya{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:clamp(16px,2vw,36px);align-items:center;max-width:min(92vw,1200px)}
+.afk{font-family:var(--mono);font-size:.68em;font-weight:700;letter-spacing:.14em;color:var(--muted);margin-bottom:.6em}
+.agrid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;width:clamp(220px,24vw,340px)}
+.agrid i{
+  aspect-ratio:1;border-radius:5px;border:2px solid var(--ink);background:var(--sand);
+  transition:background .5s,transform .5s;
+}
+.agrid i.on{background:var(--violet);transform:rotate(6deg)}
+.aframe{
+  background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
+  padding:1.1em 1.4em;max-width:26em;
+}
+.aframe .aft{font-family:var(--kai);font-weight:700;font-size:clamp(20px,2vw,30px);transition:opacity .4s}
+.aframe .afp{display:flex;gap:.5em;margin-top:.8em;flex-wrap:wrap}
+.aframe .afp span{
+  font-family:var(--mono);font-size:.72em;font-weight:700;border:2px solid var(--ink);
+  border-radius:8px;padding:.15em .6em;background:var(--sand);transition:background .5s;
+}
+.aframe .afp span.hot{background:var(--yellow)}
+.me{
+  display:inline-block;font-size:1.7em;font-weight:700;line-height:1;
+  background:var(--yellow);border:2.5px solid var(--ink);border-radius:8px;
+  padding:.02em .25em;margin:0 .12em;transform:rotate(-3deg);box-shadow:2px 2px 0 var(--ink);
 }
 /* ---------- appendix ---------- */
 #appendix{
@@ -497,7 +536,7 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
   #s0 .grid,#s1 .grid,.iv,.demogrid{grid-template-columns:1fr}
   .mr{grid-template-columns:1fr}
   .gates{grid-template-columns:1fr 1fr}
-  .ladder{grid-template-columns:repeat(5,minmax(90px,1fr));overflow-x:auto;padding-top:3em}
+  .ladder{grid-template-columns:repeat(4,minmax(100px,1fr));overflow-x:auto;padding-top:3em}
   .tmap{grid-template-columns:1fr 1fr}
   .tmap .hub{grid-column:1/-1;order:-1}
   #maplinks{display:none}
@@ -523,21 +562,21 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
   <div class="stage">
 
     <div data-step="0">
-      <div class="badge">静心院沙龙 · 二〇二六年八月十八日</div>
-      <h1 style="margin-top:.5em">一天下来,<br>我留下了四种信号</h1>
+      <div class="badge">唯识俱乐部 @ 听泉静心学堂 · 二〇二六年八月十八日</div>
+      <h1 style="margin-top:.5em">你的一天,<br>会自动留下四种记录</h1>
       <div class="traces" style="margin-top:1.4em">
-        <span class="stick"><span class="sk">AGENT SESSIONS</span><span class="sv">× 2</span></span>
-        <span class="stick"><span class="sk">MEETING</span><span class="sv">× 1</span></span>
-        <span class="stick"><span class="sk">CALENDAR</span><span class="sv">× 1</span></span>
-        <span class="stick"><span class="sk">BODY · READINESS</span><span class="sv">73 ↓</span></span>
+        <span class="stick"><span class="sk">AGENT SESSIONS</span><span class="sv">× 2</span><span class="sg">和 AI 一起干活的记录</span></span>
+        <span class="stick"><span class="sk">MEETINGS</span><span class="sv">× 1</span><span class="sg">开了什么会,聊了什么</span></span>
+        <span class="stick"><span class="sk">CALENDAR</span><span class="sv">× 1</span><span class="sg">日程上安排了什么</span></span>
+        <span class="stick"><span class="sk">BODY</span><span class="sv">73 ↓</span><span class="sg">手表读到的身体状态</span></span>
       </div>
-      <p class="lead">agent 会话、会议记录、日历,和一条紫色的身体线(08/12 真实数据)。<br>它们都是日常自动发生的事件,<strong>默默记录着我们怎么应对这个被自己念头渲染出来的世界</strong>。其中那条紫色的,叫生物因果信号。</p>
+      <p class="lead">不用手写,过日子就有。上面这四张,是我 08/12 真实的一天。<br><span class="hi-y">我们做的事:用这四种记录,替你把任务排好。</span>身体那条,叫生物因果信号。</p>
     </div>
 
     <div data-step="1">
       <h1>第二天早上,<br>先做哪件事?</h1>
-      <p class="lead" style="margin:1em 0 1.6em">四种信号都在,却没有一个直接告诉我答案。说话的是我的判断,还是我的疲惫?</p>
-      <p class="lead"><span class="hi-y">我们做的产品,把这些信号自动排成任务的先后。</span>今晚最后会点开给大家看。</p>
+      <p class="lead" style="margin:1em 0 1.6em">四种记录都在,却没有一个直接告诉我答案。说话的是我的判断,还是我的疲惫?</p>
+      <p class="lead">今晚最后,直接点开给大家看。</p>
       <div class="paths" style="margin-top:1.8em;display:flex;gap:1.4em;flex-wrap:wrap">
         <button class="btn primary" id="go-walk">跟着走</button>
         <button class="btn" id="go-live">直接看 Demo</button>
@@ -599,7 +638,7 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 </section>
 
 <!-- ================= S1 · 科学 ================= -->
-<section class="scene step-solo" id="s1" data-steps="4" data-title="科学 · 身体怎么改写同一件事" data-mark="境">
+<section class="scene step-solo" id="s1" data-steps="2" data-title="科学 · 身体怎么改写同一件事" data-mark="境">
   <div class="stage">
 
     <div data-step="0">
@@ -644,33 +683,16 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
           <p class="lead">科学家让五千多个健康人少睡觉,这样的实验五十年里反复做了 154 次,结论一致:<strong>睡眠损失会压低好心情、抬高焦虑</strong>。做一次准一次,不是巧合。</p>
           <p class="lead" style="margin-top:1em">缺觉时,报警的杏仁核反应放大约 <strong class="num">60%</strong>,踩刹车的前额叶跟它断线。所以列表上每件事都显得更凶。睡一场深觉,线路第二天修复。</p>
           <p class="cite">Palmer et al. 2024 · Yoo et al. 2007 · Ben Simon et al. 2020</p>
+          <p class="lead" style="margin-top:1em">所以在产品里,身体状态只调<strong>什么时候提醒你</strong>,从不碰任务本身。</p>
         </div>
       </div>
-    </div>
-
-    <div data-step="2">
-      <h2>三条边界,也是产品的三条规矩</h2>
-      <ul class="honest">
-        <li><strong>身体信号读不出你在想什么。</strong>它连你是愤怒还是兴奋都分不清,更读不出哪个任务重要。所以它永远不碰「任务是什么」。<span class="evd meta">上百项研究的共识</span></li>
-        <li><strong>身体状态改变的是「威胁感」,不保证判断更对。</strong>所以它只做一件事:在你可能放大威胁的时候,提醒你重看一眼,不替你决定。<span class="evd theo">睡眠实验的边界</span></li>
-        <li><strong>一次巧妙的实验靠不住。</strong>power pose、面部反馈这些名场面都没能复现。所以我们只信反复验证,系统里的证据也要一次一次攒。<span class="evd exp">复现危机的教训</span></li>
-      </ul>
-    </div>
-
-    <div data-step="3">
-      <h2>所以,身体只做有证据做的事</h2>
-      <div class="bound">
-        <div class="b no"><div class="h">不许碰</div><div class="v">任务是什么(membership)</div></div>
-        <div class="b yes"><div class="h">只能调</div><div class="v">为什么是现在(why-now)</div></div>
-      </div>
-      <p class="lead">当你的状态可能在放大威胁,产品只轻轻问一句:<br><strong>这个判断,是你做的,还是你的疲惫替你做的?</strong>要不要睡一觉再看。</p>
     </div>
 
   </div>
 </section>
 
 <!-- ================= S2 · 因果 ================= -->
-<section class="scene step-solo" id="s2" data-steps="6" data-title="因果 · 什么时候才有资格说「是它害的」" data-mark="因">
+<section class="scene step-solo" id="s2" data-steps="5" data-title="因果 · 什么时候才有资格说「是它害的」" data-mark="因">
   <div class="stagewrap">
 
     <div data-step="0">
@@ -713,45 +735,38 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 
     <div data-step="3">
       <div class="badge fict">讲解示例 · 虚构</div>
-      <h2 style="margin-top:.6em">阶梯只能攒着上,降级是自动的</h2>
+      <h2 style="margin-top:.6em">结论要一级一级挣,降级是自动的</h2>
       <div class="ladder" id="ladder">
-        <div class="rung r0"><div class="rc">C0</div><div class="rn">无数据</div><div class="rq">什么都还没有</div></div>
-        <div class="rung r1"><div class="rc">C1</div><div class="rn">相关 / 共现</div><div class="rq">「我觉得」,只做背景</div></div>
-        <div class="rung r2"><div class="lid"></div><div class="lidnote">被动观察的天花板 · 代码封顶</div><div class="rc">C2</div><div class="rn">归因候选</div><div class="rq">账查过了,值得怀疑</div></div>
-        <div class="rung r3 ghost"><div class="rc">C3</div><div class="rn">因果假设</div><div class="rq">改变条件后,2 次独立确认</div><div class="cells9" id="cellsA"></div></div>
-        <div class="rung r4 ghost"><div class="rc">C4</div><div class="rn">已验证模式</div><div class="rq">5 次确认零矛盾;两次矛盾,一夜打回</div><div class="cells9" id="cellsB"></div></div>
+        <div class="rung r1"><div class="rn">撞在同一天</div><div class="rq">只当背景,不参与排序</div></div>
+        <div class="rung r2"><div class="lid"></div><div class="lidnote">光靠记录,最多到这里</div><div class="rn">比率过了门槛</div><div class="rq">七道门全过,也只是「值得看一眼」</div></div>
+        <div class="rung r3 ghost"><div class="rn">改了安排,再验证</div><div class="rq">两次都对,才敢给建议</div><div class="cells9" id="cellsA"></div></div>
+        <div class="rung r4 ghost"><div class="rn">回回都成立</div><div class="rq">五次零反例,才允许个性化;反例两次,一夜降回去</div><div class="cells9" id="cellsB"></div></div>
       </div>
-      <p class="lead">C3、C4 靠后续真实事件驱动,每夜重算,<strong>不许手工加分</strong>。</p>
+      <p class="lead">升级靠攒,<strong>不许手工加分</strong>;降级不用人管,每夜自动重算。</p>
     </div>
 
     <div data-step="4">
       <div class="badge fict">讲解示例 · 虚构</div>
-      <h2 style="margin-top:.6em">什么才算干预</h2>
+      <h2 style="margin-top:.6em">什么才算「改了安排」</h2>
       <div class="iv">
         <div class="col ok">
-          <h4>算:改的是原因那一侧</h4>
+          <h4>算:改的是事情本身</h4>
           <ul>
             <li>把深夜改稿固定挪到上午</li>
             <li>取消或移交那个承诺</li>
-            <li>改会议结构,让截稿周不再通宵</li>
+            <li>换一种开会方式,截稿周不再通宵</li>
           </ul>
         </div>
         <div class="col no">
-          <h4>不算:补的是结果那一侧</h4>
+          <h4>不算:只是让自己舒服一点</h4>
           <ul>
-            <li>多睡一觉 <span class="why">舒服,但验证不了原因</span></li>
+            <li>多睡一觉 <span class="why">补的是身体,验证不了安排</span></li>
             <li>心里踏实了 <span class="why">感觉不是证据</span></li>
-            <li>事后挑个变好的指标 <span class="why">判定标准必须在干预前写死</span></li>
+            <li>事后挑个变好的指标 <span class="why">标准要事先写死</span></li>
           </ul>
         </div>
       </div>
-      <p class="lead">验证的单位不是「好日子」,是<strong>同样的坏条件再来一次时,身体这次怎么说</strong>。</p>
-    </div>
-
-    <div data-step="5">
-      <p class="quote">现行熏种子<br>种子生现行</p>
-      <p class="lead" style="margin-top:1.2em">行为沉淀成习惯,习惯又塑造下一次行为。<br><strong>熏习需要重复,呈现不等于定论。</strong>这是类比,不是互证。</p>
-      <p class="small" style="margin-top:1.4em">完整的七道闸门 × 宣称阶梯对照表,按 <span class="num">A</span> 键查看附录。</p>
+      <p class="lead">验证的单位只有一个:<strong>同样的安排再来一次,结果变没变。</strong></p>
     </div>
 
   </div>
@@ -767,7 +782,7 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
         <span class="badge real">REAL · AGENT SESSIONS / MEETINGS / CALENDAR / BODY</span>
       </div>
       <div class="chartwrap" id="chart-lanes"></div>
-      <p class="lead">这些事件每天自动发生,默默记录着我们怎么应对各自的世界。紫色 ▲ 是身体侧的低恢复日(只跟我自己的基线比)。<strong>黑圈,是工作证据和低恢复撞在同一天的日子。</strong></p>
+      <p class="lead">52 天放在同一根轴上:上面三行是工作,最下面是身体。紫色 ▲ = 恢复跌破我自己基线的日子;<strong>黑圈 = 工作和身体撞在同一天</strong>。</p>
     </div>
 
     <div data-step="1">
@@ -777,7 +792,7 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
       </div>
       <div class="rank" id="rank"></div>
       <div class="covcard" id="covcard">SOURCES&nbsp; <span class="cs">agent_session ✓</span> <span class="cs">meeting_notes ✓</span> <span class="cs">calendar ✓</span> <span class="cs">body · oura ✓</span></div>
-      <p class="lead" style="margin-top:.9em">这份排序来自工作侧证据。<strong>今晚示范的,是把生物因果信号叠上去之后,它会怎么变。</strong></p>
+      <p class="lead" style="margin-top:.9em">排序看的是证据密度、复现和新鲜度。<strong>身体信号是其中一个 feature</strong>:叠上去,只改「什么时候提醒你」。</p>
     </div>
 
     <div data-step="2">
@@ -830,38 +845,58 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
     <div data-step="0">
       <div class="badge fict">意象 · 弦论</div>
       <h2 style="margin-top:.6em">弦论说:万物的差异,<span class="u">只是振动频率的差异</span></h2>
-      <canvas id="calmstring" width="1100" height="230" aria-label="一根频率渐升的振动弦"></canvas>
-      <p class="lead" style="margin-top:1.1em;font-size:clamp(19px,1.8vw,29px)"><strong>你也是弦。</strong>念头,是弦上的一次振动。</p>
+      <div class="pluckwrap">
+        <canvas id="calmstring" width="1100" height="230" aria-label="可以拨动的弦:往上拨变宁静,往下拨变混乱"></canvas>
+        <div class="pside">
+          <div class="pstat"><span class="pk">READINESS</span><span class="pv num" id="pv1">74</span></div>
+          <div class="pstat"><span class="pk">AGENTS</span><span class="pv" id="pv2">待命</span></div>
+        </div>
+      </div>
+      <p class="lead" style="margin-top:.9em"><strong>改变频率,世界就变。</strong><span class="small" style="margin-left:1em">试试:在弦上往上拨,或往下拨</span></p>
     </div>
 
     <div data-step="1">
       <div class="badge fict">比喻</div>
       <h2 style="margin-top:.6em">阿赖耶识,像一个参数空间</h2>
-      <p class="lead">经验、习气、倾向,都是参数;每一个念头,是这套参数<strong>渲染出来的一帧</strong>。<br>同一件事进来,参数不同,渲染出来的世界就不同。</p>
-      <p class="lead" style="margin-top:1em"><span class="hi-y">频率变了,世界就换了脸色。</span>刚才的呼吸,你们已经亲手试过一次。</p>
+      <div class="alaya">
+        <div class="acol">
+          <div class="afk">参数(经验 · 习气 · 倾向)</div>
+          <div class="agrid" id="agrid"></div>
+          <button class="btn" id="adone" style="margin-top:1em">完成一个任务 ✓</button>
+        </div>
+        <div class="arr" style="align-self:center"></div>
+        <div class="aframe">
+          <div class="afk">渲染出的下一帧念头</div>
+          <div class="aft" id="aft">「明天又是一座山」</div>
+          <div class="afp" id="afp"></div>
+        </div>
+      </div>
+      <p class="quote kai" style="font-size:clamp(22px,2.6vw,40px);margin-top:.9em">现行熏种子 · 种子生现行</p>
+      <p class="lead">做完一件事,参数就被改写一点;下一帧念头,从新的参数里长出来。</p>
     </div>
 
     <div data-step="2">
       <h2>我们管理的,<span class="u">从来不是任务</span></h2>
-      <p class="lead">是自己的念头,是 attention 放在哪。<br>把最糟心的事找出来:身体在响的、优先级最高的,交给 AI 去执行。不是为了做更多的事,是为了那件更老的事:</p>
-      <p class="quote" style="margin-top:.6em">变清静</p>
-      <p class="lead" style="margin-top:.8em">就像刚才的呼吸:你改的只是频率,身体跟着松了。念头也一样。</p>
+      <p class="lead">是自己的念头,是 attention 放在哪。<br>把最糟心的事找出来,交给 agent 去执行:</p>
+      <p class="quote" style="margin-top:.6em">把事交给 agent<br>把念头还给自己</p>
     </div>
 
     <div data-step="3">
-      <h2>这套分层,<span class="u">一千三百年前就画好了</span></h2>
+      <div class="badge fict">比喻</div>
+      <h2 style="margin-top:.6em">这套分层,<span class="u">一千三百年前就画好了</span></h2>
       <div class="maprows">
         <div class="mr b1"><span class="nm">前五识</span><span class="sys">刚才那条<b>紫色的身体线</b>:心率、HRV、睡眠,感官第一时间「感到」的</span></div>
         <div class="mr b2"><span class="nm">第六意识</span><span class="sys">会议、agent 会话、日历长成的那张<b>任务地图</b>:想事、排事的那层</span></div>
-        <div class="mr b3"><span class="nm">第七末那识</span><span class="sys"><b>why-now</b>:「这事对我意味着什么」,也是疲惫放大焦虑的地方</span></div>
+        <div class="mr b3"><span class="nm">第七末那识</span><span class="sys"><b>why-now</b>:这件事对<span class="me">我</span>意味着什么。「我」在哪里,焦虑就在哪里放大</span></div>
         <div class="mr b4"><span class="nm">第八阿赖耶识</span><span class="sys"><b>参数空间</b>:证据要攒,升级靠重复。现行熏种子,种子生现行</span></div>
       </div>
-      <p class="small" style="margin-top:1.2em">工程对应,不是教义。接下来交给老师。</p>
+      <p class="small" style="margin-top:1.2em">只是一个比喻。深讲唯识,交给今晚的老师。</p>
     </div>
 
     <div data-step="4" class="fin">
-      <p class="quote kai">如涛波依水</p>
-      <p class="lead" style="margin-top:1.2em">身体的紧、念头的急、任务的重,是同一条河上同时翻起的波浪。<br>谢谢大家。</p>
+      <p class="lead" style="font-size:clamp(20px,2.1vw,32px)">你看到的世界,<br>是你的频率渲染出来的。</p>
+      <p class="quote" style="margin-top:.5em;font-size:clamp(44px,6vw,96px)">调它。</p>
+      <p class="small kai" style="margin-top:2em;letter-spacing:.3em">如涛波依水 · 谢谢大家</p>
     </div>
 
   </div>
@@ -877,29 +912,25 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
       <div class="qc"><div class="qq">率尔 → 寻求 → 决定</div><div class="qn">《瑜伽师地论》三心,窥基五心章。初触境的率尔心尚无意义判断;意义在几拍之后成形。</div></div>
       <div class="qc"><div class="qq">执受根身 · 同安危</div><div class="qn">《成唯识论》卷二。阿赖耶识摄有根身为自体,与身体安危与共;「恒转如瀑流」,是流不是库。</div></div>
     </div>
-    <h2>附录 · 七道证据闸门</h2>
+    <h2>附录 · 弦论,一句话</h2>
+    <p class="lead" style="font-size:1em;max-width:46em">弦论把基本粒子看作同一根弦的不同振动模式:粒子的差异,是振动方式的差异。今晚只把它当意象,不作物理主张。入门可读 Brian Greene,<i>The Elegant Universe</i>。</p>
+
+    <h2>附录 · 七道证据闸门,和它们在因果研究里的出处</h2>
     <table>
-      <thead><tr><th style="width:11em">闸门</th><th>防什么错</th><th style="width:16em">通过标准</th></tr></thead>
+      <thead><tr><th style="width:10em">闸门</th><th>防什么错</th><th style="width:20em">因果研究出处</th></tr></thead>
       <tbody>
-        <tr><td class="mono">citation</td><td><span class="nm">防编故事:</span>每条归因必须能在原始会议记录里逐字找到出处</td><td>引文可回溯</td></tr>
-        <tr><td class="mono">title_ban</td><td><span class="nm">防贴标签:</span>日历标题只能当背景,不能当结论</td><td>不以事件标题立论</td></tr>
-        <tr><td class="mono">time_plausibility</td><td><span class="nm">防翻旧账:</span>证据必须落在信号当天的本地日</td><td>当日证据;多日历史只算复现背景</td></tr>
-        <tr><td class="mono">biometrics_firewall</td><td><span class="nm">防脑补身体:</span>身体模式必须来自真实设备数据,不能从文字里想象</td><td>体征数据实测</td></tr>
-        <tr><td class="mono">recurrence_cross_source</td><td><span class="nm">防孤证:</span>需要第二来源独立印证同一线索</td><td>跨来源复现</td></tr>
-        <tr><td class="mono">non_clinical_language</td><td><span class="nm">防越权诊断:</span>出现临床措辞直接整条拒绝</td><td>禁 caused / diagnose / burnout 等</td></tr>
-        <tr><td class="mono">enrichment gate</td><td><span class="nm">防话多的一天、单次巧合、孤证:</span>用对照率不用原始计数</td><td class="mono">≥2.0× · ≥3 backed days · 每日≥2 来源</td></tr>
+        <tr><td class="mono">citation</td><td><span class="nm">防编故事:</span>每条归因必须能在原始记录里逐字找到出处</td><td>数据溯源与可复现性:Peng (2011), <i>Science</i></td></tr>
+        <tr><td class="mono">title_ban</td><td><span class="nm">防贴标签:</span>日历标题只能当背景,不能当结论</td><td>测量效度:Carroll et al., <i>Measurement Error in Nonlinear Models</i></td></tr>
+        <tr><td class="mono">time_plausibility</td><td><span class="nm">防翻旧账:</span>证据必须落在信号当天</td><td>时序判据:Bradford Hill (1965), <i>Proc. R. Soc. Med.</i></td></tr>
+        <tr><td class="mono">biometrics_firewall</td><td><span class="nm">防脑补身体:</span>身体状态必须实测,不能从文字推断</td><td>暴露须实测:Hernán &amp; Robins, <i>Causal Inference: What If</i></td></tr>
+        <tr><td class="mono">recurrence_cross_source</td><td><span class="nm">防孤证:</span>需要第二来源独立印证同一线索</td><td>三角验证:Munafò &amp; Davey Smith (2018), <i>Nature</i></td></tr>
+        <tr><td class="mono">non_clinical_language</td><td><span class="nm">防越权:</span>措辞不超出数据支持的范围,禁临床词</td><td>推断边界:Rothman, Greenland &amp; Lash, <i>Modern Epidemiology</i></td></tr>
+        <tr><td class="mono">enrichment gate</td><td><span class="nm">防「话多的一天」与单次巧合:</span>比的是比率不是次数,<span class="mono">≥2.0× · ≥3 覆盖日 · 每日 ≥2 来源</span></td><td>病例对照与关联强度:Cornfield (1951);Hill (1965)</td></tr>
       </tbody>
     </table>
-    <h2>附录 · 宣称阶梯</h2>
-    <table>
-      <thead><tr><th style="width:11em">级别</th><th>口语版</th><th style="width:18em">升降规则</th></tr></thead>
-      <tbody>
-        <tr><td class="mono">correlation</td><td>「我觉得」:只做背景,不参与排序,永不晋级</td><td>共现即得</td></tr>
-        <tr><td class="mono">attribution_candidate</td><td>「账查过了,值得怀疑」:被动观察的天花板</td><td>七门全过;仍携带共同原因与回归均值两个警示标志</td></tr>
-        <tr><td class="mono">causal_hypothesis</td><td>「改过条件、验证过两次」:才能据此给建议</td><td class="mono">确认≥2 且矛盾≤1</td></tr>
-        <tr><td class="mono">validated_pattern</td><td>「五次都对、一次没错」:才允许个性化</td><td class="mono">确认≥5 且矛盾=0;矛盾≥2 自动回落</td></tr>
-      </tbody>
-    </table>
+
+    <h2>附录 · 记忆层怎么辅佐</h2>
+    <p class="lead" style="font-size:1em;max-width:46em">闸门只判「这一次」,记忆层负责「攒」:每当同样的安排再来一次,结果被记成一次确认或一次反例。确认满两次,才升为可以给建议的假设;满五次且零反例,才允许个性化;反例到两次,自动降级。每夜从头重算,没有手工加分的入口。</p>
   </div>
 </aside>
 
@@ -1865,7 +1896,8 @@ addEventListener("keydown",e=>{
   if(k==="Escape"){ $("#appendix").classList.remove("open"); return; }
   if(k==="a"||k==="A"){ $("#appendix").classList.toggle("open"); return; }
   if($("#appendix").classList.contains("open")) return;
-  if(["ArrowRight"," ","PageDown"].includes(k)){ e.preventDefault(); step(1); }
+  if(["ArrowRight"," ","PageDown"].includes(k)){ e.preventDefault();
+    if(g>=FLAT.length-1){ $("#appendix").classList.add("open"); } else step(1); }
   else if(["ArrowLeft","PageUp"].includes(k)){ e.preventDefault(); step(-1); }
   else if(k==="ArrowDown"){ e.preventDefault(); scene(1); }
   else if(k==="ArrowUp"){ e.preventDefault(); scene(-1); }
@@ -1927,41 +1959,87 @@ const Breath=(()=>{
 })();
 $("#ringgo").addEventListener("click",()=>Breath.run(3));
 
-/* ---------- s4: chirp string (frequency rises along the string, pencil strands) ---------- */
+/* ---------- s4: pluckable string (pluck up = calm/order, pluck down = chaos) ---------- */
 const CalmString=(()=>{
-  const cv=$("#calmstring"); if(!cv) return {tick:()=>{}};
+  const cv=$("#calmstring"); if(!cv) return {};
   const bx=cv.getContext("2d"),W=cv.width,H=cv.height,MID=H/2;
-  let t=0;
+  let t=0,mood=0,target=0; // -1 calm … 0 chirp … +1 chaos
   function draw(){
     bx.clearRect(0,0,W,H);
-    const grad=bx.createLinearGradient(20,0,W-20,0);
-    grad.addColorStop(0,"#4B4BE8");grad.addColorStop(.5,"#A66BC2");grad.addColorStop(1,"#F2542D");
+    const calm=Math.max(0,-mood), chaos=Math.max(0,mood);
+    const g=bx.createLinearGradient(20,0,W-20,0);
+    if(chaos>.4){ g.addColorStop(0,"#F2542D");g.addColorStop(1,"#B33418"); }
+    else if(calm>.4){ g.addColorStop(0,"#4B4BE8");g.addColorStop(1,"#A66BC2"); }
+    else { g.addColorStop(0,"#4B4BE8");g.addColorStop(.5,"#A66BC2");g.addColorStop(1,"#F2542D"); }
     for(let s=0;s<4;s++){
       bx.beginPath();
       for(let x=20;x<=W-20;x+=3){
         const p=(x-20)/(W-40);
         const rampL=Math.sin(Math.PI/2*Math.min(1,p*7));
         const rampR=Math.sin(Math.PI/2*Math.min(1,(1-p)*7));
-        const A=H*.32*(1-p*.45)*rampL*rampR;
-        const k=.012*(1+10*p*p);
-        const y=MID+A*Math.sin(k*x - t*(1+2*p))+(s-1.5)*1.5;
+        const chirpK=.012*(1+10*p*p);
+        const k=lerp(lerp(chirpK,.006,calm),.05,chaos*.9);
+        const jit=chaos*Math.sin(x*1.7+s*13.7+t*9)*H*.06;
+        const A=H*.32*(1-p*.45*(1-calm))*rampL*rampR;
+        const y=MID+A*Math.sin(k*x - t*(1+2*p*(1-calm)))+jit+(s-1.5)*1.5;
         x===20?bx.moveTo(x,y):bx.lineTo(x,y);
       }
-      bx.strokeStyle=s===1?grad:"rgba(20,18,15,"+(0.14+s*0.05)+")";
+      bx.strokeStyle=s===1?g:"rgba(20,18,15,"+(0.14+s*0.05)+")";
       bx.lineWidth=s===1?2.5:1.2;
-      bx.globalAlpha=s===1?.95:1;
-      bx.stroke();bx.globalAlpha=1;
+      bx.stroke();
     }
     bx.fillStyle="#14120F";
     [[20,MID],[W-20,MID]].forEach(([x,y])=>{bx.beginPath();bx.arc(x,y,4.5,0,7);bx.fill();});
   }
-  function tick(){
-    if(!REDUCE && cv.getBoundingClientRect().width>0){ t+=.05; }
-    draw();
+  function ui(){
+    const w=cv.closest(".pluckwrap"); if(!w) return;
+    w.classList.toggle("calm",mood<-.35);
+    w.classList.toggle("chaos",mood>.35);
+    $("#pv1").textContent=Math.round(74 - mood*14 + Math.max(0,-mood)*(-2));
+    $("#pv2").textContent=mood>.35?"乱转":mood<-.35?"有序 ✓":"待命";
   }
-  draw();
+  function pointer(e){
+    const rc=cv.getBoundingClientRect();
+    const y=(e.clientY-rc.top)/rc.height;
+    target=Math.max(-1,Math.min(1,(y-.5)*2.4)); // pluck above mid → calm, below → chaos
+    e.preventDefault();
+  }
+  cv.addEventListener("pointerdown",e=>{pointer(e);try{cv.setPointerCapture(e.pointerId);}catch(_){}});
+  cv.addEventListener("pointermove",e=>{ if(e.buttons) pointer(e); });
+  function tick(){
+    if(!REDUCE) t+=.05;
+    mood=lerp(mood,target,.06);
+    draw();ui();
+  }
+  draw();ui();
   if(!REDUCE) setInterval(tick,40);
-  return {tick,draw};
+  return {};
+})();
+
+/* ---------- s4: alaya parameter-space (task done -> parameters shift -> next frame renders differently) ---------- */
+(function Alaya(){
+  const grid=$("#agrid"); if(!grid) return;
+  for(let i=0;i<32;i++){ const c=document.createElement("i"); if(i%7===0) c.classList.add("on"); grid.appendChild(c); }
+  const FRAMES=[
+    {t:"「明天又是一座山」",p:[["0.78 担忧",1],["0.12 计划",0],["0.06 平静",0]]},
+    {t:"「先搬掉最沉的一块」",p:[["0.41 担忧",0],["0.44 计划",1],["0.10 平静",0]]},
+    {t:"「原来只剩两件事」",p:[["0.18 担忧",0],["0.52 计划",1],["0.27 平静",0]]},
+    {t:"「今晚可以早点睡」",p:[["0.07 担忧",0],["0.31 计划",0],["0.58 平静",1]]},
+  ];
+  let fi=0;
+  function render(){
+    const f=FRAMES[fi];
+    $("#aft").textContent=f.t;
+    $("#afp").innerHTML=f.p.map(([s,hot])=>`<span${hot?' class="hot"':''}>${s}</span>`).join("");
+  }
+  render();
+  $("#adone").addEventListener("click",()=>{
+    const off=[...grid.children].filter(c=>!c.classList.contains("on"));
+    for(let i=0;i<5&&i<off.length;i++){ const c=off[(i*7)%off.length]; setTimeout(()=>c.classList.add("on"),i*130); }
+    fi=Math.min(FRAMES.length-1,fi+1);
+    $("#aft").style.opacity="0";
+    setTimeout(()=>{render();$("#aft").style.opacity="1";},420);
+  });
 })();
 
 /* ---------- s1: sleep switch ---------- */
