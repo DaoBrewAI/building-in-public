@@ -44,11 +44,26 @@ body{
   border-radius:10px;box-shadow:4px 4px 0 var(--cobalt);transform:rotate(-2deg);
 }
 #actlabel{
+  margin-left:auto;
   color:var(--ink);font-size:.78em;letter-spacing:.1em;font-weight:700;
   background:var(--paper);border:2.5px solid var(--ink);border-radius:999px;
   padding:.3em 1.1em;box-shadow:var(--sh-sm);transition:opacity .5s;
 }
 #actlabel:empty{opacity:0}
+#langbtn{
+  pointer-events:auto;margin-left:.9em;cursor:pointer;flex:none;
+  font:inherit;font-weight:700;font-size:.78em;letter-spacing:.1em;
+  color:var(--ink);background:var(--yellow);border:2.5px solid var(--ink);border-radius:999px;
+  padding:.3em 1em;box-shadow:var(--sh-sm);
+  transition:transform .12s,box-shadow .12s;
+}
+#langbtn:hover{transform:translate(-2px,-2px);box-shadow:5px 5px 0 var(--ink)}
+#langbtn:active{transform:translate(2px,2px);box-shadow:1px 1px 0 var(--ink)}
+.engloss{
+  display:none;font-family:var(--sans);font-style:italic;font-weight:400;
+  font-size:.55em;letter-spacing:.02em;line-height:1.6;color:var(--muted);margin-top:.45em;
+}
+html.en .engloss{display:block}
 #bar{position:fixed;top:0;left:0;height:7px;background:var(--cobalt);border-bottom:3px solid var(--ink);z-index:41;width:0;transition:width .45s cubic-bezier(.22,1,.36,1)}
 #hint{
   position:fixed;right:clamp(20px,2.6vw,44px);bottom:clamp(16px,1.8vw,30px);z-index:40;
@@ -560,6 +575,12 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
   .tmap .hub{grid-column:1/-1;order:-1}
   #maplinks{display:none}
   #hint{display:none}
+  #langbtn{min-width:44px;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
+  #actlabel{display:none}
+  .lanes .cells{flex-wrap:wrap;max-width:100%} /* keep the 21-day strips from widening the mobile viewport */
+  .alaya{grid-template-columns:1fr}
+  .alaya .arr{transform:rotate(90deg);justify-self:center}
+  .aframe{max-width:100%}
   .qcards{grid-template-columns:1fr}
   .rank .rrow{grid-template-columns:2em 1fr;grid-template-rows:auto auto auto}
   .rank .rrow .bar,.rank .rrow .fx{grid-column:1/-1}
@@ -572,38 +593,39 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 <header id="hud">
   <span id="brand">唯 识</span>
   <span id="actlabel"></span>
+  <button id="langbtn" type="button" aria-label="Switch language / 切换语言">EN</button>
 </header>
 <div id="bar"></div>
-<div id="hint"><kbd>→</kbd>推进<kbd>←</kbd>回退<kbd>↑</kbd><kbd>↓</kbd>切幕<kbd>A</kbd>附录</div>
+<div id="hint" data-en="<kbd>→</kbd>next<kbd>←</kbd>back<kbd>↑</kbd><kbd>↓</kbd>scene<kbd>A</kbd>appendix"><kbd>→</kbd>推进<kbd>←</kbd>回退<kbd>↑</kbd><kbd>↓</kbd>切幕<kbd>A</kbd>附录</div>
 
 <!-- ================= S0 · 一天 ================= -->
 <section class="scene step-solo" id="s0" data-steps="4" data-title="" data-mark="身">
   <div class="stage">
 
     <div data-step="0">
-      <div class="badge">唯识俱乐部 @ 听泉静心学堂 · 二〇二六年八月十八日</div>
-      <h1 style="margin-top:.5em">你的一天,<br>会自动留下四种记录</h1>
+      <div class="badge" data-en="Yogācāra Club @ Tingquan Meditation Hall · August 18, 2026">唯识俱乐部 @ 听泉静心学堂 · 二〇二六年八月十八日</div>
+      <h1 style="margin-top:.5em" data-en="One day of yours<br>leaves four records by itself">你的一天,<br>会自动留下四种记录</h1>
       <div class="traces" style="margin-top:1.4em">
-        <span class="stick"><span class="sk">AGENT SESSIONS</span><span class="sv">× 2</span><span class="sg">和 AI 一起干活的记录</span></span>
-        <span class="stick"><span class="sk">MEETINGS</span><span class="sv">× 1</span><span class="sg">开了什么会,聊了什么</span></span>
-        <span class="stick"><span class="sk">CALENDAR</span><span class="sv">× 1</span><span class="sg">日程上安排了什么</span></span>
-        <span class="stick"><span class="sk">BODY</span><span class="sv">73 ↓</span><span class="sg">手表读到的身体状态</span></span>
+        <span class="stick"><span class="sk">AGENT SESSIONS</span><span class="sv">× 2</span><span class="sg" data-en="work done together with AI">和 AI 一起干活的记录</span></span>
+        <span class="stick"><span class="sk">MEETINGS</span><span class="sv">× 1</span><span class="sg" data-en="what was met about, what was said">开了什么会,聊了什么</span></span>
+        <span class="stick"><span class="sk">CALENDAR</span><span class="sv">× 1</span><span class="sg" data-en="what the schedule held">日程上安排了什么</span></span>
+        <span class="stick"><span class="sk">BODY</span><span class="sv">73 ↓</span><span class="sg" data-en="what the watch read off your body">手表读到的身体状态</span></span>
       </div>
-      <p class="lead">不用手写,过日子就有。上面这四张,是我 08/12 真实的一天。<br><span class="hi-y">我们做的事:用这四种记录,替你把任务排好。</span>身体那条,叫生物因果信号。</p>
+      <p class="lead" data-en="Nothing to write down. Living the day produces them. The four above are my real day, 08/12.<br><span class='hi-y'>What we build: use these four records to rank your tasks for you.</span> The body line is what we call biometric causal signals.">不用手写,过日子就有。上面这四张,是我 08/12 真实的一天。<br><span class="hi-y">我们做的事:用这四种记录,替你把任务排好。</span>身体那条,叫生物因果信号。</p>
     </div>
 
     <div data-step="1">
-      <h1>第二天早上,<br>先做哪件事?</h1>
-      <p class="lead" style="margin:1em 0 1.6em">四种记录都在,却没有一个直接告诉我答案。说话的是我的判断,还是我的疲惫?</p>
-      <p class="lead">今晚最后,直接点开给大家看。</p>
+      <h1 data-en="Next morning,<br>which task comes first?">第二天早上,<br>先做哪件事?</h1>
+      <p class="lead" style="margin:1em 0 1.6em" data-en="All four records are there, yet none of them answers directly. Is that my judgment talking, or my fatigue?">四种记录都在,却没有一个直接告诉我答案。说话的是我的判断,还是我的疲惫?</p>
+      <p class="lead" data-en="At the end of tonight, I will open it live and show you.">今晚最后,直接点开给大家看。</p>
       <div class="paths" style="margin-top:1.8em;display:flex;gap:1.4em;flex-wrap:wrap">
-        <button class="btn primary" id="go-walk">跟着走</button>
-        <button class="btn" id="go-live">直接看 Demo</button>
+        <button class="btn primary" id="go-walk" data-en="Walk with me">跟着走</button>
+        <button class="btn" id="go-live" data-en="Straight to the demo">直接看 Demo</button>
       </div>
     </div>
 
     <div data-step="2">
-      <h2>市场越丰裕,<span class="u">协调的生意越大</span></h2>
+      <h2 data-en="The more abundant the market, <span class='u'>the bigger the coordination business</span>">市场越丰裕,<span class="u">协调的生意越大</span></h2>
       <div class="abun">
         <div class="arow">
           <div class="clu" data-kind="page"></div>
@@ -627,28 +649,28 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
           <span class="v" style="font-size:clamp(30px,3vw,52px)">÷10</span>
           <span class="s">every year</span>
         </div>
-        <p class="lead" style="max-width:22em"><strong>贵的不再是做事,是 attention 放在哪。</strong></p>
+        <p class="lead" style="max-width:22em" data-en="<strong>Doing is no longer the expensive part. Where attention goes is.</strong>"><strong>贵的不再是做事,是 attention 放在哪。</strong></p>
       </div>
     </div>
 
     <div data-step="3">
-      <h2>先借大家一分钟,吸四秒,吐八秒</h2>
+      <h2 data-en="First, one minute together. In for four, out for eight">先借大家一分钟,吸四秒,吐八秒</h2>
       <div class="grid">
         <div class="expcard card">
-          <h3>四八呼吸</h3>
+          <h3 data-en="4-8 breathing">四八呼吸</h3>
           <ol>
-            <li>坐直,肩膀放松,东西放下</li>
-            <li>用鼻子<em>吸气四秒</em>,看着弦升上去</li>
-            <li>用嘴<em>慢慢吐八秒</em>,看着弦落下来</li>
-            <li>三轮之后,<em>再想一下你今天最挂心的那件事</em></li>
+            <li data-en="Sit up, drop the shoulders, put things down">坐直,肩膀放松,东西放下</li>
+            <li data-en="Breathe in through the nose for <em>four seconds</em>, watch the string rise">用鼻子<em>吸气四秒</em>,看着弦升上去</li>
+            <li data-en="Breathe out through the mouth for <em>eight slow seconds</em>, watch it fall">用嘴<em>慢慢吐八秒</em>,看着弦落下来</li>
+            <li data-en="After three rounds, <em>think again of the thing weighing on you most today</em>">三轮之后,<em>再想一下你今天最挂心的那件事</em></li>
           </ol>
-          <p class="safety">节奏不舒服就回到自然呼吸,全程可随时退出。是体验,不是诊断。彩蛋:DaoBrew 最早的产品,就是教人呼吸的。</p>
+          <p class="safety" data-en="If the rhythm feels wrong, return to natural breathing. You can stop at any point. This is an experience, not a diagnosis. Easter egg: DaoBrew's very first product taught people to breathe.">节奏不舒服就回到自然呼吸,全程可随时退出。是体验,不是诊断。彩蛋:DaoBrew 最早的产品,就是教人呼吸的。</p>
         </div>
         <div id="breath">
           <canvas id="bstring" width="440" height="180" aria-label="呼吸弦:吸气上行四秒,吐气下行八秒"></canvas>
           <div class="bmeta"><span id="bphase">·</span><span id="bcount" class="num"></span></div>
-          <button class="btn" id="ringgo">开始 · 三轮</button>
-          <p class="small" style="max-width:16em;text-align:center">同一件挂心的事,呼吸前后,分量一样吗?</p>
+          <button class="btn" id="ringgo" data-en="Start · 3 rounds">开始 · 三轮</button>
+          <p class="small" style="max-width:16em;text-align:center" data-en="The same worry, before and after the breaths, does it weigh the same?">同一件挂心的事,呼吸前后,分量一样吗?</p>
         </div>
       </div>
     </div>
@@ -657,52 +679,52 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 </section>
 
 <!-- ================= S1 · 科学 ================= -->
-<section class="scene step-solo" id="s1" data-steps="2" data-title="科学 · 身体怎么改写同一件事" data-mark="境">
+<section class="scene step-solo" id="s1" data-steps="2" data-title="科学 · 身体怎么改写同一件事" data-title-en="Science · How the body rewrites the same task" data-mark="境">
   <div class="stage">
 
     <div data-step="0">
-      <h2>同一封邮件,<span class="u">谁半夜把它改凶了?</span></h2>
+      <h2 data-en="Same email. <span class='u'>Who made it meaner overnight?</span>">同一封邮件,<span class="u">谁半夜把它改凶了?</span></h2>
       <div class="grid">
         <div>
-          <div class="badge fict">示例任务 · 群体实验结论,非个人诊断</div>
+          <div class="badge fict" data-en="Sample task · group findings, not a personal diagnosis">示例任务 · 群体实验结论,非个人诊断</div>
           <div class="sleepswitch" role="group" aria-label="切换昨晚睡眠状态">
-            <button class="btn sel" id="sw-rest">昨晚 8.5 小时</button>
-            <button class="btn" id="sw-tired">昨晚 4.2 小时</button>
+            <button class="btn sel" id="sw-rest" data-en="Last night: 8.5 h">昨晚 8.5 小时</button>
+            <button class="btn" id="sw-tired" data-en="Last night: 4.2 h">昨晚 4.2 小时</button>
           </div>
           <div class="taskcard">
-            <div class="tt">回复那封拖了三天的邮件</div>
-            <div class="meta">明早要答复 · 不算难,但躲不掉</div>
+            <div class="tt" data-en="Reply to the email you have dodged for three days">回复那封拖了三天的邮件</div>
+            <div class="meta" data-en="Answer due tomorrow morning · not hard, just unavoidable">明早要答复 · 不算难,但躲不掉</div>
             <div class="feel">
               <span class="fword" id="feelword">十分钟能搞定</span>
-              <span class="fnote">此刻它「显得」如何<br>(示意,非系统输出)</span>
+              <span class="fnote" data-en="how it appears right now<br>(illustration, not system output)">此刻它「显得」如何<br>(示意,非系统输出)</span>
             </div>
           </div>
-          <p class="small" style="margin-top:1em">两个睡眠数字都取自我后面 Demo 的真实记录:最长 9.9 小时,最短 4.2 小时。</p>
+          <p class="small" style="margin-top:1em" data-en="Both sleep numbers come from the real records in the demo ahead: longest night 9.9 h, shortest 4.2 h.">两个睡眠数字都取自我后面 Demo 的真实记录:最长 9.9 小时,最短 4.2 小时。</p>
         </div>
-        <p class="lead">邮件没变。变的是<strong>看邮件的那个你</strong>:睡饱的你觉得十分钟能回,没睡的你觉得它像一场审判。</p>
+        <p class="lead" data-en="The email did not change. What changed is <strong>the you reading it</strong>: well slept, it feels like a ten-minute reply. Sleep starved, it feels like standing trial.">邮件没变。变的是<strong>看邮件的那个你</strong>:睡饱的你觉得十分钟能回,没睡的你觉得它像一场审判。</p>
       </div>
     </div>
 
     <div data-step="1">
-      <h2>没睡好的那天,你的大脑里发生了什么</h2>
+      <h2 data-en="What happens in your brain after a bad night">没睡好的那天,你的大脑里发生了什么</h2>
       <div class="grid">
         <div class="brainbox card">
           <svg viewBox="0 0 460 220" role="img" aria-label="睡眠剥夺下杏仁核反应放大、前额叶调节减弱示意图">
             <line class="link" id="blink" x1="140" y1="110" x2="300" y2="110" stroke-width="2.5"/>
             <circle class="pfc" cx="110" cy="110" r="46" stroke-width="2.5"/>
             <circle class="amyg" cx="320" cy="110" r="26" stroke-width="2.5"/>
-            <text class="blabel" x="110" y="106" text-anchor="middle">前额叶</text>
-            <text class="bstat" x="110" y="124" text-anchor="middle">负责踩刹车</text>
-            <text class="blabel" x="320" y="106" text-anchor="middle">杏仁核</text>
+            <text class="blabel" x="110" y="106" text-anchor="middle" data-en="Prefrontal">前额叶</text>
+            <text class="bstat" x="110" y="124" text-anchor="middle" data-en="hits the brakes">负责踩刹车</text>
+            <text class="blabel" x="320" y="106" text-anchor="middle" data-en="Amygdala">杏仁核</text>
             <text class="bstat warnb" x="320" y="124" text-anchor="middle" id="amygstat">报警正常</text>
             <text class="bstat" x="218" y="94" text-anchor="middle" id="linkstat">刹车线路在线</text>
           </svg>
         </div>
         <div>
-          <p class="lead">科学家让五千多个健康人少睡觉,这样的实验五十年里反复做了 154 次,结论一致:<strong>睡眠损失会压低好心情、抬高焦虑</strong>。做一次准一次,不是巧合。</p>
-          <p class="lead" style="margin-top:1em">缺觉时,报警的杏仁核反应放大约 <strong class="num">60%</strong>,踩刹车的前额叶跟它断线。所以列表上每件事都显得更凶。睡一场深觉,线路第二天修复。</p>
+          <p class="lead" data-en="Scientists have shorted the sleep of over five thousand healthy people, in 154 experiments across fifty years, and the answer never wavers: <strong>losing sleep lowers mood and raises anxiety</strong>. Every run, the same result. Not a coincidence.">科学家让五千多个健康人少睡觉,这样的实验五十年里反复做了 154 次,结论一致:<strong>睡眠损失会压低好心情、抬高焦虑</strong>。做一次准一次,不是巧合。</p>
+          <p class="lead" style="margin-top:1em" data-en="Short on sleep, the amygdala's alarm response grows by about <strong class='num'>60%</strong>, and the prefrontal cortex that hits the brakes loses its line to it. So everything on the list looks meaner. One night of deep sleep, and the wiring repairs itself.">缺觉时,报警的杏仁核反应放大约 <strong class="num">60%</strong>,踩刹车的前额叶跟它断线。所以列表上每件事都显得更凶。睡一场深觉,线路第二天修复。</p>
           <p class="cite">Palmer et al. 2024 · Yoo et al. 2007 · Ben Simon et al. 2020</p>
-          <p class="lead" style="margin-top:1em">所以在产品里,身体状态只调<strong>什么时候提醒你</strong>,从不碰任务本身。</p>
+          <p class="lead" style="margin-top:1em" data-en="Which is why in the product, body state only adjusts <strong>when to nudge you</strong>. It never touches the task itself.">所以在产品里,身体状态只调<strong>什么时候提醒你</strong>,从不碰任务本身。</p>
         </div>
       </div>
     </div>
@@ -711,112 +733,112 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 </section>
 
 <!-- ================= S2 · 因果 ================= -->
-<section class="scene step-solo" id="s2" data-steps="5" data-title="因果 · 什么时候才有资格说「是它害的」" data-mark="因">
+<section class="scene step-solo" id="s2" data-steps="5" data-title="因果 · 什么时候才有资格说「是它害的」" data-title-en="Causality · When you earn the right to say &quot;it did this&quot;" data-mark="因">
   <div class="stagewrap">
 
     <div data-step="0">
-      <div class="badge fict">讲解示例 · 虚构</div>
-      <h2 style="margin-top:.6em">「肯定是深夜改稿害的!」</h2>
+      <div class="badge fict" data-en="Teaching example · fictional">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em" data-en="&#8220;It must be the late-night edits!&#8221;">「肯定是深夜改稿害的!」</h2>
       <div class="lanes" id="lanes0"></div>
-      <p class="lead">三周里,「深夜改稿」和「第二天恢复差」多次撞在同一天。人脑一秒钟就定了案。<br>可同一晚你还熬了夜、见了朋友、吃了火锅,到底是哪一个?这一层只配叫<strong>共现</strong>:只做背景,不参与排序。</p>
+      <p class="lead" data-en="Across three weeks, late-night edits and poor next-day recovery kept landing on the same days. The human brain closes the case in one second.<br>But that same night you also stayed up, saw friends, had hotpot. Which one was it? This layer only earns the name <strong>co-occurrence</strong>: background only, never part of the ranking.">三周里,「深夜改稿」和「第二天恢复差」多次撞在同一天。人脑一秒钟就定了案。<br>可同一晚你还熬了夜、见了朋友、吃了火锅,到底是哪一个?这一层只配叫<strong>共现</strong>:只做背景,不参与排序。</p>
     </div>
 
     <div data-step="1">
-      <div class="badge fict">讲解示例 · 虚构</div>
-      <h2 style="margin-top:.6em">查账:<span class="u">用除法,不用直觉</span></h2>
+      <div class="badge fict" data-en="Teaching example · fictional">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em" data-en="Audit it: <span class='u'>with division, not gut feel</span>">查账:<span class="u">用除法,不用直觉</span></h2>
       <div class="ratio">
         <div class="frac">
-          <div class="top">恢复差的日子里,「深夜改稿」出现率</div>
-          <div class="bot">正常日子里,「深夜改稿」出现率</div>
-          <div class="cap">正常日,就是人脑习惯丢掉的分母</div>
+          <div class="top" data-en="rate of late-night edits on poor-recovery days">恢复差的日子里,「深夜改稿」出现率</div>
+          <div class="bot" data-en="rate of late-night edits on normal days">正常日子里,「深夜改稿」出现率</div>
+          <div class="cap" data-en="normal days: the denominator the brain likes to drop">正常日,就是人脑习惯丢掉的分母</div>
         </div>
         <div class="dial">
           <svg viewBox="0 0 120 78">
             <path class="arc-t" d="M12,66 A52,52 0 0 1 108,66" stroke-width="6"/>
             <path class="arc-f" id="dialfill" d="M12,66 A52,52 0 0 1 108,66" stroke-width="6" stroke-dasharray="163.4" stroke-dashoffset="163.4"/>
             <line class="thr" x1="86" y1="22" x2="93" y2="13" stroke-width="2.5"/>
-            <text class="dt" x="99" y="11">2.0×门槛</text>
+            <text class="dt" x="99" y="11" data-en="2.0× bar">2.0×门槛</text>
             <text class="dv" x="60" y="56" text-anchor="middle" id="dialnum">0.0×</text>
-            <text class="dt" x="60" y="70" text-anchor="middle">对照率</text>
+            <text class="dt" x="60" y="70" text-anchor="middle" data-en="contrast">对照率</text>
           </svg>
         </div>
-        <p class="lead" style="max-width:20em">还要同时凑齐:<br><span class="num">≥ 3</span> 个真实覆盖日<br>每个支持日 <span class="num">≥ 2</span> 个独立来源互相印证</p>
+        <p class="lead" style="max-width:20em" data-en="And it must also collect:<br><span class='num'>≥ 3</span> genuinely covered days<br>each supporting day confirmed by <span class='num'>≥ 2</span> independent sources">还要同时凑齐:<br><span class="num">≥ 3</span> 个真实覆盖日<br>每个支持日 <span class="num">≥ 2</span> 个独立来源互相印证</p>
       </div>
-      <p class="lead">比率防「话多的一天淹没统计」;天数防「一次巧合当规律」;来源防「孤证」。</p>
+      <p class="lead" data-en="The ratio guards against a chatty day drowning the stats; the day count against one coincidence posing as a pattern; the sources against single-witness evidence.">比率防「话多的一天淹没统计」;天数防「一次巧合当规律」;来源防「孤证」。</p>
     </div>
 
     <div data-step="2">
-      <div class="badge fict">讲解示例 · 虚构</div>
-      <h2 style="margin-top:.6em">七道闸门,各防一种错</h2>
+      <div class="badge fict" data-en="Teaching example · fictional">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em" data-en="Seven gates, each blocking one kind of error">七道闸门,各防一种错</h2>
       <div class="gates" id="gates"></div>
-      <p class="lead" id="gateverdict" style="opacity:0;transition:opacity .8s">七门全过,它也只敢盖四个字:<span class="stamp green">归因候选</span>。被动记录永远排不掉共同原因,这个天花板写死在代码里。</p>
+      <p class="lead" id="gateverdict" style="opacity:0;transition:opacity .8s" data-en="Pass all seven, and it still only dares one stamp: <span class='stamp green'>attribution candidate</span>. Passive records can never rule out a common cause. That ceiling is hard-coded.">七门全过,它也只敢盖四个字:<span class="stamp green">归因候选</span>。被动记录永远排不掉共同原因,这个天花板写死在代码里。</p>
     </div>
 
     <div data-step="3">
-      <div class="badge fict">讲解示例 · 虚构</div>
-      <h2 style="margin-top:.6em">结论要一级一级挣,降级是自动的</h2>
+      <div class="badge fict" data-en="Teaching example · fictional">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em" data-en="Conclusions are earned level by level. Demotion is automatic">结论要一级一级挣,降级是自动的</h2>
       <div class="ladder" id="ladder">
-        <div class="rung r1"><div class="rn">撞在同一天</div><div class="rq">只当背景,不参与排序</div></div>
-        <div class="rung r2"><div class="lid"></div><div class="lidnote">光靠记录,最多到这里</div><div class="rn">比率过了门槛</div><div class="rq">七道门全过,也只是「值得看一眼」</div></div>
-        <div class="rung r3 ghost"><div class="rn">改了安排,再验证</div><div class="rq">两次都对,才敢给建议</div><div class="cells9" id="cellsA"></div></div>
-        <div class="rung r4 ghost"><div class="rn">回回都成立</div><div class="rq">五次零反例,才允许个性化;反例两次,一夜降回去</div><div class="cells9" id="cellsB"></div></div>
+        <div class="rung r1"><div class="rn" data-en="Landed on the same day">撞在同一天</div><div class="rq" data-en="background only, no say in ranking">只当背景,不参与排序</div></div>
+        <div class="rung r2"><div class="lid"></div><div class="lidnote" data-en="records alone stop here">光靠记录,最多到这里</div><div class="rn" data-en="Ratio cleared the bar">比率过了门槛</div><div class="rq" data-en="all seven gates passed, still just &#8220;worth a look&#8221;">七道门全过,也只是「值得看一眼」</div></div>
+        <div class="rung r3 ghost"><div class="rn" data-en="Change the arrangement, verify">改了安排,再验证</div><div class="rq" data-en="right twice before it may advise">两次都对,才敢给建议</div><div class="cells9" id="cellsA"></div></div>
+        <div class="rung r4 ghost"><div class="rn" data-en="Holds every single time">回回都成立</div><div class="rq" data-en="five with zero counterexamples unlocks personalization; two counterexamples, and it drops back overnight">五次零反例,才允许个性化;反例两次,一夜降回去</div><div class="cells9" id="cellsB"></div></div>
       </div>
-      <p class="lead">升级靠攒,<strong>不许手工加分</strong>;降级不用人管,每夜自动重算。</p>
+      <p class="lead" data-en="Promotion is earned by accumulation, <strong>never by hand-tuned points</strong>. Demotion needs no one: every night, everything is recomputed from scratch.">升级靠攒,<strong>不许手工加分</strong>;降级不用人管,每夜自动重算。</p>
     </div>
 
     <div data-step="4">
-      <div class="badge fict">讲解示例 · 虚构</div>
-      <h2 style="margin-top:.6em">什么才算「改了安排」</h2>
+      <div class="badge fict" data-en="Teaching example · fictional">讲解示例 · 虚构</div>
+      <h2 style="margin-top:.6em" data-en="What counts as &#8220;changing the arrangement&#8221;">什么才算「改了安排」</h2>
       <div class="iv">
         <div class="col ok">
-          <h4>算:改的是事情本身</h4>
+          <h4 data-en="Counts: you changed the thing itself">算:改的是事情本身</h4>
           <ul>
-            <li>把深夜改稿固定挪到上午</li>
-            <li>取消或移交那个承诺</li>
-            <li>换一种开会方式,截稿周不再通宵</li>
+            <li data-en="Move late-night edits to the morning, for good">把深夜改稿固定挪到上午</li>
+            <li data-en="Cancel or hand off that commitment">取消或移交那个承诺</li>
+            <li data-en="Run meetings differently; no more all-nighters in deadline week">换一种开会方式,截稿周不再通宵</li>
           </ul>
         </div>
         <div class="col no">
-          <h4>不算:只是让自己舒服一点</h4>
+          <h4 data-en="Does not count: you just made yourself feel better">不算:只是让自己舒服一点</h4>
           <ul>
-            <li>多睡一觉 <span class="why">补的是身体,验证不了安排</span></li>
-            <li>心里踏实了 <span class="why">感觉不是证据</span></li>
-            <li>事后挑个变好的指标 <span class="why">标准要事先写死</span></li>
+            <li data-en="Sleeping in <span class='why'>repairs the body, verifies nothing about the arrangement</span>">多睡一觉 <span class="why">补的是身体,验证不了安排</span></li>
+            <li data-en="Feeling reassured <span class='why'>a feeling is not evidence</span>">心里踏实了 <span class="why">感觉不是证据</span></li>
+            <li data-en="Picking an improved metric afterwards <span class='why'>the criterion must be fixed in advance</span>">事后挑个变好的指标 <span class="why">标准要事先写死</span></li>
           </ul>
         </div>
       </div>
-      <p class="lead">验证的单位只有一个:<strong>同样的安排再来一次,结果变没变。</strong></p>
+      <p class="lead" data-en="Verification has exactly one unit: <strong>run the same arrangement again, and see whether the result changed.</strong>">验证的单位只有一个:<strong>同样的安排再来一次,结果变没变。</strong></p>
     </div>
 
   </div>
 </section>
 
 <!-- ================= S3 · Demo ================= -->
-<section class="scene step-solo" id="s3" data-steps="5" data-title="Demo · 真实信号 × 真实 Task Map" data-mark="实">
+<section class="scene step-solo" id="s3" data-steps="5" data-title="Demo · 真实信号 × 真实 Task Map" data-title-en="Demo · Real signals × the real Task Map" data-mark="实">
   <div class="stagewrap">
 
     <div data-step="0">
       <div class="datahead">
-        <h2 style="margin:0">四种信号,同一根时间轴</h2>
+        <h2 style="margin:0" data-en="Four signals, one timeline">四种信号,同一根时间轴</h2>
         <span class="badge real">REAL · AGENT SESSIONS / MEETINGS / CALENDAR / BODY</span>
       </div>
       <div class="chartwrap" id="chart-lanes"></div>
-      <p class="lead">52 天放在同一根轴上:上面三行是工作,最下面是身体。紫色 ▲ = 恢复跌破我自己基线的日子;<strong>黑圈 = 工作和身体撞在同一天</strong>。</p>
+      <p class="lead" data-en="52 days on one axis: the top three rows are work, the bottom one is the body. Purple ▲ = days my recovery fell below my own baseline; <strong>black ring = work and body landing on the same day</strong>.">52 天放在同一根轴上:上面三行是工作,最下面是身体。紫色 ▲ = 恢复跌破我自己基线的日子;<strong>黑圈 = 工作和身体撞在同一天</strong>。</p>
     </div>
 
     <div data-step="1">
       <div class="datahead">
-        <h2 style="margin:0">现在,任务是怎么排的</h2>
+        <h2 style="margin:0" data-en="Now, how the tasks actually get ranked">现在,任务是怎么排的</h2>
         <span class="badge">ENGINE SCORE · FROZEN GENERATION</span>
       </div>
       <div class="rank" id="rank"></div>
       <div class="covcard" id="covcard">SOURCES&nbsp; <span class="cs">agent_session ✓</span> <span class="cs">meeting_notes ✓</span> <span class="cs">calendar ✓</span> <span class="cs">body · oura ✓</span></div>
-      <p class="lead" style="margin-top:.9em">排序看的是证据密度、复现和新鲜度。<strong>身体信号是其中一个 feature</strong>:叠上去,只改「什么时候提醒你」。</p>
+      <p class="lead" style="margin-top:.9em" data-en="Ranking runs on evidence density, recurrence and freshness. <strong>The body signal is one feature among them</strong>: overlaid, it only changes when to nudge you.">排序看的是证据密度、复现和新鲜度。<strong>身体信号是其中一个 feature</strong>:叠上去,只改「什么时候提醒你」。</p>
     </div>
 
     <div data-step="2">
       <div class="datahead">
-        <h2 style="margin:0">其中一条信号:我的身体,52 天</h2>
+        <h2 style="margin:0" data-en="One of those signals: my body, 52 days">其中一条信号:我的身体,52 天</h2>
         <span class="badge real">REAL DATA · OURA · FROZEN 2026-08-17</span>
       </div>
       <div class="chartwrap" id="chart-readiness"></div>
@@ -830,12 +852,12 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 
     <div data-step="3">
       <div class="datahead">
-        <h2 style="margin:0">可以点:<span class="u">Task Map × 身体信号</span></h2>
+        <h2 style="margin:0" data-en="Click around: <span class='u'>Task Map × body signal</span>">可以点:<span class="u">Task Map × 身体信号</span></h2>
         <span class="badge">FROZEN · AUG 17, 23:41 · LAST FULL GENERATION</span>
       </div>
       <div class="democtl">
         <button class="btn" id="bodytoggle">OVERLAY BODY SIGNAL</button>
-        <span class="small">点任一工作线看证据与优先级 · 点下方日期看那天发生了什么</span>
+        <span class="small" data-en="Click any workstream for its evidence and priority · click a date below for what happened that day">点任一工作线看证据与优先级 · 点下方日期看那天发生了什么</span>
       </div>
       <div class="demogrid">
         <div>
@@ -850,78 +872,78 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
     </div>
 
     <div data-step="4" class="fin" style="max-width:38em">
-      <p class="quote">宁可只说共现<br>也不编一个因果</p>
-      <p class="lead" style="margin-top:1.2em">刚才所有联动都停在共现层:七道闸门还在前面等它。<br>身体可以先响,但不替你判案。</p>
+      <p class="quote" data-en="Better to claim mere co-occurrence<br>than to invent a cause">宁可只说共现<br>也不编一个因果</p>
+      <p class="lead" style="margin-top:1.2em" data-en="Everything you just clicked stayed at the co-occurrence layer: the seven gates still wait ahead of it.<br>The body may ring first, but it never delivers the verdict.">刚才所有联动都停在共现层:七道闸门还在前面等它。<br>身体可以先响,但不替你判案。</p>
     </div>
 
   </div>
 </section>
 
 <!-- ================= S4 · 对应 · 收束 ================= -->
-<section class="scene step-solo" id="s4" data-steps="5" data-title="收束 · 念头渲染世界" data-mark="识">
+<section class="scene step-solo" id="s4" data-steps="5" data-title="收束 · 念头渲染世界" data-title-en="Closing · Thoughts render the world" data-mark="识">
   <div class="stage">
 
     <div data-step="0">
-      <div class="badge fict">意象 · 弦论</div>
-      <h2 style="margin-top:.6em">弦论说:万物的差异,<span class="u">只是振动频率的差异</span></h2>
+      <div class="badge fict" data-en="Imagery · string theory">意象 · 弦论</div>
+      <h2 style="margin-top:.6em" data-en="String theory says: all difference in things <span class='u'>is difference in vibration</span>">弦论说:万物的差异,<span class="u">只是振动频率的差异</span></h2>
       <div class="pluckwrap">
         <canvas id="calmstring" width="1100" height="230" aria-label="可以拨动的弦:往上拨变宁静,往下拨变混乱"></canvas>
         <div class="pside">
           <div class="daymini">
-            <div class="dmk">同一天的日程</div>
+            <div class="dmk" data-en="THE SAME DAY'S SCHEDULE">同一天的日程</div>
             <div class="dmcol"><i></i><i></i><i></i><i></i><i></i></div>
             <div class="dmt" id="dmt">普普通通的一天</div>
           </div>
         </div>
       </div>
-      <p class="lead" style="margin-top:.9em"><strong>改变频率,世界就变。</strong><span class="small" style="margin-left:1em">试试:在弦上往上拨,或往下拨</span></p>
+      <p class="lead" style="margin-top:.9em" data-en="<strong>Change the frequency, and the world changes.</strong><span class='small' style='margin-left:1em'>Try it: pluck the string upward, or downward</span>"><strong>改变频率,世界就变。</strong><span class="small" style="margin-left:1em">试试:在弦上往上拨,或往下拨</span></p>
     </div>
 
     <div data-step="1">
-      <div class="badge fict">比喻</div>
-      <h2 style="margin-top:.6em">阿赖耶识,像一个参数空间</h2>
+      <div class="badge fict" data-en="Metaphor">比喻</div>
+      <h2 style="margin-top:.6em" data-en="The ālaya-vijñāna, the storehouse consciousness, works like a parameter space">阿赖耶识,像一个参数空间</h2>
       <div class="alaya">
         <div class="acol">
-          <div class="afk">参数(经验 · 习气 · 倾向)</div>
+          <div class="afk" data-en="PARAMETERS (experience · habit-energy · tendencies)">参数(经验 · 习气 · 倾向)</div>
           <div class="agrid" id="agrid"></div>
           <div style="display:flex;gap:.6em;margin-top:1em;flex-wrap:wrap">
-            <button class="btn" id="adone">完成一个任务 ✓</button>
-            <button class="btn" id="areset" style="font-size:.85em">重置</button>
+            <button class="btn" id="adone" data-en="Complete a task ✓">完成一个任务 ✓</button>
+            <button class="btn" id="areset" style="font-size:.85em" data-en="Reset">重置</button>
           </div>
         </div>
         <div class="arr" style="align-self:center"></div>
         <div class="aframe">
-          <div class="afk">渲染出的下一帧念头</div>
+          <div class="afk" data-en="THE NEXT FRAME OF THOUGHT IT RENDERS">渲染出的下一帧念头</div>
           <div class="aft" id="aft">「明天又是一座山」</div>
           <div class="afp" id="afp"></div>
         </div>
       </div>
-      <p class="quote kai" style="font-size:clamp(22px,2.6vw,40px);margin-top:.9em">现行熏种子 · 种子生现行</p>
-      <p class="lead">做完一件事,参数就被改写一点;下一帧念头,从新的参数里长出来。</p>
+      <p class="quote kai" style="font-size:clamp(22px,2.6vw,40px);margin-top:.9em">现行熏种子 · 种子生现行<span class="engloss" style="letter-spacing:.02em">Acts perfume the seeds. Seeds give rise to acts.</span></p>
+      <p class="lead" data-en="Finish one task, and the parameters shift a little. The next frame of thought grows out of the new parameters.">做完一件事,参数就被改写一点;下一帧念头,从新的参数里长出来。</p>
     </div>
 
     <div data-step="2">
-      <h2>我们管理的,<span class="u">从来不是任务</span></h2>
-      <p class="lead">是自己的念头,是 attention 放在哪。<br>把最糟心的事找出来,交给 agent 去执行:</p>
-      <p class="quote" style="margin-top:.6em">把事交给 agent<br>把念头还给自己</p>
+      <h2 data-en="What we manage <span class='u'>was never the tasks</span>">我们管理的,<span class="u">从来不是任务</span></h2>
+      <p class="lead" data-en="It is our own thoughts. It is where attention goes.<br>Find the thing that gnaws at you most, and hand it to an agent to execute:">是自己的念头,是 attention 放在哪。<br>把最糟心的事找出来,交给 agent 去执行:</p>
+      <p class="quote" style="margin-top:.6em" data-en="Give the task to the agent<br>Take the thought back for yourself">把事交给 agent<br>把念头还给自己</p>
     </div>
 
     <div data-step="3">
-      <div class="badge fict">比喻</div>
-      <h2 style="margin-top:.6em">这套分层,<span class="u">一千三百年前就画好了</span></h2>
+      <div class="badge fict" data-en="Metaphor">比喻</div>
+      <h2 style="margin-top:.6em" data-en="This layering <span class='u'>was drawn thirteen hundred years ago</span>">这套分层,<span class="u">一千三百年前就画好了</span></h2>
       <div class="maprows">
-        <div class="mr b1"><span class="nm">前五识</span><span class="sys">刚才那条<b>紫色的身体线</b>:心率、HRV、睡眠,感官第一时间「感到」的</span></div>
-        <div class="mr b2"><span class="nm">第六意识</span><span class="sys">会议、agent 会话、日历长成的那张<b>任务地图</b>:想事、排事的那层</span></div>
-        <div class="mr b3"><span class="nm">第七末那识</span><span class="sys"><b>why-now</b>:这件事对<span class="me">我</span>意味着什么。「我」在哪里,焦虑就在哪里放大</span></div>
-        <div class="mr b4"><span class="nm">第八阿赖耶识</span><span class="sys"><b>参数空间</b>:证据要攒,升级靠重复。现行熏种子,种子生现行</span></div>
+        <div class="mr b1"><span class="nm" data-en="Five sense consciousnesses">前五识</span><span class="sys" data-en="That <b>purple body line</b> just now: heart rate, HRV, sleep, what the senses feel first">刚才那条<b>紫色的身体线</b>:心率、HRV、睡眠,感官第一时间「感到」的</span></div>
+        <div class="mr b2"><span class="nm" data-en="Mental consciousness">第六意识</span><span class="sys" data-en="The <b>task map</b> grown from meetings, agent sessions and calendar: the layer that thinks and sequences">会议、agent 会话、日历长成的那张<b>任务地图</b>:想事、排事的那层</span></div>
+        <div class="mr b3"><span class="nm" data-en="Manas, the seventh">第七末那识</span><span class="sys" data-en="<b>why-now</b>: what this task means to <span class='me'>me</span>. Wherever the &#8220;me&#8221; is, that is where anxiety amplifies"><b>why-now</b>:这件事对<span class="me">我</span>意味着什么。「我」在哪里,焦虑就在哪里放大</span></div>
+        <div class="mr b4"><span class="nm" data-en="Ālaya, the eighth">第八阿赖耶识</span><span class="sys" data-en="<b>Parameter space</b>: evidence accumulates, promotion takes repetition. Acts perfume the seeds, seeds give rise to acts"><b>参数空间</b>:证据要攒,升级靠重复。现行熏种子,种子生现行</span></div>
       </div>
-      <p class="small" style="margin-top:1.2em">只是一个比喻。深讲唯识,交给今晚的老师。</p>
+      <p class="small" style="margin-top:1.2em" data-en="Only a metaphor. The real teaching of Yogācāra belongs to tonight's teacher.">只是一个比喻。深讲唯识,交给今晚的老师。</p>
     </div>
 
     <div data-step="4" class="fin">
-      <p class="lead" style="font-size:clamp(20px,2.1vw,32px)">你看到的世界,<br>是你的频率渲染出来的。</p>
-      <p class="quote kai" style="margin-top:.5em">愿你调准<br>自己的那根弦</p>
-      <p class="small kai" style="margin-top:2em;letter-spacing:.3em">如涛波依水 · 谢谢大家</p>
+      <p class="lead" style="font-size:clamp(20px,2.1vw,32px)" data-en="The world you see<br>is rendered by your frequency.">你看到的世界,<br>是你的频率渲染出来的。</p>
+      <p class="quote kai" style="margin-top:.5em">愿你调准<br>自己的那根弦<span class="engloss">May you tune your own string.</span></p>
+      <p class="small kai" style="margin-top:2em;letter-spacing:.3em">如涛波依水 · 谢谢大家<span class="engloss" style="font-size:.95em;letter-spacing:.05em">Like waves resting on water. Thank you.</span></p>
     </div>
 
   </div>
@@ -929,33 +951,33 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 
 <!-- ================= 附录 ================= -->
 <aside id="appendix" aria-label="附录">
-  <button class="close" id="appx-close">关闭 Esc</button>
+  <button class="close" id="appx-close" data-en="Close Esc">关闭 Esc</button>
   <div class="inner">
-    <h2>附录 · 经文出处</h2>
+    <h2 data-en="Appendix · Scripture sources">附录 · 经文出处</h2>
     <div class="qcards">
-      <div class="qc"><div class="qq">触谓三和</div><div class="qn">《成唯识论》卷三:根、境、识更相随顺,故名三和。一次「感到」由三个条件共同成立,不是身体上报、意识批阅。</div></div>
-      <div class="qc"><div class="qq">率尔 → 寻求 → 决定</div><div class="qn">《瑜伽师地论》三心,窥基五心章。初触境的率尔心尚无意义判断;意义在几拍之后成形。</div></div>
-      <div class="qc"><div class="qq">执受根身 · 同安危</div><div class="qn">《成唯识论》卷二。阿赖耶识摄有根身为自体,与身体安危与共;「恒转如瀑流」,是流不是库。</div></div>
+      <div class="qc"><div class="qq">触谓三和<span class="engloss" style="font-size:.7em">Contact is the meeting of three</span></div><div class="qn" data-en="Cheng Weishi Lun, fascicle 3: sense organ, object and consciousness arise in mutual accord, hence &#8220;the three in harmony&#8221;. A single moment of feeling takes all three conditions at once. It is not the body filing a report for the mind to review.">《成唯识论》卷三:根、境、识更相随顺,故名三和。一次「感到」由三个条件共同成立,不是身体上报、意识批阅。</div></div>
+      <div class="qc"><div class="qq">率尔 → 寻求 → 决定<span class="engloss" style="font-size:.7em">First alert, then searching, then settling</span></div><div class="qn" data-en="The three minds of the Yogācārabhūmi, and Kuiji's five-mind chapter. At first contact there is no judgment of meaning yet; meaning takes shape a few beats later.">《瑜伽师地论》三心,窥基五心章。初触境的率尔心尚无意义判断;意义在几拍之后成形。</div></div>
+      <div class="qc"><div class="qq">执受根身 · 同安危<span class="engloss" style="font-size:.7em">It holds the body, sharing its safety and peril</span></div><div class="qn" data-en="Cheng Weishi Lun, fascicle 2. The ālaya-vijñāna takes the living body as its own and shares its fortunes; &#8220;ever turning like a torrent&#8221;, a stream, not a warehouse.">《成唯识论》卷二。阿赖耶识摄有根身为自体,与身体安危与共;「恒转如瀑流」,是流不是库。</div></div>
     </div>
-    <h2>附录 · 弦论,一句话</h2>
-    <p class="lead" style="font-size:1em;max-width:46em">弦论把基本粒子看作同一根弦的不同振动模式:粒子的差异,是振动方式的差异。今晚只把它当意象,不作物理主张。入门可读 Brian Greene,<i>The Elegant Universe</i>;弦论意象致谢 王利杰 · <a href="https://www.youtube.com/@Macro_Alpha_cn" style="color:inherit;font-weight:700">Macro Alpha 宏观阿尔法</a>。</p>
+    <h2 data-en="Appendix · String theory, in one line">附录 · 弦论,一句话</h2>
+    <p class="lead" style="font-size:1em;max-width:46em" data-en="String theory treats elementary particles as different vibration modes of one and the same string: what differs between particles is how they vibrate. Tonight it stays imagery, not a physics claim. For an introduction, read Brian Greene, <i>The Elegant Universe</i>; thanks for the string imagery to 王利杰 · <a href='https://www.youtube.com/@Macro_Alpha_cn' style='color:inherit;font-weight:700'>Macro Alpha</a>.">弦论把基本粒子看作同一根弦的不同振动模式:粒子的差异,是振动方式的差异。今晚只把它当意象,不作物理主张。入门可读 Brian Greene,<i>The Elegant Universe</i>;弦论意象致谢 王利杰 · <a href="https://www.youtube.com/@Macro_Alpha_cn" style="color:inherit;font-weight:700">Macro Alpha 宏观阿尔法</a>。</p>
 
-    <h2>附录 · 七道证据闸门,和它们在因果研究里的出处</h2>
+    <h2 data-en="Appendix · The seven evidence gates, and their roots in causal research">附录 · 七道证据闸门,和它们在因果研究里的出处</h2>
     <table>
-      <thead><tr><th style="width:10em">闸门</th><th>防什么错</th><th style="width:20em">因果研究出处</th></tr></thead>
+      <thead><tr><th style="width:10em" data-en="Gate">闸门</th><th data-en="What it blocks">防什么错</th><th style="width:20em" data-en="Causal-research source">因果研究出处</th></tr></thead>
       <tbody>
-        <tr><td class="mono">citation</td><td><span class="nm">防编故事:</span>每条归因必须能在原始记录里逐字找到出处</td><td>数据溯源与可复现性:Peng (2011), <i>Science</i></td></tr>
-        <tr><td class="mono">title_ban</td><td><span class="nm">防贴标签:</span>日历标题只能当背景,不能当结论</td><td>测量效度:Carroll et al., <i>Measurement Error in Nonlinear Models</i></td></tr>
-        <tr><td class="mono">time_plausibility</td><td><span class="nm">防翻旧账:</span>证据必须落在信号当天</td><td>时序判据:Bradford Hill (1965), <i>Proc. R. Soc. Med.</i></td></tr>
-        <tr><td class="mono">biometrics_firewall</td><td><span class="nm">防脑补身体:</span>身体状态必须实测,不能从文字推断</td><td>暴露须实测:Hernán &amp; Robins, <i>Causal Inference: What If</i></td></tr>
-        <tr><td class="mono">recurrence_cross_source</td><td><span class="nm">防孤证:</span>需要第二来源独立印证同一线索</td><td>三角验证:Munafò &amp; Davey Smith (2018), <i>Nature</i></td></tr>
-        <tr><td class="mono">non_clinical_language</td><td><span class="nm">防越权:</span>措辞不超出数据支持的范围,禁临床词</td><td>推断边界:Rothman, Greenland &amp; Lash, <i>Modern Epidemiology</i></td></tr>
-        <tr><td class="mono">enrichment gate</td><td><span class="nm">防「话多的一天」与单次巧合:</span>比的是比率不是次数,<span class="mono">≥2.0× · ≥3 覆盖日 · 每日 ≥2 来源</span></td><td>病例对照与关联强度:Cornfield (1951);Hill (1965)</td></tr>
+        <tr><td class="mono">citation</td><td data-en="<span class='nm'>Blocks invented stories:</span> every attribution must be traceable word for word in the raw record"><span class="nm">防编故事:</span>每条归因必须能在原始记录里逐字找到出处</td><td data-en="Data provenance and reproducibility: Peng (2011), <i>Science</i>">数据溯源与可复现性:Peng (2011), <i>Science</i></td></tr>
+        <tr><td class="mono">title_ban</td><td data-en="<span class='nm'>Blocks labeling:</span> calendar titles are background only, never conclusions"><span class="nm">防贴标签:</span>日历标题只能当背景,不能当结论</td><td data-en="Measurement validity: Carroll et al., <i>Measurement Error in Nonlinear Models</i>">测量效度:Carroll et al., <i>Measurement Error in Nonlinear Models</i></td></tr>
+        <tr><td class="mono">time_plausibility</td><td data-en="<span class='nm'>Blocks old scores:</span> evidence must fall on the day of the signal"><span class="nm">防翻旧账:</span>证据必须落在信号当天</td><td data-en="Temporality: Bradford Hill (1965), <i>Proc. R. Soc. Med.</i>">时序判据:Bradford Hill (1965), <i>Proc. R. Soc. Med.</i></td></tr>
+        <tr><td class="mono">biometrics_firewall</td><td data-en="<span class='nm'>Blocks imagined bodies:</span> body state must be measured, never inferred from text"><span class="nm">防脑补身体:</span>身体状态必须实测,不能从文字推断</td><td data-en="Measured exposure: Hernán &amp; Robins, <i>Causal Inference: What If</i>">暴露须实测:Hernán &amp; Robins, <i>Causal Inference: What If</i></td></tr>
+        <tr><td class="mono">recurrence_cross_source</td><td data-en="<span class='nm'>Blocks single witnesses:</span> a second source must independently confirm the same lead"><span class="nm">防孤证:</span>需要第二来源独立印证同一线索</td><td data-en="Triangulation: Munafò &amp; Davey Smith (2018), <i>Nature</i>">三角验证:Munafò &amp; Davey Smith (2018), <i>Nature</i></td></tr>
+        <tr><td class="mono">non_clinical_language</td><td data-en="<span class='nm'>Blocks overreach:</span> wording stays within what the data supports, clinical terms banned"><span class="nm">防越权:</span>措辞不超出数据支持的范围,禁临床词</td><td data-en="Scope of inference: Rothman, Greenland &amp; Lash, <i>Modern Epidemiology</i>">推断边界:Rothman, Greenland &amp; Lash, <i>Modern Epidemiology</i></td></tr>
+        <tr><td class="mono">enrichment gate</td><td data-en="<span class='nm'>Blocks chatty days and one-off coincidences:</span> compares rates, not counts, <span class='mono'>≥2.0× · ≥3 covered days · ≥2 sources per day</span>"><span class="nm">防「话多的一天」与单次巧合:</span>比的是比率不是次数,<span class="mono">≥2.0× · ≥3 覆盖日 · 每日 ≥2 来源</span></td><td data-en="Case-control and strength of association: Cornfield (1951); Hill (1965)">病例对照与关联强度:Cornfield (1951);Hill (1965)</td></tr>
       </tbody>
     </table>
 
-    <h2>附录 · 记忆层怎么辅佐</h2>
-    <p class="lead" style="font-size:1em;max-width:46em">闸门只判「这一次」,记忆层负责「攒」:每当同样的安排再来一次,结果被记成一次确认或一次反例。确认满两次,才升为可以给建议的假设;满五次且零反例,才允许个性化;反例到两次,自动降级。每夜从头重算,没有手工加分的入口。</p>
+    <h2 data-en="Appendix · How the memory layer assists">附录 · 记忆层怎么辅佐</h2>
+    <p class="lead" style="font-size:1em;max-width:46em" data-en="The gates only judge &#8220;this once&#8221;; the memory layer does the accumulating: each time the same arrangement runs again, the outcome is logged as one confirmation or one counterexample. Two confirmations promote it to a hypothesis allowed to advise; five with zero counterexamples unlock personalization; two counterexamples demote it automatically. Every night it recomputes from scratch, and there is no entry point for hand-tuned points.">闸门只判「这一次」,记忆层负责「攒」:每当同样的安排再来一次,结果被记成一次确认或一次反例。确认满两次,才升为可以给建议的假设;满五次且零反例,才允许个性化;反例到两次,自动降级。每夜从头重算,没有手工加分的入口。</p>
   </div>
 </aside>
 
@@ -1779,6 +1801,11 @@ const $$ = s=>Array.from(document.querySelectorAll(s));
 const REDUCE = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const MOBILE = matchMedia("(max-width: 900px)").matches;
 const lerp=(a,b,t)=>a+(b-a)*t;
+/* ---------- bilingual: zh default, EN toggle (persisted) ---------- */
+const LANGKEY="weishi-lang";
+let LANG="zh";
+try{ if(localStorage.getItem(LANGKEY)==="en") LANG="en"; }catch(e){}
+const REFRESHERS=[]; // JS-rendered widgets re-run these on language change (state preserved)
 const WHY={"source-backed root evidence":"Source-backed evidence","top actionable task":"Top actionable","recurs across work context":"Recurs across contexts"};
 const TIER={multi_source:"multi-source support",single_source:"single source",no_work_evidence:"no work evidence",outside_coverage:"outside coverage"};
 
@@ -1973,8 +2000,8 @@ const Breath=(()=>{
       }
       const ph=el%(IN+OUT), LO=-AMP*0.55, ease=p=>0.5-0.5*Math.cos(Math.PI*p);
       let pos,label,remain;
-      if(ph<IN){ const p=ph/IN; pos=LO+(AMP-LO)*ease(p); label="吸"; remain=Math.ceil((IN-ph)/1000); }
-      else{ const p=(ph-IN)/OUT; pos=AMP-(AMP-LO)*ease(p); label="吐"; remain=Math.ceil((OUT-(ph-IN))/1000); }
+      if(ph<IN){ const p=ph/IN; pos=LO+(AMP-LO)*ease(p); label=LANG==="en"?"In":"吸"; remain=Math.ceil((IN-ph)/1000); }
+      else{ const p=(ph-IN)/OUT; pos=AMP-(AMP-LO)*ease(p); label=LANG==="en"?"Out":"吐"; remain=Math.ceil((OUT-(ph-IN))/1000); }
       draw(pos*Math.min(1,el/800), 1.5);
       $("#bphase").textContent=label;$("#bcount").textContent=remain;
       requestAnimationFrame(tick);
@@ -2016,12 +2043,18 @@ const CalmString=(()=>{
     bx.fillStyle="#14120F";
     [[20,MID],[W-20,MID]].forEach(([x,y])=>{bx.beginPath();bx.arc(x,y,4.5,0,7);bx.fill();});
   }
+  const DMT={
+    chaos:{zh:"脑子里:全都急,都要现在",en:"In the head: everything urgent, all at once"},
+    calm:{zh:"脑子里:一件一件来",en:"In the head: one thing at a time"},
+    mid:{zh:"普普通通的一天",en:"An ordinary day"},
+  };
   function ui(){
     const w=cv.closest(".pluckwrap"); if(!w) return;
     w.classList.toggle("calm",mood<-.35);
     w.classList.toggle("chaos",mood>.35);
-    $("#dmt").textContent=mood>.35?"脑子里:全都急,都要现在":mood<-.35?"脑子里:一件一件来":"普普通通的一天";
+    $("#dmt").textContent=(mood>.35?DMT.chaos:mood<-.35?DMT.calm:DMT.mid)[LANG];
   }
+  REFRESHERS.push(()=>{draw();ui();});
   function pointer(e){
     const rc=cv.getBoundingClientRect();
     const y=(e.clientY-rc.top)/rc.height;
@@ -2044,19 +2077,21 @@ const CalmString=(()=>{
 (function Alaya(){
   const grid=$("#agrid"); if(!grid) return;
   for(let i=0;i<32;i++){ const c=document.createElement("i"); if(i%7===0) c.classList.add("on"); grid.appendChild(c); }
+  const AW={zh:"担忧",en:"worry"},AP={zh:"计划",en:"plan"},AC={zh:"平静",en:"calm"};
   const FRAMES=[
-    {t:"「明天又是一座山」",p:[["0.78 担忧",1],["0.12 计划",0],["0.06 平静",0]]},
-    {t:"「先搬掉最沉的一块」",p:[["0.41 担忧",0],["0.44 计划",1],["0.10 平静",0]]},
-    {t:"「原来只剩两件事」",p:[["0.18 担忧",0],["0.52 计划",1],["0.27 平静",0]]},
-    {t:"「今晚可以早点睡」",p:[["0.07 担忧",0],["0.31 计划",0],["0.58 平静",1]]},
+    {t:{zh:"「明天又是一座山」",en:"“Tomorrow is another mountain”"},p:[["0.78",AW,1],["0.12",AP,0],["0.06",AC,0]]},
+    {t:{zh:"「先搬掉最沉的一块」",en:"“Move the heaviest rock first”"},p:[["0.41",AW,0],["0.44",AP,1],["0.10",AC,0]]},
+    {t:{zh:"「原来只剩两件事」",en:"“Only two things left, actually”"},p:[["0.18",AW,0],["0.52",AP,1],["0.27",AC,0]]},
+    {t:{zh:"「今晚可以早点睡」",en:"“Tonight I can sleep early”"},p:[["0.07",AW,0],["0.31",AP,0],["0.58",AC,1]]},
   ];
   let fi=0;
   function render(){
     const f=FRAMES[fi];
-    $("#aft").textContent=f.t;
-    $("#afp").innerHTML=f.p.map(([s,hot])=>`<span${hot?' class="hot"':''}>${s}</span>`).join("");
+    $("#aft").textContent=f.t[LANG];
+    $("#afp").innerHTML=f.p.map(([n,w,hot])=>`<span${hot?' class="hot"':''}>${n} ${w[LANG]}</span>`).join("");
   }
   render();
+  REFRESHERS.push(render);
   $("#adone").addEventListener("click",()=>{
     const off=[...grid.children].filter(c=>!c.classList.contains("on"));
     for(let i=0;i<5&&i<off.length;i++){ const c=off[(i*7)%off.length]; setTimeout(()=>c.classList.add("on"),i*130); }
@@ -2073,13 +2108,21 @@ const CalmString=(()=>{
 })();
 
 /* ---------- s1: sleep switch ---------- */
+const TT={
+  feelOk:{zh:"十分钟能搞定",en:"Ten minutes, tops"},
+  feelBad:{zh:"像一场审判",en:"Feels like a trial"},
+  amygOk:{zh:"报警正常",en:"alarm normal"},
+  amygBad:{zh:"反应放大 +60%",en:"response +60%"},
+  linkOk:{zh:"刹车线路在线",en:"brake line online"},
+  linkBad:{zh:"刹车线路掉线",en:"brake line offline"},
+};
 function setTired(b){
   document.body.classList.toggle("tired",b);
   $("#sw-rest").classList.toggle("sel",!b);
   $("#sw-tired").classList.toggle("sel",b);
-  $("#feelword").textContent=b?"像一场审判":"十分钟能搞定";
-  $("#amygstat").textContent=b?"反应放大 +60%":"报警正常";
-  $("#linkstat").textContent=b?"刹车线路掉线":"刹车线路在线";
+  $("#feelword").textContent=(b?TT.feelBad:TT.feelOk)[LANG];
+  $("#amygstat").textContent=(b?TT.amygBad:TT.amygOk)[LANG];
+  $("#linkstat").textContent=(b?TT.linkBad:TT.linkOk)[LANG];
   if(FLAT[g].si===S.SCI) Water.set(b?"chop":"calm");
 }
 $("#sw-rest").addEventListener("click",()=>setTired(false));
@@ -2091,14 +2134,14 @@ const FIX_WORK=[2,5,9,12,16,19];
 const FIX_LOW =[3,6,8,10,13,17,20];
 (function buildFixLanes(){
   const host=$("#lanes0");
-  const mk=(label,set,cls)=>{
-    const lt=document.createElement("div");lt.className="lt";lt.textContent=label;host.appendChild(lt);
+  const mk=(label,labelEn,set,cls)=>{
+    const lt=document.createElement("div");lt.className="lt";lt.textContent=label;lt.dataset.en=labelEn;host.appendChild(lt);
     const cs=document.createElement("div");cs.className="cells";
     for(let i=0;i<FIX_DAYS;i++){const c=document.createElement("div");c.className="c"+(set.includes(i)?" "+cls:"");cs.appendChild(c);}
     host.appendChild(cs);
   };
-  mk("深夜改稿",FIX_WORK,"hit");
-  mk("次日恢复差",FIX_LOW,"low");
+  mk("深夜改稿","late-night edits",FIX_WORK,"hit");
+  mk("次日恢复差","poor recovery next day",FIX_LOW,"low");
 })();
 function runDial(){
   const fill=$("#dialfill"),num=$("#dialnum");
@@ -2112,19 +2155,30 @@ function runDial(){
   })(t0);
 }
 const GATES=[
-  ["引用检查","AI 不许编故事:归因必须能在原始记录里逐字找到出处","Provenance","数据溯源:进不了溯源链的证据,不进模型"],
-  ["标题禁令","日历写着「周会」不等于原因就是周会","Measurement validity","测量效度:标签不是变量本身"],
-  ["时间合理性","上个月的烦恼,解释不了今天的身体","Temporality · Bradford Hill","因果判定第一条:原因先于结果,且挨得够近"],
-  ["身体防火墙","不许从文字里脑补「你看起来很累」","No imputed exposure","暴露必须实测,不能从文本推断生理"],
-  ["跨来源复现","一条会议记录不够,要第二来源独立印证","Triangulation","三角验证:独立来源指向同一事实才算数"],
-  ["非临床语言","系统不是医生,措辞越界整条拒绝","Scope of inference","推断不越界:结论不超出数据支持的范围"],
-  ["富集门","2.0× 对照率 · ≥3 覆盖日 · 每日 ≥2 来源","Case-control contrast","病例对照思想:比的是比率,不是次数"],
+  ["引用检查","AI 不许编故事:归因必须能在原始记录里逐字找到出处","Provenance","数据溯源:进不了溯源链的证据,不进模型",
+   "Citation check","No invented stories: every attribution must be traceable, word for word, to the raw record","Provenance: evidence outside the chain of custody stays outside the model"],
+  ["标题禁令","日历写着「周会」不等于原因就是周会","Measurement validity","测量效度:标签不是变量本身",
+   "Title ban","A calendar block titled “weekly sync” does not make the weekly sync the cause","Measurement validity: the label is not the variable"],
+  ["时间合理性","上个月的烦恼,解释不了今天的身体","Temporality · Bradford Hill","因果判定第一条:原因先于结果,且挨得够近",
+   "Time plausibility","Last month's worries cannot explain today's body","Rule one of causal judgment: cause precedes effect, and close enough in time"],
+  ["身体防火墙","不许从文字里脑补「你看起来很累」","No imputed exposure","暴露必须实测,不能从文本推断生理",
+   "Biometrics firewall","No inferring “you seem tired” from words","Exposure must be measured; physiology is never imputed from text"],
+  ["跨来源复现","一条会议记录不够,要第二来源独立印证","Triangulation","三角验证:独立来源指向同一事实才算数",
+   "Cross-source recurrence","One meeting note is not enough; a second source must independently confirm","Triangulation: it counts only when independent sources point to the same fact"],
+  ["非临床语言","系统不是医生,措辞越界整条拒绝","Scope of inference","推断不越界:结论不超出数据支持的范围",
+   "Non-clinical language","The system is not a doctor; one word over the line and the whole claim is rejected","Scope of inference: conclusions never exceed what the data supports"],
+  ["富集门","2.0× 对照率 · ≥3 覆盖日 · 每日 ≥2 来源","Case-control contrast","病例对照思想:比的是比率,不是次数",
+   "Enrichment gate","2.0× contrast · ≥3 covered days · ≥2 sources per day","Case-control thinking: compare rates, not counts"],
 ];
+const GSTAMP={pend:{zh:"待检",en:"PENDING"},pass:{zh:"✓ 通过",en:"✓ PASS"}};
 (function buildGates(){
   const host=$("#gates");
-  GATES.forEach(([n,d,ct,cl])=>{
+  GATES.forEach(([n,d,ct,cl,nEn,dEn,clEn])=>{
     const el=document.createElement("div");el.className="gate";
-    el.innerHTML=`<div class="gn">${n}</div><div class="gd">${d}</div><div class="gcau"><b>${ct}</b><br>${cl}</div><div class="gs"><span class="stamp gray">待检</span></div>`;
+    el.innerHTML=`<div class="gn">${n}</div><div class="gd">${d}</div><div class="gcau"><b>${ct}</b><br><span class="gcl">${cl}</span></div><div class="gs"><span class="stamp gray">${GSTAMP.pend[LANG]}</span></div>`;
+    el.querySelector(".gn").dataset.en=nEn;
+    el.querySelector(".gd").dataset.en=dEn;
+    el.querySelector(".gcl").dataset.en=clEn;
     host.appendChild(el);
   });
 })();
@@ -2132,12 +2186,17 @@ let gateT=[],ladderT=[];
 function runGates(){
   gateT.forEach(clearTimeout);gateT=[];
   const gs=$$("#gates .gate");
-  gs.forEach(el=>{el.classList.remove("lit");el.querySelector(".gs").innerHTML='<span class="stamp gray">待检</span>';});
+  gs.forEach(el=>{el.classList.remove("lit");el.querySelector(".gs").innerHTML=`<span class="stamp gray">${GSTAMP.pend[LANG]}</span>`;});
   $("#gateverdict").style.opacity="0";
   gs.forEach((el,i)=>gateT.push(setTimeout(()=>{
-    el.classList.add("lit");el.querySelector(".gs").innerHTML='<span class="stamp green">✓ 通过</span>';
+    el.classList.add("lit");el.querySelector(".gs").innerHTML=`<span class="stamp green">${GSTAMP.pass[LANG]}</span>`;
     if(i===gs.length-1) gateT.push(setTimeout(()=>{$("#gateverdict").style.opacity="1";},500));
   }, REDUCE?0:400+i*520)));
+}
+function refreshGateStamps(){
+  $$("#gates .gs .stamp").forEach(st=>{
+    st.textContent=(st.classList.contains("green")?GSTAMP.pass:GSTAMP.pend)[LANG];
+  });
 }
 function runLadder(){
   ladderT.forEach(clearTimeout);ladderT=[];
@@ -2476,6 +2535,33 @@ matchMedia("(max-width: 900px)").addEventListener("change",()=>{
   try{sessionStorage.setItem("weishi-g",String(g));}catch(e){}
   location.reload();
 });
+/* ---------- language toggle (zh default · EN) ---------- */
+const EN_DOC_TITLE="Yogācāra × Task Map · When the body knows before words do";
+const ZH_DOC_TITLE=document.title;
+function applyLang(lang){
+  LANG=lang;
+  document.documentElement.setAttribute("lang",lang==="en"?"en":"zh-CN");
+  document.documentElement.classList.toggle("en",lang==="en");
+  document.title=lang==="en"?EN_DOC_TITLE:ZH_DOC_TITLE;
+  $$("[data-en]").forEach(el=>{
+    if(el.dataset.zh===undefined) el.dataset.zh=el.innerHTML; // cache original once
+    el.innerHTML=lang==="en"?el.dataset.en:el.dataset.zh;
+  });
+  SCENES.forEach(sc=>{
+    if(sc.dataset.titleEn){
+      if(sc.dataset.titleZh===undefined) sc.dataset.titleZh=sc.dataset.title;
+      sc.dataset.title=lang==="en"?sc.dataset.titleEn:sc.dataset.titleZh;
+    }
+  });
+  if(!MOBILE) $("#actlabel").textContent=SCENES[FLAT[g].si].dataset.title||"";
+  setTired(document.body.classList.contains("tired")); // refreshes feelword / amygdala / brake texts
+  refreshGateStamps();
+  REFRESHERS.forEach(f=>f()); // alaya frames · pluck-string mind line
+  $("#langbtn").textContent=lang==="en"?"中":"EN";
+  try{localStorage.setItem(LANGKEY,lang);}catch(e){}
+}
+$("#langbtn").addEventListener("click",()=>applyLang(LANG==="en"?"zh":"en"));
+applyLang(LANG);
 </script>
 </body>
 </html>
