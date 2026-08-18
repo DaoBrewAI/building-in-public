@@ -54,8 +54,8 @@ regex() {
   grep -Eq -- "$expression" "$file"
 }
 
-check "Codex manifest is version 0.3.0" \
-  json_field_is "$MANIFEST" version 0.3.0
+check "Codex manifest is version 0.3.2" \
+  json_field_is "$MANIFEST" version 0.3.2
 check "Codex manifest describes Claude Fable planning" \
   contains "$MANIFEST" "Fable-5"
 check "Codex manifest describes GPT-5.6-Sol execution" \
@@ -91,6 +91,10 @@ check "Codex skill resumes review on the Fable stage" \
   contains "$SKILL" '--stage review'
 check "Codex skill bounces findings through rework" \
   contains "$SKILL" 'state=rework'
+check "Codex acceptance cleanup automatically deletes completed leftovers" \
+  contains "$SKILL" 'orchestrator-gc.sh --hub $HUB --clean'
+check "Codex acceptance cleanup includes the merged origin branch" \
+  contains "$SKILL" 'matching `origin/orc/*` branch'
 check "Codex skill limits non-converging rework" \
   regex "$SKILL" '3rd rework|three.*rework'
 check "Codex skill documents legacy 0.2 compatibility" \

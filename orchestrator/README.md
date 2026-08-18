@@ -112,8 +112,9 @@ mission retrospective (22 BLOCKEDs, 19 eliminable):
 - **Planner hardening** — reuse claims require `file:line` citations from real
   code, contract-changing tasks annotate their compile-impact surface, and
   every checkpoint must compile independently.
-- **`scripts/orchestrator-gc.sh`** — sweeps stale worktrees and `orc/`
-  branches left behind by archived missions.
+- **`scripts/orchestrator-gc.sh`** — state-gated cleanup for completed mission
+  worktrees plus local and remote `orc/` branches; Phase 6 invokes it with
+  `--clean` automatically after a successful merge.
 
 ## Mission lifecycle
 

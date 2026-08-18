@@ -279,10 +279,14 @@ impact, attempts, exact decision needed, and safe default.
    isolated; otherwise rely on the executor's fresh evidence plus Fable review.
    Merge `--no-ff --no-commit`, commit on a verified pass, or abort and resume
    Codex with the exact failure. Two failed acceptance cycles enter Phase 6f.
-4. Delete only the planted `.claude/settings.local.json` (and `.claude/` if it
-   is then empty), remove merged worktrees and branches, then run
-   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB` to find leftovers. Never
-   delete or edit the repository's shared `.claude/settings.json`.
+4. After the merge succeeds, automatically delete the completed mission's
+   planted `.claude/settings.local.json` (and `.claude/` if it is then empty),
+   worktrees, local `orc/*` branches, and each matching `origin/orc/*` branch.
+   Run `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --clean`; it is
+   state-gated to accepted/done/complete missions and fails closed on dirty or
+   unverified worktrees. A cleanup refusal blocks archival until resolved.
+   Never delete or edit the repository's shared `.claude/settings.json`, and
+   never collect running, planned, review, blocked, or failed missions.
 5. Report shipped changes, decisions, tests, and report follow-ups. Append one
    durable memory entry exactly once.
 6. Set state/phase accepted, archive the mission directory, regenerate the
