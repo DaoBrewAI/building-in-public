@@ -30,7 +30,7 @@ body{
   font-size:clamp(14px,1.15vw,19px); line-height:1.7;
 }
 ::selection{background:var(--yellow-soft)}
-#water{position:fixed;inset:0;z-index:0;display:block}
+#water{position:fixed;inset:0;z-index:0;display:block;pointer-events:none}
 /* ---------- HUD ---------- */
 #hud{
   position:fixed;top:0;left:0;right:0;z-index:40;
@@ -453,17 +453,36 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
   width:100%;height:auto;display:block;cursor:ns-resize;touch-action:none;
   background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);
 }
-.pside{display:flex;flex-direction:column;gap:1em;justify-content:center}
-.pstat{
+.pside{display:flex;flex-direction:column;justify-content:center}
+.daymini{
   background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);
-  padding:.7em 1.2em;min-width:9em;text-align:center;transition:background .6s;
+  padding:.8em 1em;min-width:11em;text-align:center;
 }
-.pstat .pk{display:block;font-family:var(--mono);font-size:.66em;font-weight:700;letter-spacing:.16em;color:var(--muted)}
-.pstat .pv{display:block;font-weight:700;font-size:clamp(22px,2.2vw,34px);transition:color .6s}
-.pluckwrap.calm .pstat{background:var(--violet-soft)}
-.pluckwrap.calm .pstat .pv{color:var(--violet)}
-.pluckwrap.chaos .pstat{background:var(--red-soft)}
-.pluckwrap.chaos .pstat .pv{color:var(--red)}
+.dmk{font-family:var(--mono);font-size:.64em;font-weight:700;letter-spacing:.14em;color:var(--muted)}
+.dmcol{position:relative;height:150px;margin:.6em auto;width:100px}
+.dmcol i{
+  position:absolute;left:6px;right:6px;height:20px;border:2.5px solid var(--ink);border-radius:7px;
+  background:var(--violet-soft);transition:all .7s cubic-bezier(.3,1.2,.4,1);
+}
+.dmcol i:nth-child(1){top:4px}
+.dmcol i:nth-child(2){top:34px}
+.dmcol i:nth-child(3){top:64px}
+.dmcol i:nth-child(4){top:94px}
+.dmcol i:nth-child(5){top:124px}
+.pluckwrap.chaos .dmcol i{background:var(--red-soft)}
+.pluckwrap.chaos .dmcol i:nth-child(1){top:2px;transform:rotate(-7deg)}
+.pluckwrap.chaos .dmcol i:nth-child(2){top:16px;transform:rotate(6deg)}
+.pluckwrap.chaos .dmcol i:nth-child(3){top:9px;transform:rotate(-11deg)}
+.pluckwrap.chaos .dmcol i:nth-child(4){top:28px;transform:rotate(9deg)}
+.pluckwrap.chaos .dmcol i:nth-child(5){top:21px;transform:rotate(-5deg)}
+.pluckwrap.calm .dmcol i:nth-child(1){top:10px}
+.pluckwrap.calm .dmcol i:nth-child(2){top:56px}
+.pluckwrap.calm .dmcol i:nth-child(3){top:102px}
+.pluckwrap.calm .dmcol i:nth-child(4){opacity:.2;top:140px}
+.pluckwrap.calm .dmcol i:nth-child(5){opacity:0;top:150px}
+.dmt{font-family:var(--kai);font-weight:700;font-size:.95em;line-height:1.5;transition:color .6s}
+.pluckwrap.chaos .dmt{color:var(--red)}
+.pluckwrap.calm .dmt{color:var(--violet)}
 /* alaya parameter-space animation */
 .alaya{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:clamp(16px,2vw,36px);align-items:center;max-width:min(92vw,1200px)}
 .afk{font-family:var(--mono);font-size:.68em;font-weight:700;letter-spacing:.14em;color:var(--muted);margin-bottom:.6em}
@@ -848,8 +867,11 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
       <div class="pluckwrap">
         <canvas id="calmstring" width="1100" height="230" aria-label="可以拨动的弦:往上拨变宁静,往下拨变混乱"></canvas>
         <div class="pside">
-          <div class="pstat"><span class="pk">READINESS</span><span class="pv num" id="pv1">74</span></div>
-          <div class="pstat"><span class="pk">AGENTS</span><span class="pv" id="pv2">待命</span></div>
+          <div class="daymini">
+            <div class="dmk">同一天的日程</div>
+            <div class="dmcol"><i></i><i></i><i></i><i></i><i></i></div>
+            <div class="dmt" id="dmt">普普通通的一天</div>
+          </div>
         </div>
       </div>
       <p class="lead" style="margin-top:.9em"><strong>改变频率,世界就变。</strong><span class="small" style="margin-left:1em">试试:在弦上往上拨,或往下拨</span></p>
@@ -862,7 +884,10 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
         <div class="acol">
           <div class="afk">参数(经验 · 习气 · 倾向)</div>
           <div class="agrid" id="agrid"></div>
-          <button class="btn" id="adone" style="margin-top:1em">完成一个任务 ✓</button>
+          <div style="display:flex;gap:.6em;margin-top:1em;flex-wrap:wrap">
+            <button class="btn" id="adone">完成一个任务 ✓</button>
+            <button class="btn" id="areset" style="font-size:.85em">重置</button>
+          </div>
         </div>
         <div class="arr" style="align-self:center"></div>
         <div class="aframe">
@@ -895,7 +920,7 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
 
     <div data-step="4" class="fin">
       <p class="lead" style="font-size:clamp(20px,2.1vw,32px)">你看到的世界,<br>是你的频率渲染出来的。</p>
-      <p class="quote" style="margin-top:.5em;font-size:clamp(44px,6vw,96px)">调它。</p>
+      <p class="quote kai" style="margin-top:.5em">愿你调准<br>自己的那根弦</p>
       <p class="small kai" style="margin-top:2em;letter-spacing:.3em">如涛波依水 · 谢谢大家</p>
     </div>
 
@@ -913,7 +938,7 @@ body.tired .brainbox .bstat.warnb{fill:#F2542D;font-weight:700}
       <div class="qc"><div class="qq">执受根身 · 同安危</div><div class="qn">《成唯识论》卷二。阿赖耶识摄有根身为自体,与身体安危与共;「恒转如瀑流」,是流不是库。</div></div>
     </div>
     <h2>附录 · 弦论,一句话</h2>
-    <p class="lead" style="font-size:1em;max-width:46em">弦论把基本粒子看作同一根弦的不同振动模式:粒子的差异,是振动方式的差异。今晚只把它当意象,不作物理主张。入门可读 Brian Greene,<i>The Elegant Universe</i>。</p>
+    <p class="lead" style="font-size:1em;max-width:46em">弦论把基本粒子看作同一根弦的不同振动模式:粒子的差异,是振动方式的差异。今晚只把它当意象,不作物理主张。入门可读 Brian Greene,<i>The Elegant Universe</i>;弦论意象致谢 王利杰 · <a href="https://www.youtube.com/@Macro_Alpha_cn" style="color:inherit;font-weight:700">Macro Alpha 宏观阿尔法</a>。</p>
 
     <h2>附录 · 七道证据闸门,和它们在因果研究里的出处</h2>
     <table>
@@ -1995,8 +2020,7 @@ const CalmString=(()=>{
     const w=cv.closest(".pluckwrap"); if(!w) return;
     w.classList.toggle("calm",mood<-.35);
     w.classList.toggle("chaos",mood>.35);
-    $("#pv1").textContent=Math.round(74 - mood*14 + Math.max(0,-mood)*(-2));
-    $("#pv2").textContent=mood>.35?"乱转":mood<-.35?"有序 ✓":"待命";
+    $("#dmt").textContent=mood>.35?"脑子里:全都急,都要现在":mood<-.35?"脑子里:一件一件来":"普普通通的一天";
   }
   function pointer(e){
     const rc=cv.getBoundingClientRect();
@@ -2039,6 +2063,12 @@ const CalmString=(()=>{
     fi=Math.min(FRAMES.length-1,fi+1);
     $("#aft").style.opacity="0";
     setTimeout(()=>{render();$("#aft").style.opacity="1";},420);
+  });
+  $("#areset").addEventListener("click",()=>{
+    [...grid.children].forEach((c,i)=>c.classList.toggle("on",i%7===0));
+    fi=0;
+    $("#aft").style.opacity="0";
+    setTimeout(()=>{render();$("#aft").style.opacity="1";},300);
   });
 })();
 
