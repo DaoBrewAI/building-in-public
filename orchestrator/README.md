@@ -140,6 +140,13 @@ unmerged commits, collides on the same files at merge, or shares a contract or
 migration chain). It then launches automatically once the blocker is accepted or
 failed.
 
+## Decision host tag
+
+Store this machine's fixed decision tag as a single line in
+`~/.config/daobrew/orchestrator-host-tag`. The file is machine-local and
+deliberately lives outside the hub, so it is never committed or pushed. If it
+is missing or empty, Orchestrator falls back to deriving a tag from `hostname`.
+
 ## Hub layout
 
 ```text

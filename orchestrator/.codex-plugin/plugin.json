@@ -1,6 +1,6 @@
 {
   "name": "orchestrator",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Hybrid mission-control orchestration for Codex: Claude Fable-5 brainstorms, plans, and independently reviews; Codex GPT-5.6-Sol performs every implementation and rework change in guarded worktrees.",
   "author": {
     "name": "DaoBrew AI",
