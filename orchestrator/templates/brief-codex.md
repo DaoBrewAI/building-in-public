@@ -62,20 +62,28 @@ Read {{MISSION_DIR}}/request.md in full.
 ## Stage 1B: PLAN
 
 1. Invoke `10x-engineer:writing-plans` on design.md. Save the detailed plan to
-   {{MISSION_DIR}}/plan.md. Skip the skill's execution-preference and handoff
-   prompts: the Codex coordinator owns execution.
+   {{MISSION_DIR}}/plan.md and emit the machine-readable
+   {{MISSION_DIR}}/task-dag.json beside plan.md. Skip the skill's
+   execution-preference and handoff prompts: the Codex coordinator owns
+   execution.
 2. The plan must be executable by a separate Codex worker with exact files,
    test-first RED/GREEN steps, task dependencies, test commands, and commit
    checkpoints. Claims about reused components must cite real `file:line`
    evidence. Contract changes must list every affected caller.
-3. Generate the Review Companion at {{MISSION_DIR}}/plan-review.html. Lead with
+3. task-dag.json must use the approved task-DAG schema: version and mission;
+   unique task IDs; explicit `depends_on`, `files`, `contracts`, and
+   `verification` arrays; and an allowed task state. Dependencies must be
+   acyclic. Tasks that can become ready in parallel may not share files or
+   contracts; add a dependency when ownership must be coordinated.
+4. Generate the Review Companion at {{MISSION_DIR}}/plan-review.html. Lead with
    data model, interfaces, and user-visible decisions; show alternatives and a
    likely-tweak/settled marker; collapse mechanical work.
-4. Write `planned` to {{MISSION_DIR}}/state and end with
+5. Write `planned` to {{MISSION_DIR}}/state and end with
    `PLAN READY {{MISSION_SLUG}}`. The coordinator presents both the design and
    plan review at the founder go gate.
-5. If resumed with founder corrections, update design.md first, then plan.md,
-   regenerate plan-review.html, return to `planned`, and end with the same line.
+6. If resumed with founder corrections, update design.md first, then plan.md
+   and task-dag.json, regenerate plan-review.html, return to `planned`, and end
+   with the same line.
 
 ## Stage 2: REVIEW
 

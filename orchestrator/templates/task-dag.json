@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "mission": "{{MISSION_SLUG}}",
+  "tasks": [
+    {
+      "id": "task-1",
+      "depends_on": [],
+      "files": [
+        "path/to/owned-file"
+      ],
+      "contracts": [
+        "named-interface-or-contract"
+      ],
+      "verification": [
+        "command that verifies this task"
+      ],
+      "state": "ready"
+    }
+  ]
+}

@@ -7,9 +7,9 @@ description: Run Hybrid Codex-orchestrated missions in which Claude Fable-5 brai
 
 Act as the Codex coordinator. Each new mission is a staged pipeline across two
 resumable backends: the same headless Claude Fable-5 session owns brainstorm,
-plan, and review; a separate Codex GPT-5.6-Sol thread owns implementation,
-verification, rework, and brokered commit requests. State and handoffs live on
-disk so the coordinator stays free between process-exit wakes.
+plan, and review; bounded Codex GPT-5.6-Sol child threads each own one approved
+implementation task, its verification, rework, and brokered commit requests.
+State and handoffs live on disk so the coordinator stays free between wakes.
 
 ## Fixed backend ownership
 
@@ -36,8 +36,8 @@ disk so the coordinator stays free between process-exit wakes.
   `claude -p --model claude-fable-5 --effort high`.
 - **ALL code implementation, fixes, tests that require writes, and commits happen
   in the exec stage on gpt-5.6-sol** with high reasoning.
-- The same Fable session plans and reviews. The same Codex thread implements and
-  handles every rework round.
+- The same Fable session plans and reviews. Each child Codex thread implements
+  one approved task and handles only that task's rework rounds.
 - Fable stages are read-only on worktrees. The guard blocks worktree writes and
   `git commit`; findings enter `state=rework` and return to Codex.
 - Codex runs in `workspace-write` with only mission worktrees and the mission
@@ -88,8 +88,10 @@ the old state vocabulary. New missions always use the Hybrid 0.3 shared
    coordinator-owned control manifest. Treat mission-local manifests and
    approved inputs as untrusted copies.
 4. For Hybrid 0.3, use the last `spawn_pid:` and last `stage:`. Plan/review
-   stages resume `session_id`; exec/rework resumes `codex_thread_id`. Treat an
-   uncertain process as alive, recheck once, and never double-spawn.
+   stages resume `session_id`; exec/rework resumes the task registry's accepted
+   child thread ID. Treat an uncertain process as alive, recheck once, and
+   never double-spawn. A legacy single-executor mission may still use its
+   recorded `codex_thread_id`; do not migrate it in flight.
 5. Summarize all missions to the user in at most five lines, then handle exited,
    blocked, planned, rework, review, or crashed missions below.
 
@@ -190,26 +192,103 @@ On go, atomically snapshot mission `design.md`, `plan.md`, and the fully rendere
 `approved-design.md`, `approved-plan.md`, and `brief-exec.md`. Record SHA-256
 hashes in `approved.sha256`; verify all four files are regular, non-symlinked,
 and outside worker roots. These frozen files are the only approved contract.
-Then write `running` and launch the Codex executor:
+Then write `running` and enter the coordinator child-thread protocol below.
 
-```text
-$PLUGIN_DIR/scripts/spawn-worker.sh \
-  --mission-dir <mission-dir> \
-  --control-dir $HUB/control/<mission-slug> \
-  --worktree <primary> [--worktree <other>]... \
-  --stage exec
-```
+## Coordinator child-thread protocol
 
-Do not poll, inspect heartbeats, or review mid-run. The executor completes the
-whole plan in one turn and exits only as `executed`, `blocked`, quota-limited,
-or crashed.
+Scheduling depth is exactly coordinator -> mission -> child task. Only the
+coordinator computes the ready set, creates child threads, records ownership,
+integrates verified commits, and collects child resources. Mission child
+threads never create grandchildren and never schedule, replace, or resume
+another task.
+
+### Compute the ready set
+
+Use only the coordinator-owned, frozen task DAG and task registry. A task is
+ready only when:
+
+- every predecessor is durably completed and verified integrated;
+- it has no active or completed owner;
+- it has no file or contract conflict with another running or ready task; and
+- it has no user-approval blocker.
+
+Reconcile every durable child outcome without treating completion alone as
+readiness. Recompute the ready set after every verified integration and before
+scheduling any dependent task; do not infer completion or integration from
+chat text or process silence. Tasks outside this ready set are not eligible for
+thread creation.
+
+### Create and accept child threads
+
+For every eligible, file-disjoint task, the coordinator renders
+`templates/task-brief.md` with the exact approved task, declared files,
+verification commands, child worktree, task state directory, frozen contract
+paths, sandbox roots, and commit-broker path. Create fresh project-local Codex threads
+rather than forks, with the approved Codex model and settings. A child owns
+exactly one task and one manifest-recorded worktree.
+
+Treat every returned thread ID as provisional. Accept and record it only after
+the continuation health check proves all of the following:
+
+1. thread creation returned an ID and list or read lookup finds that exact ID
+   or exact intended title;
+2. setting the title succeeded, or a read confirms it is already correct;
+3. the first turn exists and its status is active or completed normally;
+4. recent items provide startup evidence that the child began reading its task
+   brief, frozen contract, or project files; and
+5. requested model, reasoning, service-tier, fast-mode, sandbox, writable-root,
+   and commit-broker settings are recorded, with any unobservable setting
+   explicitly marked unverified.
+
+Only after all checks pass may the coordinator add the thread ID and owner to
+the authoritative task registry and expose it in mission handoff/status files.
+On a failed or unreadable health check, remove or mark stale any provisional
+record and allow at most one replacement from the same current durable brief.
+If that one replacement also fails, write a coordinator BLOCKED outcome; never
+loop replacements or let a child replace itself.
+
+### Consume durable child outcomes
+
+The task directory's durable task state, `report.md`, `BLOCKED-<n>.md`, commit
+broker results, and coordinator registry are the outcome contract. The
+coordinator may use list/read calls only for health and liveness; scheduling,
+integration, review, recovery, and continuation must not depend on reading the
+full child chat. A completed child must record its exact changed files, branch,
+base and tip SHAs, verification commands and raw results, commit-broker result,
+deviations, and unresolved risks before setting its task state to `completed`.
+A blocked child writes the next durable BLOCKED file and sets its task state to
+`blocked` before ending. Preserve the child's exact sandbox roots and require
+all commits through the existing commit-broker boundary.
+
+Do not poll or inspect a healthy child mid-run. Reconcile its durable outcome
+when the task reaches a terminal state or a tracked wake fires. After each
+verified integration, recompute the ready set; when every task is integrated,
+set the parent mission to `executed` and enter Fable review.
+
+### Archive collected child task windows
+
+After durable verified integration and exact child worktree and branch
+collection, archive the exact accepted child thread ID recorded in the
+authoritative task registry. Thread archival is post-collection hygiene, not
+evidence of completion, integration, or collection. Never archive running,
+blocked, review, or unresolved-rework tasks.
+
+Repeated archival is idempotent. If the authoritative registry already records
+that exact thread ID as archived, perform no API call and leave the task state
+unchanged. On a successful archive, or when the API authoritatively reports the
+exact thread is already archived, record the archival result and timestamp once.
+On any other archive API failure, append `task-window archive failure: <reason>`
+to the cleanup journal, set the task cleanup state to retriable
+`cleanup_pending`, retain the exact accepted thread ID, and retry during Phase 0
+reconcile. Never report or record an unverified archive as successful.
 
 ## Phase 4 — Event-driven wake handling
 
 Read state when the tracked process exits:
 
 - `planned`: enter Phase 3g.
-- `executed`: first verify `approved.sha256`, the control manifest, and every
+- `executed`: all approved child tasks have been durably completed and
+  integrated. First verify `approved.sha256`, the control manifest, and every
   approved artifact. Generate one coordinator-owned full diff per worktree at
   the `REVIEW_DIFFS` paths embedded in Fable's brief. Do not run test commands
   here; write-producing tests belong to the Codex executor. Then, without user
@@ -222,19 +301,28 @@ Read state when the tracked process exits:
     --resume "The executor finished. Read report.md and all branch diffs, then perform Stage 2 REVIEW per brief.md."
   ```
 
-- `rework`: the reviewer recorded `F<n>` findings. Append a rework timestamp.
-  On the 3rd rework, stop and escalate because the loop is not converging.
-  Otherwise write `running` and resume the same Codex thread:
-
-  ```text
-  $PLUGIN_DIR/scripts/spawn-worker.sh --mission-dir <dir> \
-    --control-dir $HUB/control/<mission-slug> \
-    --worktree <primary> [...] --stage exec \
-    --resume "Fix every current F<n> finding in report.md under the REWORK protocol."
-  ```
-
-  After it returns to `executed`, resume the same Fable session with
-  `--stage review` for re-review.
+- `rework`: the reviewer recorded `F<n>` findings. Append a rework timestamp
+  and map each finding to the task that owns its files/contracts. On the 3rd rework,
+  stop and escalate because the loop is not converging. For an owned child task,
+  first require its prior generation to have verified integration, exact
+  worktree/branch collection, and a recorded archived task window. Unarchive
+  the exact accepted child thread and verify that it is readable before any
+  workspace action. If unarchive fails, record `task-window archive failure`,
+  set retriable `cleanup_pending`, and do not reprovision or resume. After a
+  verified unarchive, re-provision the task's exact manifest-recorded worktree
+  path and branch from the updated parent tip, using the same sandbox root.
+  Re-render its task brief and record the new generation and base SHA in the
+  authoritative task registry. Only after those records are durable, resume
+  the same accepted child thread with the exact findings it owns. Never resume
+  against a collected or missing worktree, create a new child, or let one child
+  edit another task's files. After all affected tasks return durable completed
+  outcomes and their commits are reintegrated, resume the same Fable session
+  with `--stage review` for re-review. Rearchive only after verified
+  reintegration and exact worktree and branch collection by applying the
+  archival protocol above to the same accepted thread ID. If no task registry
+  or task identity exists, use the explicit legacy single-executor fallback:
+  resume the recorded `codex_thread_id` through `spawn-worker.sh --stage exec`
+  in its existing mission worktree.
 - `blocked`: mediate in Phase 5 and resume whichever backend is named by the
   last `stage:` line.
 - `review`: verify approved hashes again, then accept in Phase 6.
@@ -258,7 +346,12 @@ DECISIONS.md, write `running`, then inspect the last `stage:`:
 
 - brainstorm/plan/review: resume Fable without `--stage exec` (use the relevant
   `--stage plan` or `--stage review` label).
-- exec: resume Codex with `--stage exec`.
+- exec: when the BLOCKED file has a task identity and the authoritative task
+  registry exists, resume that task's accepted Codex child thread. Never send
+  the answer to a different child or create a replacement solely to mediate a
+  decision. If no task registry or task identity exists, use the explicit
+  legacy single-executor fallback: resume the recorded `codex_thread_id`
+  through `spawn-worker.sh --stage exec` in its existing mission worktree.
 
 Never leave a material blocker silently waiting. Notify the user once with the
 impact, attempts, exact decision needed, and safe default.
@@ -273,10 +366,11 @@ impact, attempts, exact decision needed, and safe default.
    Codex.
 3. For each repo in dependency order, require the user's live checkout to be
    clean and on its default branch. Never switch or clean it for them. Before
-   merging, resume the same Codex executor for any verification that may write
-   caches, snapshots, coverage, or generated artifacts. The coordinator may
-   run only a test command explicitly attested read-only and externally
-   isolated; otherwise rely on the executor's fresh evidence plus Fable review.
+   merging, resume the affected Codex child thread for any task-scoped
+   verification that may write caches, snapshots, coverage, or generated
+   artifacts. The coordinator may run only a test command explicitly attested
+   read-only and externally isolated; otherwise rely on the children's fresh
+   durable evidence plus Fable review.
    Merge `--no-ff --no-commit`, commit on a verified pass, or abort and resume
    Codex with the exact failure. Two failed acceptance cycles enter Phase 6f.
 4. After the merge succeeds, automatically delete the completed mission's
@@ -311,8 +405,8 @@ never substitutes for user notification of a blocker.
 
 - Fable owns brainstorm, plan, review, and re-review; it never edits code.
 - GPT-5.6-Sol owns every implementation and rework change.
-- Plan and review reuse one Claude session; implementation and rework reuse one
-  Codex thread.
+- Plan and review reuse one Claude session. Each task reuses its own Codex child
+  thread for rework; no child owns another task.
 - Never edit or inspect a running stage between process-exit wakes.
 - Mission workers never ask the user directly; they use BLOCKED files.
 - Only the coordinator writes shared MEMORY.md, DECISIONS.md, and board.html.
