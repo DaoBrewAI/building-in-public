@@ -7,17 +7,18 @@
 <title>纸墨新粗野 · Taoist Neo-Brutalism</title>
 <template id="graphify-source">
 Executive Summary
-DaoBrew 的界面设计语言定名「纸墨新粗野(Taoist Neo-Brutalism)」:以奶油纸色为底、墨色 3px 描边与无羽化硬投影为结构,饱和色只以小面积贴纸与图章出现,且每个颜色被一条语义铁律锁死(紫=身体信号,黄=人的批准/可执行,钴蓝=工作与 agent 会话,橙红=威胁/拦截,绿=会议/通过)。该语言首用于 2026-08-18 沙龙 deck,现为 DaoBrew 整体设计语言(含未来 B2B 版本),并将整体移植到 Sentinel Mac App(moonshot 分支换皮)。
+DaoBrew 的界面设计语言定名「纸墨新粗野(Taoist Neo-Brutalism)」:以奶油纸色为底、墨色 3px 描边与无羽化硬投影为结构,饱和色只以小面积贴纸与图章出现,且每个颜色被一条语义铁律锁死(紫=身体信号,黄=人的批准/可执行,钴蓝=工作与 agent 会话,橙红=威胁/拦截,绿=会议/通过)。字体遵循「一族三声」:全站可见文本统一使用 SF Mono/ui-monospace,中文仅在缺字时回落 PingFang SC;显、述、印只靠字号、字重与字距区分,不另设 sans 或楷体角色。该语言首用于 2026-08-18 沙龙 deck,现为 DaoBrew 整体设计语言(含未来 B2B 版本),并将整体移植到 Sentinel Mac App(moonshot 分支换皮)。
 
 Conclusions
 1) 颜色即宣称:配色不是装饰,是系统敢盖什么章的可视化制度;黄章只属于人的批准,直接呈现产品最硬的边界。
 2) 淡雅的来源:大面积留白 + 素纸底,饱和色仅作小面积语义信号,墨线与硬影给出木刻版画式的笃定,而非荧光潮流感。
 3) 与「道/禅」的契合:纸为素底(无),墨线为戒(边界清楚不作伪饰),色即语义(无妄色),章为仪式(承认是动作不是默认),波与弦为贯穿母题(如涛波依水)。
 4) 与宁静任务管理的契合:效率工具默认美学制造紧迫感,本语言反其道而行;底色安静、一屏一两个信号,页面本身示范注意力管理;紫专属身体、黄专属人=批准权不外包。与通行新粗野(荧光铺底)、毛玻璃/Mesh Gradient 路线(氛围溶解边界)、以及一般效率工具(密度与红点)的差异均已成文。
-5) 交付:本报告页即样例实现;设计令牌、组件规格与 Do/Don't 已成文,供设计师与各产品面(App、官网、B2B)直接采用。
+5) 字体一族三声:显=mono 700 大字号,述=mono 400 正文,印=mono 700 小字号加字距;PingFang SC 只补中文 glyph,不是第二套视觉字体。
+6) 交付:本报告页即样例实现;设计令牌、组件规格与 Do/Don't 已成文,供设计师与各产品面(App、官网、B2B)直接采用。
 
 Decision Status
-已采用:沙龙 deck、组织主页、Causal Raid 提示均已按此语言上线;Sentinel Mac App 换皮(moonshot)立项进行中。色值与语义规则为当前权威版本,变更须同步 moonshot/ALIGNMENT-SPEC.md 的身体紫 #A66BC2 契约。
+已采用:沙龙 deck、组织主页、Causal Raid 提示均已按此语言上线;Sentinel Mac App 换皮(moonshot)立项进行中。色值、语义规则与「一族三声」字体规则为当前权威版本,变更须同步 moonshot/ALIGNMENT-SPEC.md 的身体紫 #A66BC2 契约。
 
 Sources
 strategies/2026-08-18-weishi-taskmap-salon/weishi.html(deck 实现);moonshot/ALIGNMENT-SPEC.md(身体紫契约);DaobrewSentinelMac TaskMapDecisionAtlas.swift TaskMapUI.body #A66BC2;dataviz 调色板验证器通过记录(钴蓝/绿/紫/橙红于白底全项 PASS);参考:Gumroad 设计体系、neobrutalism 组件惯例、王利杰 Macro Alpha 弦论意象。
@@ -32,15 +33,16 @@ strategies/2026-08-18-weishi-taskmap-salon/weishi.html(deck 实现);moonshot/ALI
   --yellow:#FFC91F; --yellow-soft:#FFF0C2;
   --muted:#6F6A5E; --line:#D8D2C2;
   --bd:3px solid var(--ink); --sh:6px 6px 0 var(--ink); --sh-sm:3px 3px 0 var(--ink);
-  --sans:-apple-system,"Helvetica Neue","PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",sans-serif;
-  --kai:"Kaiti SC","STKaiti","BiauKai","KaiTi","Songti SC",serif;
-  --mono:"SF Mono","Menlo",monospace; --r:12px;
+  --font-display:"SF Mono",ui-monospace,Menlo,Consolas,"PingFang SC",monospace;
+  --font-text:var(--font-display);
+  --font-mono:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --r:12px;
 }
 *{box-sizing:border-box;margin:0;padding:0}
-body{background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.75;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-text);font-weight:400;line-height:1.75;-webkit-font-smoothing:antialiased}
 main{width:min(94vw,1060px);margin:0 auto;padding:clamp(28px,5vh,64px) 0 4em}
 .brand{
-  display:inline-block;font-family:var(--kai);font-weight:700;letter-spacing:.3em;
+  display:inline-block;font-family:var(--font-display);font-weight:700;letter-spacing:.3em;
   background:var(--ink);color:var(--bg);padding:.28em .8em .28em 1.05em;border-radius:10px;
   box-shadow:4px 4px 0 var(--cobalt);transform:rotate(-2deg);
 }
@@ -51,9 +53,8 @@ h2 .u{background:linear-gradient(transparent 58%,var(--yellow) 58%)}
 .lead{font-size:clamp(15px,1.5vw,19px);max-width:44em}
 .lead strong{background:linear-gradient(transparent 60%,var(--cobalt-soft) 60%)}
 .small{font-size:.82em;color:var(--muted)}
-.kai{font-family:var(--kai)}
 .badge{
-  display:inline-flex;font-size:.72em;letter-spacing:.12em;font-weight:700;
+  display:inline-flex;font-family:var(--font-mono);font-size:.72em;letter-spacing:.12em;font-weight:700;
   background:var(--paper);border:2.5px solid var(--ink);border-radius:999px;
   padding:.3em 1em;box-shadow:var(--sh-sm);margin-bottom:1em;
 }
@@ -61,7 +62,7 @@ h2 .u{background:linear-gradient(transparent 58%,var(--yellow) 58%)}
 .pal{display:grid;grid-template-columns:1fr 1fr;gap:clamp(14px,2vw,24px);margin:1.4em 0}
 .pc{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);overflow:hidden}
 .pc .sw{height:86px;display:flex;align-items:flex-end;padding:.6em .9em;border-bottom:var(--bd)}
-.pc .sw .hex{font-family:var(--mono);font-weight:700;font-size:.85em;background:var(--paper);border:2px solid var(--ink);border-radius:7px;padding:.05em .5em;box-shadow:2px 2px 0 var(--ink)}
+.pc .sw .hex{font-family:var(--font-mono);font-weight:700;font-size:.85em;background:var(--paper);border:2px solid var(--ink);border-radius:7px;padding:.05em .5em;box-shadow:2px 2px 0 var(--ink)}
 .pc .bd2{padding:1em 1.2em}
 .pc .nm{font-weight:700;font-size:1.05em}
 .pc .rule{font-size:.85em;margin:.3em 0 .8em}
@@ -69,10 +70,10 @@ h2 .u{background:linear-gradient(transparent 58%,var(--yellow) 58%)}
 .pc .demo{border-top:2.5px dashed var(--line);padding-top:.9em;display:flex;gap:.7em;flex-wrap:wrap;align-items:center}
 /* demo atoms */
 .stick{display:inline-block;background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:.45em .9em;font-weight:700}
-.stick .sk{display:block;font-family:var(--mono);font-size:.6em;letter-spacing:.14em;opacity:.75}
-.stick .sv{font-family:var(--mono);font-size:1.2em}
-.stamp{display:inline-block;border:3px solid currentColor;border-radius:9px;padding:.1em .6em;font-weight:700;letter-spacing:.1em;font-size:.8em;transform:rotate(-2.5deg);background:var(--paper)}
-.chip{display:inline-block;border:2.5px solid var(--ink);border-radius:8px;padding:.1em .6em;font-weight:700;font-size:.8em}
+.stick .sk{display:block;font-family:var(--font-mono);font-size:.6em;letter-spacing:.14em;opacity:.75}
+.stick .sv{font-family:var(--font-mono);font-size:1.2em}
+.stamp{display:inline-block;font-family:var(--font-mono);border:3px solid currentColor;border-radius:9px;padding:.1em .6em;font-weight:700;letter-spacing:.1em;font-size:.8em;transform:rotate(-2.5deg);background:var(--paper)}
+.chip{display:inline-block;font-family:var(--font-mono);border:2.5px solid var(--ink);border-radius:8px;padding:.1em .6em;font-weight:700;font-size:.8em}
 .bar{width:120px;height:12px;background:var(--bg);border:2px solid var(--ink);border-radius:6px;overflow:hidden}
 .bar i{display:block;height:100%;width:66%;background:var(--cobalt)}
 /* rules list */
@@ -82,19 +83,19 @@ h2 .u{background:linear-gradient(transparent 58%,var(--yellow) 58%)}
 /* spec */
 .spec{display:grid;grid-template-columns:1fr 1fr;gap:clamp(14px,2vw,24px)}
 .sp{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh-sm);padding:1em 1.2em}
-.sp h3{font-size:.95em;font-weight:700;letter-spacing:.06em;margin-bottom:.5em}
+.sp h3{font-family:var(--font-mono);font-size:.95em;font-weight:700;letter-spacing:.06em;margin-bottom:.5em}
 .sp ul{list-style:none;font-size:.86em}
 .sp li{padding:.25em 0}
 .sp.dont{background:var(--red-soft)}
 .sp.do{background:var(--green-soft)}
 pre{
   background:var(--ink);color:var(--bg);border-radius:var(--r);border:var(--bd);box-shadow:var(--sh);
-  padding:1.1em 1.3em;font-family:var(--mono);font-size:.78em;line-height:1.7;overflow-x:auto;margin:1em 0;
+  padding:1.1em 1.3em;font-family:var(--font-mono);font-size:.78em;line-height:1.7;overflow-x:auto;margin:1em 0;
 }
 .why{background:var(--paper);border:var(--bd);border-radius:var(--r);box-shadow:var(--sh);padding:1.3em 1.5em;margin:1.2em 0;max-width:52em}
 .why h3{font-weight:700;font-size:1.1em;margin-bottom:.4em}
 .why p{font-size:.95em}
-.why .q{font-family:var(--kai);font-weight:700;letter-spacing:.15em;color:var(--muted)}
+.why .q{font-weight:700;letter-spacing:.15em;color:var(--muted)}
 canvas{display:block;width:100%;height:100px;margin-top:3em}
 @media (max-width:760px){.pal,.spec{grid-template-columns:1fr}}
 </style>
@@ -131,7 +132,7 @@ canvas{display:block;width:100%;height:100px;margin-top:3em}
       <div class="sw" style="background:var(--violet)"><span class="hex">#A66BC2 · #F1E4F7</span></div>
       <div class="bd2">
         <div class="nm">紫 · 身体信号</div>
-        <div class="rule"><b>只给身体信号。</b>与 App 内 <span style="font-family:var(--mono)">TaskMapUI.body</span> 同一色号,是网页与产品的色彩契约。</div>
+        <div class="rule"><b>只给身体信号。</b>与 App 内 <span style="font-family:var(--font-mono)">TaskMapUI.body</span> 同一色号,是网页与产品的色彩契约。</div>
         <div class="demo">
           <span class="stick" style="background:var(--violet);color:#fff"><span class="sk">BODY · READINESS</span><span class="sv">73 ↓</span></span>
           <span class="stamp" style="color:var(--violet)">BODY OVERLAP · 3d</span>
@@ -251,7 +252,14 @@ border: 3px solid var(--ink);          /* 卡片 3px,小件 2-2.5px */
 shadow: 6px 6px 0 var(--ink);          /* 大件 6px,小件 3px,零羽化 */
 radius: 12px;                          /* 小件 8-10px,一套到底 */
 rotate: ±1° ~ ±3°;                     /* 只给贴纸与图章,正文不转 */
-type:   PingFang 700 大标题 / 楷体只给经文与落款 / mono 只给数据</pre>
+type:   一族三声(2026-08-18 定稿,与 daobrew.ai 一致)
+        family = "SF Mono",ui-monospace,Menlo,Consolas
+        CJK fallback = "PingFang SC"(只补中文字形,不是第二套视觉字体)
+        显 = mono 700 大字号,一屏一声
+        述 = mono 400 成段叙述,名称与结论用 700
+        印 = mono 700 小字号 + 大写 + 字距,用于控件、链接、数据、公式、状态、免责
+        判断法:字号是音量,字重是力度,字距是仪式;不靠换字体分层
+        mono 偏宽:大字号整体降半档,关键复合词不许断行</pre>
 
   <div class="spec">
     <div class="sp do">
@@ -261,7 +269,8 @@ type:   PingFang 700 大标题 / 楷体只给经文与落款 / mono 只给数据
         <li>状态用图章表达(通过 / 拦下 / 已确认)</li>
         <li>硬投影表示「可按」「在场」</li>
         <li>空状态也用卡片认真排(说清为什么是空)</li>
-        <li>数据一律 mono,标题一律加粗</li>
+        <li>显、述、印共用同一 mono 字族,只用字号、字重、字距分层</li>
+        <li>PingFang SC 只在缺字时补中文 glyph,不另立「中文字体」</li>
       </ul>
     </div>
     <div class="sp dont">
@@ -272,6 +281,7 @@ type:   PingFang 700 大标题 / 楷体只给经文与落款 / mono 只给数据
         <li>紫色挪作他用(它属于身体)</li>
         <li>荧光大色块铺底(那是另一派新粗野)</li>
         <li>正文倾斜、超过 ±3° 的旋转</li>
+        <li>为标题、正文、控件另配 sans、楷体或 serif</li>
       </ul>
     </div>
   </div>
