@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Contract test for the Codex-facing Hybrid 0.3 orchestrator release.
+# Contract test for the Codex-facing Orchestrator 0.4 release.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -11,6 +11,9 @@ CLAUDE_SKILL="$ROOT/claude-skills/orchestrating/SKILL.md"
 SPAWN="$ROOT/scripts/spawn-worker.sh"
 GUARD="$ROOT/scripts/worker-guard.sh"
 INSTALLER="$ROOT/scripts/install-worker-settings.sh"
+LIFECYCLE="$ROOT/scripts/task-worktree.sh"
+INTEGRATE="$ROOT/scripts/integrate-task.sh"
+VALIDATOR="$ROOT/scripts/validate-task-dag.sh"
 CODEX_BRIEF="$ROOT/templates/brief-codex.md"
 
 N=0
@@ -54,8 +57,10 @@ regex() {
   grep -Eq -- "$expression" "$file"
 }
 
-check "Codex manifest is version 0.3.2" \
-  json_field_is "$MANIFEST" version 0.3.2
+check "Codex manifest is version 0.4.0" \
+  json_field_is "$MANIFEST" version 0.4.0
+check "Claude manifest is version 0.4.0" \
+  json_field_is "$CLAUDE_MANIFEST" version 0.4.0
 check "Codex manifest describes Claude Fable planning" \
   contains "$MANIFEST" "Fable-5"
 check "Codex manifest describes GPT-5.6-Sol execution" \
@@ -67,7 +72,7 @@ check "Codex skill fixes Fable-5 as brainstorm/plan/review backend" \
   regex "$SKILL" 'brainstorm.*plan.*review.*claude-fable-5|claude-fable-5.*brainstorm.*plan.*review'
 check "Codex skill fixes GPT-5.6-Sol as the only implementation backend" \
   regex "$SKILL" 'ALL code implementation.*gpt-5\.6-sol|gpt-5\.6-sol.*ALL code implementation'
-check "Codex skill launches the shared 0.3 worker" \
+check "Codex skill launches the shared Hybrid worker" \
   contains "$SKILL" '$PLUGIN_DIR/scripts/spawn-worker.sh'
 check "Hybrid launcher requires coordinator-owned control state" \
   contains "$SKILL" '--control-dir $HUB/control/<mission-slug>'
@@ -93,16 +98,46 @@ check "Codex skill bounces findings through rework" \
   contains "$SKILL" 'state=rework'
 check "Codex acceptance cleanup automatically deletes completed leftovers" \
   contains "$SKILL" 'orchestrator-gc.sh --hub $HUB --clean'
-check "Codex acceptance cleanup includes the merged origin branch" \
-  contains "$SKILL" 'matching `origin/orc/*` branch'
+check "Codex acceptance cleanup is limited to mission-owned origin refs" \
+  contains "$SKILL" 'matching mission-owned `origin/orc/*` ref'
+check "Codex acceptance cleanup records but never deletes the target branch" \
+  contains "$SKILL" 'target branch is containment authority only: never delete or edit it'
 check "Codex skill limits non-converging rework" \
   regex "$SKILL" '3rd rework|three.*rework'
 check "Codex skill documents legacy 0.2 compatibility" \
   contains "$SKILL" 'Legacy Codex 0.2 compatibility'
 check "Pending legacy missions are detected without session history" \
-  contains "$SKILL" 'no Hybrid 0.3 pipeline marker'
+  contains "$SKILL" 'no Hybrid pipeline marker'
+check "Hybrid 0.3 missions have an explicit in-flight compatibility classifier" \
+  contains "$SKILL" 'Hybrid 0.3 single-executor compatibility'
+check "Hybrid 0.3 classification requires missing DAG and task registry authority" \
+  contains "$SKILL" 'approved-task-dag.json and the coordinator task registry are both absent'
+check "Hybrid 0.3 execution resumes the recorded single Codex thread" \
+  contains "$SKILL" 'resume the recorded `codex_thread_id` through the shared Hybrid launcher'
+check "Hybrid 0.3 recovery never creates child tasks" \
+  contains "$SKILL" 'never create child tasks for that in-flight mission'
 check "Go gate snapshots the approved contract outside worker roots" \
   contains "$SKILL" 'approved-design.md'
+check "Go gate executes exact task DAG freeze before child scheduling" \
+  contains "$SKILL" 'validate-task-dag.sh --freeze'
+check "native runtime requires the production lifecycle gate" \
+  contains "$SKILL" '$PLUGIN_DIR/scripts/task-worktree.sh'
+check "native runtime requires the production integration gate" \
+  contains "$SKILL" '$PLUGIN_DIR/scripts/integrate-task.sh'
+check "native runtime requires the DAG validator" \
+  contains "$SKILL" '$PLUGIN_DIR/scripts/validate-task-dag.sh'
+check "native child protocol invokes explicit classified create mode" \
+  contains "$SKILL" '--create-mode native-0.4'
+check "native child protocol passes the exact mission authority" \
+  contains "$SKILL" '--mission-dir <exact-mission-dir>'
+check "native child protocol requires production create before thread creation" \
+  contains "$SKILL" 'must succeed before rendering or creating the Codex child thread'
+check "legacy child compatibility remains an explicit classified path" \
+  contains "$SKILL" '--create-mode legacy'
+check "production native lifecycle assets are executable" bash -c \
+  '[[ -x "$1" && -x "$2" && -x "$3" ]]' _ "$LIFECYCLE" "$INTEGRATE" "$VALIDATOR"
+check "shared lifecycle lock mutations require the atomic directory guard" \
+  contains "$SKILL" 'serialized through the same short-lived atomic guard directory'
 
 check "shared launcher defaults to Fable-5 high" \
   contains "$SPAWN" 'WORKER_FLAGS=(--model "${ORC_PLAN_MODEL:-claude-fable-5}" --effort high'
@@ -112,6 +147,14 @@ check "quota detection covers reached-limit wording, not just hit-limit" \
   contains "$SPAWN" "you've (hit|reached) your"
 check "Claude skill mandates automatic quota fallback to Opus" \
   contains "$CLAUDE_SKILL" 'ORC_PLAN_MODEL=claude-opus-5'
+check "Claude coordinator classifies native 0.4 before mission reconciliation" \
+  contains "$CLAUDE_SKILL" 'classify-mission-version.sh'
+check "Claude coordinator never mutates native 0.4 mission state" \
+  contains "$CLAUDE_SKILL" 'do not mutate, resume, spawn,'
+check "Claude coordinator hands native 0.4 back to Codex" \
+  contains "$CLAUDE_SKILL" 'resume it from a Codex'
+check "Claude coordinator durably marks new 0.3 missions before launch" \
+  contains "$CLAUDE_SKILL" 'pipeline-version` containing the single line `0.3.0`'
 check "Codex skill mandates automatic quota fallback to Opus" \
   contains "$SKILL" 'ORC_PLAN_MODEL=claude-opus-5'
 check "shared launcher hardcodes GPT-5.6-Sol high" \
@@ -163,8 +206,14 @@ check "Codex coordinator queues only on a real dependency" \
 check "Claude coordinator routes write-producing acceptance tests to Codex" \
   contains "$CLAUDE_SKILL" 'verification that may write caches, snapshots, coverage, or generated artifacts'
 
-check "README declares Codex Hybrid 0.3" \
-  contains "$README" 'Codex Hybrid 0.3'
+check "README declares Orchestrator 0.4" \
+  contains "$README" 'Orchestrator 0.4'
+check "README scopes native 0.4 execution to the Codex coordinator" \
+  contains "$README" 'Native 0.4 task-DAG execution is Codex-coordinator-only'
+check "README documents fail-closed Claude handoff for native 0.4" \
+  contains "$README" 'recognizes native 0.4 authority, makes no mission mutation'
+check "README documents the explicit Claude 0.3 recovery marker" \
+  contains "$README" 'explicit `0.3.0` pipeline marker before provisioning'
 check "README labels legacy Codex assets" \
   contains "$README" 'Legacy Codex 0.2 compatibility'
 

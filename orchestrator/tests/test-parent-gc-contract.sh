@@ -23,7 +23,7 @@ check() {
 }
 
 setup_fixture() {
-  local name="$1" merged="${2:-yes}"
+  local name="$1" merged="${2:-yes}" mission_version="${3:-v04}"
   FIXTURE="$TMP/$name"
   HUB="$FIXTURE/.orchestrator"
   MISSION="$HUB/missions/mission"
@@ -69,6 +69,23 @@ setup_fixture() {
   printf 'report artifact\n## Code review\nresolved\n## Verification\nverified\n' > "$MISSION/report.md"
   printf '{"version":1,"mission":"mission","tasks":[]}\n' > "$CONTROL/approved-task-dag.json"
   printf 'verification artifact\n' > "$CONTROL/verification.md"
+  printf 'request\n' > "$MISSION/request.md"
+  printf 'Briefs: brief.md, brief-exec.md\n' > "$MISSION/MISSION.md"
+  printf 'backend: hybrid\nstage: review\ncodex_thread_id: parent-thread\n' > "$MISSION/session.txt"
+  printf 'approved design\n' > "$CONTROL/approved-design.md"
+  printf 'approved plan\n' > "$CONTROL/approved-plan.md"
+  printf 'approved brief\n' > "$CONTROL/brief-exec.md"
+  if [[ "$mission_version" = v04 ]]; then
+    printf '0.4.0\n' > "$CONTROL/pipeline-version"
+    mkdir -p "$CONTROL/tasks"
+    (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
+      brief-exec.md approved-task-dag.json > approved.sha256)
+  else
+    rm -f "$CONTROL/approved-task-dag.json"
+    rm -rf "$CONTROL/tasks"
+    (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
+      brief-exec.md > approved.sha256)
+  fi
 }
 
 add_archived_child_authority() {
@@ -250,6 +267,70 @@ fi
 check "cleanup_pending parent retry finishes from retained exact authority" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2/parent-cleanup-state")" = collected && ! -e "$3" ]] && ! git -C "$4" show-ref --verify --quiet "refs/heads/$5"' \
   _ "$RETRY_RC" "$CONTROL" "$PARENT" "$REPO" "$BRANCH"
+
+setup_fixture hybrid-03-parent yes v03
+"$GC" --hub "$HUB" --clean >"$FIXTURE/v03.out" 2>"$FIXTURE/v03.err"
+V03_GC_RC=$?
+if [[ "$V03_GC_RC" -ne 0 ]]; then
+  sed 's/^/  v03 diagnostic: /' "$FIXTURE/v03.err"
+fi
+check "classified Hybrid 0.3 target-contained parent cleanup succeeds without a DAG" bash -c \
+  '[[ "$1" -eq 0 && ! -e "$2" && "$(cat "$3/parent-cleanup-state")" = collected && -s "$4/approved-design.md" && -s "$4/approved-plan.md" && -s "$4/brief-exec.md" && ! -e "$4/approved-task-dag.json" ]]' \
+  _ "$V03_GC_RC" "$PARENT" "$CONTROL" "$ARCHIVE"
+
+setup_fixture hybrid-03-partial yes v03
+printf '{"version":1,"mission":"mission","tasks":[]}\n' > "$CONTROL/approved-task-dag.json"
+"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+V03_PARTIAL_RC=$?
+check "contradictory unversioned 0.3 DAG authority fails closed without parent mutation" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/parent-cleanup-state")" = cleanup_pending ]] && git -C "$4" show-ref --verify --quiet refs/heads/orc/mission' \
+  _ "$V03_PARTIAL_RC" "$PARENT" "$CONTROL" "$REPO"
+
+setup_fixture parent-ref-as-target
+printf '%s\t%s\t%s\t%s\t%s\n' \
+  "$PARENT" "$BRANCH" "$PARENT_TIP" "$REPO" "$BRANCH" \
+  > "$CONTROL/parent-cleanup-manifest.txt"
+"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+PARENT_TARGET_ALIAS_RC=$?
+check "parent cleanup target cannot alias the mission-owned parent ref" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/parent-cleanup-state")" = cleanup_pending && ! -e "$3/parent-cleanup-intent" ]] && git -C "$4" show-ref --verify --quiet "refs/heads/$5" && git --git-dir "$6" show-ref --verify --quiet "refs/heads/$5"' \
+  _ "$PARENT_TARGET_ALIAS_RC" "$PARENT" "$CONTROL" "$REPO" "$BRANCH" "$REMOTE"
+printf 'ready\n' > "$CONTROL/parent-cleanup-state"
+git -C "$REPO" symbolic-ref refs/heads/parent-target-alias "refs/heads/$BRANCH"
+printf '%s\t%s\t%s\t%s\t%s\n' \
+  "$PARENT" "$BRANCH" "$PARENT_TIP" "$REPO" parent-target-alias \
+  > "$CONTROL/parent-cleanup-manifest.txt"
+"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+SYMBOLIC_PARENT_TARGET_RC=$?
+check "normalized symbolic target alias cannot hide the mission-owned parent ref" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/parent-cleanup-state")" = cleanup_pending ]] && git -C "$4" show-ref --verify --quiet "refs/heads/$5" && git --git-dir "$6" show-ref --verify --quiet "refs/heads/$5"' \
+  _ "$SYMBOLIC_PARENT_TARGET_RC" "$PARENT" "$CONTROL" "$REPO" "$BRANCH" "$REMOTE"
+
+setup_fixture dual-stale-gc
+DUAL_LOCK="$CONTROL/.task-worktree.lock"
+DUAL_GUARD="$DUAL_LOCK.guard"
+mkdir "$DUAL_GUARD"
+printf '999994\tdeadgcguard\n' > "$DUAL_GUARD/owner"
+printf '999993\tdeadgclock\n' > "$DUAL_LOCK.999993.deadgclock"
+ln "$DUAL_LOCK.999993.deadgclock" "$DUAL_LOCK"
+( "$GC" --hub "$HUB" --clean >/dev/null 2>&1; echo "$?" > "$FIXTURE/dual-a.rc" ) &
+DUAL_GC_A=$!
+( "$GC" --hub "$HUB" --clean >/dev/null 2>&1; echo "$?" > "$FIXTURE/dual-b.rc" ) &
+DUAL_GC_B=$!
+wait "$DUAL_GC_A" 2>/dev/null || true
+wait "$DUAL_GC_B" 2>/dev/null || true
+check "two GC stale recoverers serialize one collection and preserve the target ref" bash -c \
+  '[[ "$(cat "$1/parent-cleanup-state")" = collected && ! -e "$2" && ! -e "$3" && ! -e "$4" && "$(grep -c "parent cleanup collected:" "$1/parent-cleanup-journal.log")" -eq 1 ]] && git -C "$5" show-ref --verify --quiet "refs/heads/$6"' \
+  _ "$CONTROL" "$PARENT" "$DUAL_LOCK" "$DUAL_GUARD" "$REPO" "$TARGET"
+
+setup_fixture ownerless-guard
+OWNERLESS_GUARD="$CONTROL/.task-worktree.lock.guard"
+mkdir "$OWNERLESS_GUARD"
+"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+OWNERLESS_GC_RC=$?
+check "parent GC recovers a half-published ownerless guard without permanent lockout" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/parent-cleanup-state")" = collected && ! -e "$3" && ! -e "$4" ]] && git -C "$5" show-ref --verify --quiet "refs/heads/$6"' \
+  _ "$OWNERLESS_GC_RC" "$CONTROL" "$PARENT" "$OWNERLESS_GUARD" "$REPO" "$TARGET"
 
 setup_fixture nonterminal-child
 mkdir -p "$CONTROL/tasks/task-a"
@@ -446,6 +527,38 @@ check "archive short write never publishes truncation and exact retry converges"
   _ "$SHORT_WRITE_RC" "$SHORT_WRITE_PRESERVED" "$SHORT_WRITE_RETRY_RC" \
   "$PARENT" "$CONTROL" "$MISSION" "$ARCHIVE"
 
+setup_fixture stale-lock-replacement
+LOCK_PATH="$CONTROL/.task-worktree.lock"
+OLD_LOCK_PID=999997
+OLD_LOCK_TOKEN=oldgcstale
+OLD_LOCK_CANDIDATE="$LOCK_PATH.$OLD_LOCK_PID.$OLD_LOCK_TOKEN"
+printf '%s\t%s\n' "$OLD_LOCK_PID" "$OLD_LOCK_TOKEN" > "$OLD_LOCK_CANDIDATE"
+ln "$OLD_LOCK_CANDIDATE" "$LOCK_PATH"
+sleep 30 &
+NEW_LOCK_PID=$!
+NEW_LOCK_TOKEN=newgclive
+NEW_LOCK_CANDIDATE="$LOCK_PATH.$NEW_LOCK_PID.$NEW_LOCK_TOKEN"
+NEW_LOCK_SOURCE="$CONTROL/.new-live-lock-source"
+printf '%s\t%s\n' "$NEW_LOCK_PID" "$NEW_LOCK_TOKEN" > "$NEW_LOCK_SOURCE"
+ln "$NEW_LOCK_SOURCE" "$NEW_LOCK_CANDIDATE"
+LOCK_REPLACEMENT_MARKER="$FIXTURE/stale-lock-replaced"
+ORC_GC_STALE_LOCK_TEST_FINAL_REPLACEMENT="$NEW_LOCK_SOURCE" \
+  ORC_GC_STALE_LOCK_TEST_MARKER="$LOCK_REPLACEMENT_MARKER" \
+  "$GC" --hub "$HUB" --clean >/dev/null 2>&1
+LOCK_REPLACEMENT_RC=$?
+check "parent GC stale recovery never removes an atomically replaced live lifecycle lock" bash -c \
+  '[[ "$1" -ne 0 && -f "$2" && -f "$3" && "$2" -ef "$3" && -f "$4" && -f "$5" && -d "$6" && "$(cat "$7/parent-cleanup-state")" = ready ]] && git -C "$8" show-ref --verify --quiet "refs/heads/$9"' \
+  _ "$LOCK_REPLACEMENT_RC" "$LOCK_PATH" "$NEW_LOCK_CANDIDATE" \
+  "$LOCK_REPLACEMENT_MARKER" "$OLD_LOCK_CANDIDATE" "$PARENT" "$CONTROL" "$REPO" "$BRANCH"
+kill "$NEW_LOCK_PID" >/dev/null 2>&1 || true
+wait "$NEW_LOCK_PID" 2>/dev/null || true
+rm -f -- "$OLD_LOCK_CANDIDATE"
+"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+LOCK_REPLACEMENT_RETRY_RC=$?
+check "parent GC exact retry converges after the replacement lock owner exits" bash -c \
+  '[[ "$1" -eq 0 && ! -e "$2" && ! -e "$3" && ! -e "$4" && "$(cat "$5/parent-cleanup-state")" = collected ]]' \
+  _ "$LOCK_REPLACEMENT_RETRY_RC" "$PARENT" "$LOCK_PATH" "$NEW_LOCK_CANDIDATE" "$CONTROL"
+
 setup_fixture live-lifecycle-lock
 LOCK_TOKEN=liveowner
 LOCK_PATH="$CONTROL/.task-worktree.lock"
@@ -475,6 +588,9 @@ check "live-lock pending marker binds full manifest and state epochs" \
 rm -f -- "$LOCK_PATH" "$LOCK_CANDIDATE"
 "$GC" --hub "$HUB" --clean >/dev/null 2>&1
 LIVE_LOCK_RETRY_RC=$?
+if [[ "$LIVE_LOCK_RETRY_RC" -ne 0 ]]; then
+  echo "  live retry diagnostic: state=$(cat "$CONTROL/parent-cleanup-state" 2>/dev/null || true) lock=$([[ -e "$LOCK_PATH" ]] && echo present || echo absent) guard=$([[ -e "$LOCK_PATH.guard" ]] && echo present || echo absent)"
+fi
 check "released lifecycle lock retry converges exact parent collection" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2/parent-cleanup-state")" = collected && ! -e "$3" && ! -e "$4" ]] && grep -Fqi "lifecycle mutation lock" "$5/cleanup-journal.log" && ! git -C "$6" show-ref --verify --quiet "refs/heads/$7" && ! git --git-dir "$8" show-ref --verify --quiet "refs/heads/$7"' \
   _ "$LIVE_LOCK_RETRY_RC" "$CONTROL" "$PARENT" "$PENDING_MARKER" "$ARCHIVE" \

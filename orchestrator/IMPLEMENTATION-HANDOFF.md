@@ -6,13 +6,13 @@
 - Current checkout: `main`
 - Existing unrelated changes to preserve: `claude-bridge/config.py`, `.DS_Store`, `figma-swift-tokens.skill`
 - Architecture is approved by the user.
-- Task 1 completed on 2026-08-21 at `2026-08-21T22:02:12Z`.
-- Tasks 2, 3, and 4 are implemented, independently reviewed, and integrated in
-  the main checkout. Their focused contracts are green.
-- The remaining intentional RED lane is Task 5/6 integration and GC.
-- Next dependency-ready checkpoints: Tasks 5 and 7. They are file-disjoint only
-  if Task 5 owns integration/GC files and Task 7 owns continuation hook files.
-- Auto-chain is authorized for dependency-ready, file-disjoint lanes.
+- Tasks 1 through 8 are implemented, independently accepted, and locally
+  integrated in the main checkout.
+- All focused, primary, compatibility, packaging, syntax, and diff checks are
+  green. No implementation task remains dependency-ready.
+- The only remaining release action is the separately authorized decision to
+  push the locally integrated `main`; no push, PR, publish, marketplace update,
+  install mutation, or real branch/worktree deletion has occurred.
 - Child task threads may not create grandchildren; only the coordinator may create tasks.
 - User-added cleanup requirement (2026-08-21): completed child Codex task
   windows must be archived after verified integration/resource cleanup. The
@@ -307,15 +307,106 @@ terminal replay, auto/manual deduplication, health swaps, coordinator promotion,
 six promotion crash stages, stale/malformed/symlink authorities, fd-safe read
 swaps, and dead-lock-to-live-lock replacement.
 
-## Dependency-ready set after Task 7
+## Task 8 accepted evidence
 
-| Task | Why ready | Exclusive file set |
-| --- | --- | --- |
-| 8. End-to-end verification, documentation, and packaging | Tasks 5+6+7 independently accepted | End-to-end tests, README/state diagrams/migration notes, validated existing-plugin manifests/version, and coordinator documentation only as needed |
+Task 8 completes the approved implementation plan and releases the two existing
+Orchestrator manifests in lockstep at `0.4.0`; it does not create an
+Authenticator plugin, a second Orchestrator plugin, a cachebuster, or a
+marketplace/install mutation.
 
-Task 8 is the only remaining implementation checkpoint. It must start from the
-accepted Task 7 commit, preserve every earlier focused contract, and finish with
-one final independent full-diff review before local integration.
+The coordinator now invokes the Task 2 freeze operation at the founder go gate
+before computing any ready set. Production child creation, not merely the E2E
+fixture, runs under the shared lifecycle lock and requires a classified native
+0.4 mission, exact four-file frozen hash authority, an eligible DAG node,
+integrated/collected predecessors, and no unresolved rework, owner, approval
+blocker, or live conflict. Legacy creation is available only through an
+explicit classified compatibility mode.
+
+The fail-closed mission-version classifier routes legacy 0.2, pre-DAG Hybrid
+0.3, and version-authorized 0.4 missions from one fd-bound Python 3.9 snapshot.
+It opens the canonical hub component-by-component without following symlinks,
+binds `missions/<slug>` to `control/<same-slug>`, and rejects partial,
+contradictory, replaced, or topology-mismatched authority. Parent archive/GC is
+also version-aware: Hybrid 0.3 verifies and archives its exact legacy
+three-file contract without inventing a DAG, while 0.4 requires the four-file
+contract including the approved DAG. New Claude-coordinated Hybrid 0.3
+missions publish an explicit `0.3.0` marker before provisioning, while native
+0.4 remains Codex-coordinator-only; the Claude coordinator detects `0.4.0`
+authority before mutation and hands the mission back to Codex.
+
+The behavioral path covers DAG freeze -> ready child -> durable completion ->
+immutable integration -> immediate child resource GC -> task-window archive ->
+task-scoped generation rework -> independent final review -> target merge ->
+parent GC. It also proves dirty-worktree and unmerged-tip refusal, stale
+provisional replacement, duplicate-thread rejection, archive failure retry,
+network cleanup retry, dependency refusal during `cleanup_pending`, and
+idempotent repeated cleanup. Both child-lifecycle callers use exact-byte and
+full-metadata stale-lock epoch guards plus a single-winner directory guard, so
+two recoverers cannot delete each other's live lock and a dead lock replaced by
+a new live owner is preserved until a later safe retry. Guard publication is
+transactional, so a crash cannot strand an ownerless guard. Freeze also creates and
+fsyncs the empty native task registry in the same durable boundary, preserving
+an existing real registry and refusing file or symlink substitutes. Parent GC
+rejects direct and symbolic target aliases of the mission-owned branch before
+its first mutation, so the target branch is never deleted. The Hybrid 0.3
+fallback likewise requires exact slug, repo, worktree, clean SHA, local tip,
+remote tip, expected-old deletion, and remote lease; a cross-mission manifest
+is preserved and refused. README
+state diagrams, failure/retry behavior, target-branch preservation, and 0.2/0.3
+migration notes describe the same executable authority model.
+
+Exact final evidence:
+
+```text
+$ bash orchestrator/tests/test-end-to-end-lifecycle.sh
+end-to-end-lifecycle: 32/32
+
+$ bash orchestrator/tests/test-mission-version-contract.sh
+mission-version-contract: 23/23
+
+$ bash orchestrator/tests/test-native-schedule-gate-contract.sh
+native-schedule-gate-contract: 13/13
+
+$ bash orchestrator/tests/test-codex-hybrid-plugin.sh
+codex-hybrid-plugin: 78/78
+
+$ bash orchestrator/tests/test-child-worktree-contract.sh
+child-worktree-contract: 50/50
+
+$ bash orchestrator/tests/test-parent-gc-contract.sh
+parent-gc-contract: 54/54
+
+$ bash orchestrator/tests/test-task-dag-contract.sh
+task-dag-contract: 31/31
+
+$ bash orchestrator/tests/run.sh
+all 16 primary test files PASS; 633 counted assertions plus GC scenario
+
+$ bash orchestrator/codex-tests/run.sh
+All three compatibility tests PASS.
+
+$ PYTHONPATH=/private/tmp/orchestrator-plugin-validator-pyyaml <bundled-python> validate_plugin.py orchestrator
+Plugin validation passed
+manifest-lockstep: 0.4.0/0.4.0
+
+$ git diff --check
+exit 0
+```
+
+Independent full-diff reviews drove the missing DAG-freeze call, production
+ready-set enforcement, fd-bound mission classification, version-aware Hybrid
+0.3 parent GC, crash-safe freeze/registry publication, single-winner lifecycle
+lock recovery, transactional guard publication, exact legacy cleanup leases,
+strict version authority, Codex-only native 0.4 routing, task-API transition
+fixture, and enforced target-branch preservation to GREEN. Final post-rework
+specification and quality acceptance both returned PASS on the stable main
+snapshot after independently rerunning the primary, compatibility, packaging,
+syntax, and diff checks.
+
+## Dependency-ready set after Task 8
+
+No implementation task remains. The approved Task 1-8 plan is complete; only
+the separately authorized push decision remains.
 
 ## Dependency-ready set after Tasks 2-4
 

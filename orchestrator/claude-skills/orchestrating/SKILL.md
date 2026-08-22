@@ -23,12 +23,33 @@ The hub is `<dir>/.orchestrator/` where `<dir>` is the nearest ancestor of cwd c
 ## Phase 0 — Resume check (always first)
 
 1. **Old layout?** If `$HUB/MISSION.md` exists at the hub root with `Phase:` ≠ `complete`, a v0.1 per-task mission is in flight. Do not mix layouts: offer the user to finish it under the old rules (this plugin's git history has them) or archive it manually.
-2. Delete `$HUB/.carryover-notified` if present — you are a fresh context.
-3. For each `$HUB/missions/*/`: read `state` and MISSION.md; reconcile against reality — is the session alive (first `ps -p <spawn_pid>` with the LAST `spawn_pid:` from `session.txt` — works for both claude and codex stages; fall back to `pgrep -f <session-id>` for claude stages; when uncertain, treat as ALIVE and wait, never double-spawn into the same worktrees; a repeat check that comes up empty again (optionally: no new Heartbeats in report.md) confirms death), do the branches/worktrees in `worktrees.txt` exist, is there a `BLOCKED-n.md` without a matching `ANSWER-n.md`? Summarize all missions to the user in ≤5 lines, delete CARRYOVER.md if present, then handle any `blocked`/`review` states (phases 5/6). Missions whose sessions died: respawn per the Phase 4 crash path with the salvage message "salvage what exists on the mission branches — run `git log` first."
+2. **Native Hybrid 0.4 handoff before any mutation.** For every direct
+   `$HUB/missions/<slug>` + `$HUB/control/<slug>` pair, run
+   `${CLAUDE_PLUGIN_ROOT}/scripts/classify-mission-version.sh` with those exact
+   paths before deleting carryover, reading worker state for reconciliation, or
+   invoking cleanup. If it returns `hybrid-0.4`, do not mutate, resume, spawn,
+   collect, or archive that mission. Tell the user to resume it from a Codex
+   coordinator with `$orchestrating`; native 0.4 task-DAG execution is
+   Codex-coordinator-only. If classification fails or sees partial or
+   contradictory authority, fail closed and preserve everything. Continue the
+   steps below only for an explicitly classified in-flight Hybrid 0.3 mission.
+3. Delete `$HUB/.carryover-notified` if present — you are a fresh context.
+4. For each classified Hybrid 0.3 `$HUB/missions/*/`: read `state` and MISSION.md; reconcile against reality — is the session alive (first `ps -p <spawn_pid>` with the LAST `spawn_pid:` from `session.txt` — works for both claude and codex stages; fall back to `pgrep -f <session-id>` for claude stages; when uncertain, treat as ALIVE and wait, never double-spawn into the same worktrees; a repeat check that comes up empty again (optionally: no new Heartbeats in report.md) confirms death), do the branches/worktrees in `worktrees.txt` exist, is there a `BLOCKED-n.md` without a matching `ANSWER-n.md`? Summarize all missions to the user in ≤5 lines, delete CARRYOVER.md if present, then handle any `blocked`/`review` states (phases 5/6). Missions whose sessions died: respawn per the Phase 4 crash path with the salvage message "salvage what exists on the mission branches — run `git log` first."
 
 ## Phase 1 — Record the request
 
-Identify the repository set without making product or architecture decisions. Create `$HUB/missions/<date>-<slug>/`, save the complete user ask and explicit constraints as `request.md`, create `MISSION.md` from the template (`Phase: pending`), and write `pending` to `state`. Fable owns the creative brainstorm after provisioning. If the repository set itself is materially ambiguous, ask before provisioning. The date-prefixed slug must be unique across missions/ and archive/.
+Identify the repository set without making product or architecture decisions.
+Create `$HUB/missions/<date>-<slug>/`, save the complete user ask and explicit
+constraints as `request.md`, create `MISSION.md` from the template (`Phase:
+pending`), and write `pending` to `state`. Create the matching coordinator
+control directory and atomically publish a regular, non-symlinked, fsynced,
+no-clobber `pipeline-version` containing the single line `0.3.0` before
+provisioning or exposing worker-writable roots. Publish through a complete
+temporary file in that control directory, file-fsync it, hard-link it into the
+absent final name, and fsync the control directory; a present or unsafe marker
+fails closed. Fable owns the creative brainstorm after provisioning. If the
+repository set itself is materially ambiguous, ask before provisioning. The
+date-prefixed slug must be unique across missions/ and archive/.
 
 ## Phase 2 — Provision
 

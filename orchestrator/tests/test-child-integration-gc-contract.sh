@@ -5,10 +5,34 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INTEGRATE="$ROOT/scripts/integrate-task.sh"
 GC="$ROOT/scripts/orchestrator-gc.sh"
-LIFECYCLE="$ROOT/scripts/task-worktree.sh"
+LIFECYCLE_REAL="$ROOT/scripts/task-worktree.sh"
+export ORC_TEST_LIFECYCLE_REAL="$LIFECYCLE_REAL"
 SKILL="$ROOT/skills/orchestrating/SKILL.md"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+LIFECYCLE="$TMP/task-worktree-legacy-wrapper.sh"
+cat > "$LIFECYCLE" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == create ]]; then
+  shift
+  control=""
+  previous=""
+  for argument in "$@"; do
+    if [[ "$previous" == --control-dir ]]; then control="$argument"; break; fi
+    previous="$argument"
+  done
+  hub="${control%/control/mission}"
+  mission_dir="$hub/missions/mission"
+  mkdir -p "$mission_dir"
+  printf 'request\n' > "$mission_dir/request.md"
+  printf 'Briefs: brief.md, brief-exec.md\n' > "$mission_dir/MISSION.md"
+  printf 'planned\n' > "$mission_dir/state"
+  printf 'backend: hybrid\nstage: plan\n' > "$mission_dir/session.txt"
+  exec "$ORC_TEST_LIFECYCLE_REAL" create --create-mode legacy --mission-dir "$mission_dir" "$@"
+fi
+exec "$ORC_TEST_LIFECYCLE_REAL" "$@"
+SH
+chmod +x "$LIFECYCLE"
 
 N=0
 OK=0

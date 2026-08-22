@@ -5,6 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GC="$ROOT/scripts/orchestrator-gc.sh"
 TMP="$(mktemp -d)"
+TMP="$(cd "$TMP" && pwd -P)"
 trap 'rm -rf "$TMP"' EXIT
 
 fail() {
@@ -13,10 +14,13 @@ fail() {
 }
 
 new_mission() {
-  local root="$1" slug="$2" state="$3" worktree="$4" branch="$5" repo="$6"
+  local root="$1" slug="$2" state="$3" worktree="$4" branch="$5" repo="$6" base="${7:-}"
+  if [[ -z "$base" && -d "$worktree" ]]; then
+    base="$(git -C "$worktree" rev-parse HEAD)"
+  fi
   mkdir -p "$root/$slug"
   printf '%s\n' "$state" > "$root/$slug/state"
-  printf '%s\t%s\tmain\t%s\n' "$worktree" "$branch" "$repo" > "$root/$slug/worktrees.txt"
+  printf '%s\t%s\t%s\t%s\n' "$worktree" "$branch" "$base" "$repo" > "$root/$slug/worktrees.txt"
 }
 
 HUB="$TMP/.orchestrator"
@@ -62,7 +66,8 @@ new_mission "$HUB/missions" "$UNARCHIVED_SLUG" accepted "$UNARCHIVED_WT" "$UNARC
 # A completed manifest may have been created on another device. It cannot be
 # cleaned here, but must not block cleanup for repositories that are present.
 new_mission "$HUB/archive" "foreign-device" accepted \
-  "/missing/worktree" "orc/foreign-device" "/missing/repository"
+  "/missing/worktree" "orc/foreign-device" "/missing/repository" \
+  "0000000000000000000000000000000000000000"
 
 # Integrated child resources are coordinator-authoritative under control/, not
 # mission-local manifests. Exercise exact child cleanup beside legacy parent GC.
@@ -145,5 +150,28 @@ git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$ACTIVE_BRANCH" \
 [[ -d "$BLOCKED_WT" ]] || fail "blocked child worktree was removed"
 git -C "$REPO" show-ref --verify --quiet "refs/heads/$BLOCKED_BRANCH" \
   || fail "blocked child local branch was removed"
+
+# A mission-local legacy manifest is scoped to exactly orc/<mission-slug>.
+# It must never be able to nominate and delete another mission's resources.
+ATTACK_SLUG="manifest-attacker"
+OTHER_SLUG="manifest-owner"
+OTHER_BRANCH="orc/$OTHER_SLUG"
+OTHER_WT="$TMP/.worktrees/$OTHER_SLUG/repo"
+mkdir -p "$(dirname "$OTHER_WT")"
+git -C "$REPO" worktree add -qb "$OTHER_BRANCH" "$OTHER_WT" main >/dev/null
+OTHER_TIP="$(git -C "$OTHER_WT" rev-parse HEAD)"
+git -C "$REPO" push -q -u origin "$OTHER_BRANCH"
+new_mission "$HUB/archive" "$ATTACK_SLUG" accepted \
+  "$OTHER_WT" "$OTHER_BRANCH" "$REPO" "$OTHER_TIP"
+
+ATTACK_RC=0
+$GC --hub "$HUB" --clean >/dev/null 2>&1 || ATTACK_RC=$?
+[[ "$ATTACK_RC" -ne 0 ]] \
+  || fail "cross-mission legacy manifest cleanup was not rejected"
+[[ -d "$OTHER_WT" ]] || fail "cross-mission legacy manifest removed another mission's worktree"
+git -C "$REPO" show-ref --verify --quiet "refs/heads/$OTHER_BRANCH" \
+  || fail "cross-mission legacy manifest removed another mission's local branch"
+git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$OTHER_BRANCH" \
+  || fail "cross-mission legacy manifest removed another mission's remote branch"
 
 echo "  orchestrator-gc: completed parent and integrated child resources removed; unsafe resources preserved"

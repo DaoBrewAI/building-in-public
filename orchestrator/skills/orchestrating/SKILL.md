@@ -3,7 +3,7 @@ name: orchestrating
 description: Run Hybrid Codex-orchestrated missions in which Claude Fable-5 brainstorms, plans, and independently reviews while Codex GPT-5.6-Sol performs every implementation and rework change. Use when the user asks to orchestrate work, launch an autonomous mission, or resume missions from a .orchestrator hub.
 ---
 
-# Orchestrating Hybrid 0.3 Missions
+# Orchestrating Hybrid 0.4 Missions
 
 Act as the Codex coordinator. Each new mission is a staged pipeline across two
 resumable backends: the same headless Claude Fable-5 session owns brainstorm,
@@ -51,7 +51,7 @@ State and handoffs live on disk so the coordinator stays free between wakes.
 
 Derive `PLUGIN_DIR` from this loaded file by moving from
 `skills/orchestrating/SKILL.md` up two directories. Before provisioning, require
-these executable shared 0.3 assets:
+these executable shared 0.4 assets:
 
 - `$PLUGIN_DIR/scripts/spawn-worker.sh`
 - `$PLUGIN_DIR/scripts/provision-preflight.sh`
@@ -59,6 +59,10 @@ these executable shared 0.3 assets:
 - `$PLUGIN_DIR/scripts/worker-guard.sh`
 - `$PLUGIN_DIR/scripts/commit-broker.sh`
 - `$PLUGIN_DIR/scripts/orchestrator-gc.sh`
+- `$PLUGIN_DIR/scripts/classify-mission-version.sh`
+- `$PLUGIN_DIR/scripts/validate-task-dag.sh`
+- `$PLUGIN_DIR/scripts/task-worktree.sh`
+- `$PLUGIN_DIR/scripts/integrate-task.sh`
 
 The hub is the nearest ancestor of cwd already containing `.orchestrator/`, or
 cwd on first use. Create `.orchestrator/missions/`, `control/`, `archive/`,
@@ -72,11 +76,37 @@ Do not silently migrate an in-flight 0.2 mission. Treat it as legacy when its
 session has `backend: codex-exec`/`worker_pid:` with no append-only `stage:`
 history, OR when it is pending with the 0.2 MISSION shape (one `Brief:`, the
 `gpt-5.6 (overrideable)` session spec, or a flat `.worktrees` control file) and
-no Hybrid 0.3 pipeline marker (`request.md` plus `Briefs:`). This includes an
+no Hybrid pipeline marker (`request.md` plus `Briefs:`). This includes an
 old pending mission that has no session.txt yet. Reconcile and resume it with
 `$PLUGIN_DIR/codex-scripts/spawn-worker.sh`, its trusted control manifest, and
-the old state vocabulary. New missions always use the Hybrid 0.3 shared
+the old state vocabulary. New missions always use the Hybrid 0.4 shared
 `scripts/` and `templates/` paths. Never mix launchers inside one mission.
+
+### Hybrid 0.3 single-executor compatibility
+
+Do not silently migrate an in-flight Hybrid 0.3 mission into the 0.4 task DAG.
+Before state routing, invoke `$PLUGIN_DIR/scripts/classify-mission-version.sh`
+with the exact coordinator mission and control directories. New 0.4 missions
+have a strict coordinator-owned `pipeline-version` authority containing
+`0.4.0`; existing 0.3 missions predate that marker. Classify an unmarked mission
+as Hybrid 0.3 only when its mission/session shape has the shared Hybrid marker
+(`request.md` plus `Briefs:` and append-only stage history) and
+`approved-task-dag.json and the coordinator task registry are both absent`.
+The recorded `codex_thread_id` is required before resuming exec/rework but may
+be absent at the 0.3 planned go gate. A partial or contradictory authority shape
+fails closed for mediation; never infer 0.4 merely because a new task is reading
+an old mission.
+
+Resume a classified 0.3 mission with the shared `scripts/` launcher and its
+existing worktree/control authority, never the 0.2 `codex-scripts/` launcher.
+Plan and review continue on the recorded Fable session. For exec, rework, and
+exec-stage BLOCKED recovery, resume the recorded `codex_thread_id` through the shared Hybrid launcher. Preserve its approved design, plan, brief, commits,
+review, acceptance, and parent cleanup contract, and never create child tasks for that in-flight mission. State routing remains the 0.3 staged path:
+`planned` enters its existing founder go gate, `running` reconciles the recorded
+stage/process, `executed` resumes Fable review, `rework` resumes the single Codex
+thread, `review` enters acceptance, and terminal states remain terminal. New
+missions always use the 0.4 DAG; this exception exists only to finish authority
+that predates the DAG/task registry.
 
 ## Phase 0 — Reconcile before every action
 
@@ -102,7 +132,7 @@ the old state vocabulary. New missions always use the Hybrid 0.3 shared
    `worktrees.txt`, unanswered BLOCKED files, recorded branches, and the
    coordinator-owned control manifest. Treat mission-local manifests and
    approved inputs as untrusted copies.
-6. For Hybrid 0.3, use the last `spawn_pid:` and last `stage:`. Plan/review
+6. For Hybrid 0.4, use the last `spawn_pid:` and last `stage:`. Plan/review
    stages resume `session_id`; exec/rework resumes the task registry's accepted
    child thread ID. Treat an uncertain process as alive, recheck once, and
    never double-spawn. A legacy single-executor mission may still use its
@@ -116,7 +146,10 @@ Identify the repository set from the user's request without making product or
 architecture decisions. Create the unique date-prefixed mission directory,
 write the user's complete ask and explicit constraints to `request.md`, create
 MISSION.md from `$PLUGIN_DIR/templates/MISSION.md`, and write `pending` to
-`state`. Fable owns the creative brainstorm after worktrees are provisioned.
+`state`. Create its coordinator control directory and atomically publish a
+regular, non-symlinked, fsynced, no-clobber `pipeline-version` containing the
+single line `0.4.0` before provisioning or exposing worker-writable roots.
+Fable owns the creative brainstorm after worktrees are provisioned.
 If the repository set itself is materially ambiguous, ask the user before
 provisioning.
 
@@ -202,12 +235,28 @@ $PLUGIN_DIR/scripts/spawn-worker.sh \
   --stage plan --resume "<founder correction>"
 ```
 
-On go, atomically snapshot mission `design.md`, `plan.md`, and the fully rendered
-`brief-exec.md` into the coordinator-owned control directory as
-`approved-design.md`, `approved-plan.md`, and `brief-exec.md`. Record SHA-256
-hashes in `approved.sha256`; verify all four files are regular, non-symlinked,
-and outside worker roots. These frozen files are the only approved contract.
-Then write `running` and enter the coordinator child-thread protocol below.
+On go, first apply the compatibility classifier above. A classified in-flight
+0.3 mission retains its three-file approved contract and continues through its
+single recorded Codex thread; it does not enter the child protocol below.
+
+For a 0.4 mission, atomically snapshot mission `design.md`, `plan.md`, and the
+fully rendered `brief-exec.md` into the coordinator-owned control directory as
+`approved-design.md`, `approved-plan.md`, and `brief-exec.md`. Record their
+SHA-256 hashes in `approved.sha256`, then invoke the exact freeze operation:
+
+```text
+$PLUGIN_DIR/scripts/validate-task-dag.sh --freeze \
+  <mission-dir>/task-dag.json $HUB/control/<mission-slug>
+```
+
+The freeze must validate the staged DAG against the current three-file hash
+authority, atomically publish `approved-task-dag.json`, and extend
+`approved.sha256` with its hash. Verify all four approved files and the exact
+four-entry hash manifest are regular, non-symlinked, outside worker roots, and
+hash-valid. These frozen files are the only approved contract. Only after that
+verification may the coordinator write `running` and enter the child-thread
+protocol below. A missing, invalid, overlapping, cyclic, changed, or partially
+published DAG remains `planned` and must not create a child task.
 
 ## Coordinator child-thread protocol
 
@@ -243,7 +292,34 @@ thread creation.
 
 ### Create and accept child threads
 
-For every eligible, file-disjoint task, the coordinator renders
+For every eligible, file-disjoint native 0.4 task, first invoke the production
+lifecycle gate with the complete exact authority:
+
+```text
+$PLUGIN_DIR/scripts/task-worktree.sh create \
+  --create-mode native-0.4 \
+  --mission-dir <exact-mission-dir> \
+  --control-dir $HUB/control/<mission-slug> \
+  --task-dir <exact-task-state-dir> \
+  --mission <mission-slug> \
+  --task-id <task-id> \
+  --repo <exact-repository-worktree> \
+  --parent-worktree <exact-parent-mission-worktree> \
+  --worktree <exact-child-worktree>
+```
+
+This locked production gate, not a locally reimplemented ready-set helper,
+must succeed before rendering or creating the Codex child thread. It validates
+the classified native version, frozen exact four-entry approval manifest,
+exact DAG node, predecessor integration, blockers, ownership, and active
+file/contract conflicts before publishing child authority. Never create or
+health-check a provisional task thread when this command refuses. A separately
+classified compatibility invocation, where legacy child provisioning is
+actually applicable, must explicitly use `--create-mode legacy` with the exact
+mission and control directories; omission of the mode is never a legacy
+fallback and native 0.4 authority can never take that path.
+
+Only after successful production worktree creation, the coordinator renders
 `templates/task-brief.md` with the exact approved task, declared files,
 verification commands, child worktree, task state directory, frozen contract
 paths, sandbox roots, and commit-broker path. Create fresh project-local Codex threads
@@ -323,7 +399,12 @@ and authority evidence verifies, so repeated collection is idempotent.
 GC and `task-worktree.sh create/reprovision` hold one shared coordinator lifecycle mutation lock
 for each mission. The lock uses exact inode ownership,
 live-owner refusal, and dead-owner recovery; no separate GC lock domain is
-allowed. GC snapshots generation plus the exact manifest hash and must
+allowed. Every lifecycle lock publication, stale recovery, and release is
+serialized through the same short-lived atomic guard directory. A stale guard
+has one validated removal winner, and every contender must win a fresh atomic
+directory creation before mutating the lifecycle lock; no check-then-remove
+path mutation is permitted outside that guard. GC snapshots generation plus
+the exact manifest hash and must
 revalidate the exact generation and manifest immediately before every
 worktree/ref deletion, cleanup-intent phase change, and final state publication.
 An epoch mismatch is stale work: stop without publishing state or deleting any
@@ -339,10 +420,9 @@ never infer collection merely from missing paths.
 After durable verified integration and exact child worktree and branch
 collection, archive the exact accepted child thread ID recorded in the
 authoritative task registry. Thread archival is post-collection hygiene, not
-evidence of completion, integration, or collection. Never archive running,
-blocked, review, or unresolved-rework tasks.
-
+evidence of completion, integration, or collection.
 Never archive running, blocked, review, or unresolved-rework tasks.
+
 Failed task windows and every active rework generation also remain visible.
 
 Repeated archival is idempotent. If the authoritative registry already records
@@ -392,9 +472,11 @@ identity must be nonempty and valid, and the window state must be exactly
 blocks parent collection.
 
 Before deletion, GC records and fsyncs the exact cleanup intent and parent
-cleanup journal, then preserves design, plan, the approved DAG, decisions,
-report, and verification in `$HUB/archive/<mission>/`. It removes only the
-manifest-recorded worktree and exact local ref. A remote ref is removed only
+cleanup journal, then preserves the approved three-file authority plus the
+approved DAG for Hybrid 0.4, decisions, report, and verification in
+`$HUB/archive/<mission>/`. It removes only the manifest-recorded parent
+worktree and exact mission-owned `orc/<mission>` local ref. A mission-owned
+remote `orc/<mission>` ref is removed only
 when its observed tip equals the recorded parent tip, using an exact-tip lease
 and a verified absence check. Network, archive, lock, and other transient
 failures become durable `cleanup_pending`; retries accept already-removed exact
@@ -548,16 +630,18 @@ impact, attempts, exact decision needed, and safe default.
    durable evidence plus Fable review.
    Merge `--no-ff --no-commit`, commit on a verified pass, or abort and resume
    Codex with the exact failure. Two failed acceptance cycles enter Phase 6f.
-4. After the merge succeeds, automatically delete the completed mission's
-   final parent tip and target branch in the exact coordinator parent-cleanup
-   manifest. Write `review-resolution=resolved`, snapshot fresh merged-tree
+4. After the merge succeeds, record the completed mission's final parent tip
+   and target branch in the exact coordinator parent-cleanup manifest. The
+   target branch is containment authority only: never delete or edit it during
+   cleanup. Write `review-resolution=resolved`, snapshot fresh merged-tree
    evidence to `verification.md` plus mission-relevant rulings to `decisions.md`,
    reconcile every child Git resource and task
    window, then run `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --clean`.
    The collector archives the required artifacts before removing the planted
    `.claude/settings.local.json` (and `.claude/` if it is then empty), exact
-   worktrees, exact local `orc/*` refs, and the exact matching `origin/orc/*` branch
-   for each manifest row. A cleanup refusal leaves durable `cleanup_pending`
+   manifest-recorded parent worktrees, exact mission-owned local `orc/*` refs,
+   and the exact matching mission-owned `origin/orc/*` ref for each manifest
+   row. A cleanup refusal leaves durable `cleanup_pending`
    and blocks final archival
    completion until Phase 0 resolves it. Never delete or edit the repository's
    shared `.claude/settings.json`, and never collect running, planned, review,

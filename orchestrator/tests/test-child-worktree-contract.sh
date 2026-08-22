@@ -3,9 +3,33 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LIFECYCLE="$ROOT/scripts/task-worktree.sh"
+LIFECYCLE_REAL="$ROOT/scripts/task-worktree.sh"
+export ORC_TEST_LIFECYCLE_REAL="$LIFECYCLE_REAL"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+LIFECYCLE="$TMP/task-worktree-legacy-wrapper.sh"
+cat > "$LIFECYCLE" <<'SH'
+#!/usr/bin/env bash
+if [[ "${1:-}" == create ]]; then
+  shift
+  control=""
+  previous=""
+  for argument in "$@"; do
+    if [[ "$previous" == --control-dir ]]; then control="$argument"; break; fi
+    previous="$argument"
+  done
+  hub="${control%/control/mission}"
+  mission_dir="$hub/missions/mission"
+  mkdir -p "$mission_dir"
+  printf 'request\n' > "$mission_dir/request.md"
+  printf 'Briefs: brief.md, brief-exec.md\n' > "$mission_dir/MISSION.md"
+  printf 'planned\n' > "$mission_dir/state"
+  printf 'backend: hybrid\nstage: plan\n' > "$mission_dir/session.txt"
+  exec "$ORC_TEST_LIFECYCLE_REAL" create --create-mode legacy --mission-dir "$mission_dir" "$@"
+fi
+exec "$ORC_TEST_LIFECYCLE_REAL" "$@"
+SH
+chmod +x "$LIFECYCLE"
 TMP_PHYS="$(cd "$TMP" && pwd -P)"
 REAL_ROOT="$TMP/real-root"
 ALIAS_ROOT="$TMP/alias-root"
@@ -15,7 +39,7 @@ REPO="$ALIAS_ROOT/repo"
 PARENT="$ALIAS_ROOT/parent"
 CHILD="$ALIAS_ROOT/child-a"
 TASK_DIR="$TMP/task-a"
-CONTROL="$TMP/control"
+CONTROL="$TMP/main-hub/control/mission"
 mkdir -p "$TASK_DIR" "$CONTROL"
 
 git init -q "$REPO"
@@ -94,7 +118,7 @@ check "dot task alias is refused without mutation" bash -c \
   '[[ "$1" -ne 0 && ! -e "$2" && ! -e "$3" && ! -e "$4" ]] && ! git -C "$5" show-ref --verify --quiet refs/heads/orc-task/mission/task-dot' _ "$DOT_RC" "$DOT_TASK_DIR" "$DOT_CHILD" "$CONTROL/tasks/task-dot/worktrees.txt" "$REPO"
 
 SYMLINK_TASK="$TMP/symlink-worker"
-SYMLINK_CONTROL="$TMP/symlink-control"
+SYMLINK_CONTROL="$TMP/symlink-hub/control/mission"
 SYMLINK_CHILD="$TMP/symlink-child"
 mkdir -p "$SYMLINK_TASK/authority-target" "$SYMLINK_CONTROL"
 ln -s "$SYMLINK_TASK/authority-target" "$SYMLINK_CONTROL/tasks"
@@ -106,7 +130,7 @@ check "symlinked control tasks path is refused without escape" bash -c \
   '[[ "$1" -ne 0 && ! -e "$2" && ! -e "$3" ]] && ! git -C "$4" show-ref --verify --quiet refs/heads/orc-task/mission/task-symlink' _ "$SYMLINK_RC" "$SYMLINK_CHILD" "$SYMLINK_TASK/authority-target/task-symlink/worktrees.txt" "$REPO"
 
 COMPONENT_TASK="$TMP/component-worker"
-COMPONENT_CONTROL="$TMP/component-control"
+COMPONENT_CONTROL="$TMP/component-hub/control/mission"
 COMPONENT_CHILD="$TMP/component-child"
 mkdir -p "$COMPONENT_TASK/authority-target" "$COMPONENT_CONTROL/tasks"
 ln -s "$COMPONENT_TASK/authority-target" "$COMPONENT_CONTROL/tasks/task-component"
@@ -118,7 +142,7 @@ check "symlinked control task component is refused without escape" bash -c \
   '[[ "$1" -ne 0 && ! -e "$2" && ! -e "$3" ]] && ! git -C "$4" show-ref --verify --quiet refs/heads/orc-task/mission/task-component' _ "$COMPONENT_RC" "$COMPONENT_CHILD" "$COMPONENT_TASK/authority-target/worktrees.txt" "$REPO"
 
 DIRECT_TASK="$TMP/direct-worker"
-DIRECT_CONTROL="$DIRECT_TASK/control"
+DIRECT_CONTROL="$DIRECT_TASK/hub/control/mission"
 DIRECT_CHILD="$TMP/direct-child"
 mkdir -p "$DIRECT_CONTROL"
 "$LIFECYCLE" create --control-dir "$DIRECT_CONTROL" --task-dir "$DIRECT_TASK" \
@@ -131,24 +155,26 @@ check "authority inside worker root is refused before mutation" bash -c \
 ROLLBACK_CHILD="$ALIAS_ROOT/rollback-child"
 ROLLBACK_CHILD_PHYS="$(cd "$(dirname "$ROLLBACK_CHILD")" && pwd -P)/$(basename "$ROLLBACK_CHILD")"
 ROLLBACK_TASK_DIR="$TMP/rollback-task"
+ROLLBACK_CONTROL="$TMP/rollback-hub/control/mission"
+mkdir -p "$ROLLBACK_CONTROL"
 ORC_TASK_WORKTREE_TEST_FAIL_AFTER_ADD=1 "$LIFECYCLE" create \
-  --control-dir "$CONTROL" --task-dir "$ROLLBACK_TASK_DIR" \
+  --control-dir "$ROLLBACK_CONTROL" --task-dir "$ROLLBACK_TASK_DIR" \
   --mission mission --task-id task-rollback --repo "$REPO" \
   --parent-worktree "$PARENT" --worktree "$ROLLBACK_CHILD" >/dev/null 2>&1
 INJECT_RC=$?
 ROLLBACK_CLEAN=0
-if [[ ! -e "$ROLLBACK_CHILD" && ! -e "$CONTROL/tasks/task-rollback/worktrees.txt" && \
+if [[ ! -e "$ROLLBACK_CHILD" && ! -e "$ROLLBACK_CONTROL/tasks/task-rollback/worktrees.txt" && \
   ! -e "$ROLLBACK_TASK_DIR/worktrees.txt" ]] && \
   ! git -C "$REPO" show-ref --verify --quiet refs/heads/orc-task/mission/task-rollback && \
   ! git -C "$REPO" worktree list --porcelain | grep -Fxq "worktree $ROLLBACK_CHILD_PHYS"; then
   ROLLBACK_CLEAN=1
 fi
-"$LIFECYCLE" create --control-dir "$CONTROL" --task-dir "$ROLLBACK_TASK_DIR" \
+"$LIFECYCLE" create --control-dir "$ROLLBACK_CONTROL" --task-dir "$ROLLBACK_TASK_DIR" \
   --mission mission --task-id task-rollback --repo "$REPO" \
   --parent-worktree "$PARENT" --worktree "$ROLLBACK_CHILD" >/dev/null 2>&1
 RETRY_RC=$?
 check "post-create failure rolls back exact resources and retry succeeds" bash -c \
-  '[[ "$1" -ne 0 && "$2" -eq 1 && "$3" -eq 0 && -d "$4" && -s "$5" && -s "$6" && "$(git -C "$4" branch --show-current)" = "orc-task/mission/task-rollback" ]]' _ "$INJECT_RC" "$ROLLBACK_CLEAN" "$RETRY_RC" "$ROLLBACK_CHILD" "$CONTROL/tasks/task-rollback/worktrees.txt" "$ROLLBACK_TASK_DIR/worktrees.txt"
+  '[[ "$1" -ne 0 && "$2" -eq 1 && "$3" -eq 0 && -d "$4" && -s "$5" && -s "$6" && "$(git -C "$4" branch --show-current)" = "orc-task/mission/task-rollback" ]]' _ "$INJECT_RC" "$ROLLBACK_CLEAN" "$RETRY_RC" "$ROLLBACK_CHILD" "$ROLLBACK_CONTROL/tasks/task-rollback/worktrees.txt" "$ROLLBACK_TASK_DIR/worktrees.txt"
 
 SIGNAL_BIN="$TMP/signal-bin"
 mkdir -p "$SIGNAL_BIN"
@@ -203,7 +229,7 @@ exit "$RC"
 SIGNAL_CP
 chmod +x "$SIGNAL_BIN/git" "$SIGNAL_BIN/ln" "$SIGNAL_BIN/cp"
 
-SIGNAL_ADD_CONTROL="$TMP/signal-add-control"
+SIGNAL_ADD_CONTROL="$TMP/signal-add-hub/control/mission"
 SIGNAL_ADD_TASK_DIR="$TMP/signal-add-task"
 SIGNAL_ADD_CHILD="$ALIAS_ROOT/signal-add-child"
 SIGNAL_ADD_CHILD_PHYS="$(cd "$(dirname "$SIGNAL_ADD_CHILD")" && pwd -P)/$(basename "$SIGNAL_ADD_CHILD")"
@@ -229,7 +255,7 @@ SIGNAL_ADD_RETRY_RC=$?
 check "signal after worktree add rolls back exact resources and retry succeeds" bash -c \
   '[[ "$1" -ne 0 && "$2" -eq 1 && "$3" -eq 0 && -d "$4" && -s "$5" && -s "$6" ]]' _ "$SIGNAL_ADD_RC" "$SIGNAL_ADD_CLEAN" "$SIGNAL_ADD_RETRY_RC" "$SIGNAL_ADD_CHILD" "$SIGNAL_ADD_CONTROL/tasks/task-signal-add/worktrees.txt" "$SIGNAL_ADD_TASK_DIR/worktrees.txt"
 
-SIGNAL_LOCK_CONTROL="$TMP/signal-lock-control"
+SIGNAL_LOCK_CONTROL="$TMP/signal-lock-hub/control/mission"
 SIGNAL_LOCK_TASK_DIR="$TMP/signal-lock-task"
 SIGNAL_LOCK_CHILD="$ALIAS_ROOT/signal-lock-child"
 mkdir -p "$SIGNAL_LOCK_CONTROL"
@@ -255,7 +281,7 @@ SIGNAL_LOCK_RETRY_RC=$?
 check "signal after lock publication leaves no residual owner and retry succeeds" bash -c \
   '[[ "$1" -ne 0 && "$2" -eq 1 && "$3" -eq 0 && -d "$4" && -s "$5" && ! -e "$6" ]]' _ "$SIGNAL_LOCK_RC" "$SIGNAL_LOCK_CLEAN" "$SIGNAL_LOCK_RETRY_RC" "$SIGNAL_LOCK_CHILD" "$SIGNAL_LOCK_CONTROL/tasks/task-signal-lock/worktrees.txt" "$SIGNAL_LOCK_CONTROL/.task-worktree.lock"
 
-SIGNAL_CONTROL_CONTROL="$TMP/signal-control-manifest-control"
+SIGNAL_CONTROL_CONTROL="$TMP/signal-control-manifest-hub/control/mission"
 SIGNAL_CONTROL_TASK_DIR="$TMP/signal-control-manifest-task"
 SIGNAL_CONTROL_CHILD="$ALIAS_ROOT/signal-control-manifest-child"
 mkdir -p "$SIGNAL_CONTROL_CONTROL"
@@ -281,7 +307,7 @@ SIGNAL_CONTROL_RETRY_RC=$?
 check "signal after coordinator manifest link removes only owned inode and retry succeeds" bash -c \
   '[[ "$1" -ne 0 && "$2" -eq 1 && "$3" -eq 0 && -d "$4" && -s "$5" && -s "$6" ]]' _ "$SIGNAL_CONTROL_RC" "$SIGNAL_CONTROL_CLEAN" "$SIGNAL_CONTROL_RETRY_RC" "$SIGNAL_CONTROL_CHILD" "$SIGNAL_CONTROL_MANIFEST" "$SIGNAL_CONTROL_TASK_DIR/worktrees.txt"
 
-SIGNAL_COPY_CONTROL="$TMP/signal-copy-control"
+SIGNAL_COPY_CONTROL="$TMP/signal-copy-hub/control/mission"
 SIGNAL_COPY_TASK_DIR="$TMP/signal-copy-task"
 SIGNAL_COPY_CHILD="$ALIAS_ROOT/signal-copy-child"
 mkdir -p "$SIGNAL_COPY_CONTROL"
@@ -305,7 +331,7 @@ SIGNAL_COPY_RETRY_RC=$?
 check "signal after worker manifest copy rolls back pre-owned temporary and retry succeeds" bash -c \
   '[[ "$1" -ne 0 && "$2" -eq 1 && "$3" -eq 0 && -d "$4" && -s "$5" && -s "$6" ]]' _ "$SIGNAL_COPY_RC" "$SIGNAL_COPY_CLEAN" "$SIGNAL_COPY_RETRY_RC" "$SIGNAL_COPY_CHILD" "$SIGNAL_COPY_CONTROL/tasks/task-signal-copy/worktrees.txt" "$SIGNAL_COPY_TASK_DIR/worktrees.txt"
 
-SIGNAL_WORKER_CONTROL="$TMP/signal-worker-manifest-control"
+SIGNAL_WORKER_CONTROL="$TMP/signal-worker-manifest-hub/control/mission"
 SIGNAL_WORKER_TASK_DIR="$TMP/signal-worker-manifest-task"
 SIGNAL_WORKER_CHILD="$ALIAS_ROOT/signal-worker-manifest-child"
 mkdir -p "$SIGNAL_WORKER_CONTROL"
@@ -332,7 +358,7 @@ check "signal after worker manifest link removes only owned inode and retry succ
 
 RACE_PARENT_B="$ALIAS_ROOT/race-parent-b"
 git -C "$REPO" worktree add -qb orc/race-b "$RACE_PARENT_B"
-RACE_CONTROL="$TMP/race-control"
+RACE_CONTROL="$TMP/race-hub/control/mission"
 RACE_TASK_DIR="$TMP/race-task"
 RACE_CHILD="$ALIAS_ROOT/race-child"
 RACE_CHILD_PHYS="$(cd "$(dirname "$RACE_CHILD")" && pwd -P)/$(basename "$RACE_CHILD")"
@@ -415,7 +441,115 @@ fi
 check "concurrent lifecycle has one winner and loser cannot alter winner" bash -c \
   '[[ "$1" -eq 1 && -d "$2" && -s "$3" && -s "$4" && "$5" = "$6" && "$7" = "$8" && "$9" = "${10}" && ! -e "${11}" ]] && cmp -s "$3" "$4" && [[ ! "$3" -ef "$4" ]] && ! git -C "${12}" show-ref --verify --quiet "refs/heads/${13}"' _ "$RACE_SUCCESS_COUNT" "$RACE_CHILD" "$RACE_MANIFEST" "$RACE_TASK_DIR/worktrees.txt" "$RACE_ROW_BRANCH" "$RACE_ACTUAL_BRANCH" "$RACE_ROW_BASE" "$RACE_ACTUAL_HEAD" "$(awk -F '\t' 'NR == 1 {print $1}' "$RACE_MANIFEST" 2>/dev/null)" "$RACE_CHILD_PHYS" "$RACE_CONTROL/.task-worktree.lock" "$REPO" "$RACE_LOSER_BRANCH"
 
-STALE_CONTROL="$TMP/stale-control"
+DUAL_CONTROL="$TMP/dual-recover-hub/control/mission"
+DUAL_MISSION="$TMP/dual-recover-hub/missions/mission"
+DUAL_TASK="$TMP/dual-recover-task"
+DUAL_CHILD="$ALIAS_ROOT/dual-recover-child"
+DUAL_LOCK="$DUAL_CONTROL/.task-worktree.lock"
+DUAL_GUARD="$DUAL_LOCK.guard"
+mkdir -p "$DUAL_CONTROL" "$DUAL_MISSION" "$DUAL_GUARD"
+printf 'request\n' > "$DUAL_MISSION/request.md"
+printf 'Briefs: brief.md, brief-exec.md\n' > "$DUAL_MISSION/MISSION.md"
+printf 'planned\n' > "$DUAL_MISSION/state"
+printf 'backend: hybrid\nstage: plan\n' > "$DUAL_MISSION/session.txt"
+printf '999996\tdeadguard\n' > "$DUAL_GUARD/owner"
+printf '999995\tdeadlock\n' > "$DUAL_LOCK.999995.deadlock"
+ln "$DUAL_LOCK.999995.deadlock" "$DUAL_LOCK"
+( "$LIFECYCLE" create --control-dir "$DUAL_CONTROL" --task-dir "$DUAL_TASK" \
+    --mission mission --task-id task-dual --repo "$REPO" \
+    --parent-worktree "$PARENT" --worktree "$DUAL_CHILD" >/dev/null 2>&1; echo "$?" > "$TMP/dual-a.rc" ) &
+DUAL_A=$!
+( "$LIFECYCLE" create --control-dir "$DUAL_CONTROL" --task-dir "$DUAL_TASK" \
+    --mission mission --task-id task-dual --repo "$REPO" \
+    --parent-worktree "$PARENT" --worktree "$DUAL_CHILD" >/dev/null 2>&1; echo "$?" > "$TMP/dual-b.rc" ) &
+DUAL_B=$!
+wait "$DUAL_A" 2>/dev/null || true
+wait "$DUAL_B" 2>/dev/null || true
+DUAL_SUCCESS_COUNT=$(( $(grep -c '^0$' "$TMP/dual-a.rc" 2>/dev/null || true) + $(grep -c '^0$' "$TMP/dual-b.rc" 2>/dev/null || true) ))
+check "two stale recoverers serialize to one transition and preserve the live winner" bash -c \
+  '[[ "$1" -eq 1 && -d "$2" && -s "$3" && ! -e "$4" && ! -e "$5" ]] && git -C "$6" show-ref --verify --quiet refs/heads/orc-task/mission/task-dual' \
+  _ "$DUAL_SUCCESS_COUNT" "$DUAL_CHILD" "$DUAL_CONTROL/tasks/task-dual/worktrees.txt" \
+  "$DUAL_LOCK" "$DUAL_GUARD" "$REPO"
+
+OWNERLESS_CONTROL="$TMP/ownerless-hub/control/mission"
+OWNERLESS_TASK="$TMP/ownerless-task"
+OWNERLESS_CHILD="$ALIAS_ROOT/ownerless-child"
+OWNERLESS_GUARD="$OWNERLESS_CONTROL/.task-worktree.lock.guard"
+mkdir -p "$OWNERLESS_GUARD"
+"$LIFECYCLE" create --control-dir "$OWNERLESS_CONTROL" --task-dir "$OWNERLESS_TASK" \
+  --mission mission --task-id task-ownerless --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$OWNERLESS_CHILD" >/dev/null 2>&1
+OWNERLESS_RC=$?
+check "half-published ownerless guard is transactionally recovered without permanent lockout" bash -c \
+  '[[ "$1" -eq 0 && -d "$2" && -s "$3" && ! -e "$4" ]]' \
+  _ "$OWNERLESS_RC" "$OWNERLESS_CHILD" \
+  "$OWNERLESS_CONTROL/tasks/task-ownerless/worktrees.txt" "$OWNERLESS_GUARD"
+
+RELEASE_CONTROL="$TMP/release-replacement-hub/control/mission"
+RELEASE_TASK="$TMP/release-replacement-task"
+RELEASE_CHILD="$ALIAS_ROOT/release-replacement-child"
+RELEASE_LOCK="$RELEASE_CONTROL/.task-worktree.lock"
+mkdir -p "$RELEASE_CONTROL"
+sleep 30 &
+RELEASE_OWNER_PID=$!
+RELEASE_TOKEN=releaselive
+RELEASE_CANDIDATE="$RELEASE_LOCK.$RELEASE_OWNER_PID.$RELEASE_TOKEN"
+RELEASE_SOURCE="$RELEASE_CONTROL/.release-source"
+printf '%s\t%s\n' "$RELEASE_OWNER_PID" "$RELEASE_TOKEN" > "$RELEASE_SOURCE"
+ln "$RELEASE_SOURCE" "$RELEASE_CANDIDATE"
+RELEASE_MARKER="$TMP/release-replaced"
+ORC_STALE_LOCK_TEST_FINAL_REPLACEMENT="$RELEASE_SOURCE" \
+  ORC_STALE_LOCK_TEST_MARKER="$RELEASE_MARKER" \
+  "$LIFECYCLE" create --control-dir "$RELEASE_CONTROL" --task-dir "$RELEASE_TASK" \
+  --mission mission --task-id task-release --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$RELEASE_CHILD" >/dev/null 2>&1
+RELEASE_REPLACEMENT_RC=$?
+check "release-boundary replacement restores and preserves the new live lock" bash -c \
+  '[[ "$1" -ne 0 && -f "$2" && -f "$3" && "$2" -ef "$3" && -f "$4" && ! -e "$5.guard" ]]' \
+  _ "$RELEASE_REPLACEMENT_RC" "$RELEASE_LOCK" "$RELEASE_CANDIDATE" "$RELEASE_MARKER" "$RELEASE_LOCK"
+kill "$RELEASE_OWNER_PID" >/dev/null 2>&1 || true
+wait "$RELEASE_OWNER_PID" 2>/dev/null || true
+
+REPLACE_CONTROL="$TMP/replacement-hub/control/mission"
+REPLACE_TASK_DIR="$TMP/replacement-task"
+REPLACE_CHILD="$ALIAS_ROOT/replacement-child"
+REPLACE_LOCK="$REPLACE_CONTROL/.task-worktree.lock"
+OLD_PID=999998
+OLD_TOKEN=oldstale
+OLD_CANDIDATE="$REPLACE_LOCK.$OLD_PID.$OLD_TOKEN"
+mkdir -p "$REPLACE_CONTROL"
+printf '%s\t%s\n' "$OLD_PID" "$OLD_TOKEN" > "$OLD_CANDIDATE"
+ln "$OLD_CANDIDATE" "$REPLACE_LOCK"
+sleep 30 &
+REPLACEMENT_OWNER_PID=$!
+REPLACEMENT_TOKEN=newlive
+REPLACEMENT_CANDIDATE="$REPLACE_LOCK.$REPLACEMENT_OWNER_PID.$REPLACEMENT_TOKEN"
+REPLACEMENT_SOURCE="$REPLACE_CONTROL/.replacement-source"
+printf '%s\t%s\n' "$REPLACEMENT_OWNER_PID" "$REPLACEMENT_TOKEN" > "$REPLACEMENT_SOURCE"
+ln "$REPLACEMENT_SOURCE" "$REPLACEMENT_CANDIDATE"
+REPLACEMENT_MARKER="$TMP/replacement-published"
+ORC_STALE_LOCK_TEST_FINAL_REPLACEMENT="$REPLACEMENT_SOURCE" \
+  ORC_STALE_LOCK_TEST_MARKER="$REPLACEMENT_MARKER" \
+  "$LIFECYCLE" create --control-dir "$REPLACE_CONTROL" --task-dir "$REPLACE_TASK_DIR" \
+  --mission mission --task-id task-replacement --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$REPLACE_CHILD" >/dev/null 2>&1
+REPLACEMENT_RC=$?
+check "stale-lock replacement preserves the newly acquired live owner exactly" bash -c \
+  '[[ "$1" -ne 0 && -f "$2" && -f "$3" && "$2" -ef "$3" && -f "$4" && ! -e "$5" && ! -e "$6" && -f "$7" ]]' \
+  _ "$REPLACEMENT_RC" "$REPLACE_LOCK" "$REPLACEMENT_CANDIDATE" \
+  "$REPLACEMENT_MARKER" "$REPLACE_CHILD" "$REPLACE_CONTROL/tasks/task-replacement" "$OLD_CANDIDATE"
+kill "$REPLACEMENT_OWNER_PID" >/dev/null 2>&1 || true
+wait "$REPLACEMENT_OWNER_PID" 2>/dev/null || true
+rm -f -- "$OLD_CANDIDATE"
+"$LIFECYCLE" create --control-dir "$REPLACE_CONTROL" --task-dir "$REPLACE_TASK_DIR" \
+  --mission mission --task-id task-replacement --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$REPLACE_CHILD" >/dev/null 2>&1
+REPLACEMENT_RETRY_RC=$?
+check "stale replacement owner exit permits an exact retry without lock residue" bash -c \
+  '[[ "$1" -eq 0 && -d "$2" && ! -e "$3" && ! -e "$4" ]]' \
+  _ "$REPLACEMENT_RETRY_RC" "$REPLACE_CHILD" "$REPLACE_LOCK" "$REPLACEMENT_CANDIDATE"
+
+STALE_CONTROL="$TMP/stale-hub/control/mission"
 STALE_TASK_DIR="$TMP/stale-task"
 STALE_CHILD="$ALIAS_ROOT/stale-child"
 STALE_PID=999999

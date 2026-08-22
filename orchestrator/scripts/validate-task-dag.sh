@@ -361,6 +361,71 @@ raise SystemExit(0 if mode == 0o400 else 1)
 PY
 }
 
+validate_task_registry_path() {
+  local CONTROL_PATH="$1"
+  python3 - "$CONTROL_PATH" <<'PY'
+import errno
+import os
+import stat
+import sys
+
+
+control = sys.argv[1]
+flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+control_fd = os.open(control, flags)
+try:
+    try:
+        value = os.stat("tasks", dir_fd=control_fd, follow_symlinks=False)
+    except OSError as error:
+        if error.errno == errno.ENOENT:
+            raise SystemExit(0)
+        raise
+    if not stat.S_ISDIR(value.st_mode):
+        raise SystemExit(1)
+finally:
+    os.close(control_fd)
+PY
+}
+
+ensure_task_registry() {
+  local CONTROL_PATH="$1"
+  python3 - "$CONTROL_PATH" <<'PY'
+import errno
+import os
+import stat
+import sys
+
+
+control = sys.argv[1]
+flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+control_fd = os.open(control, flags)
+created = False
+try:
+    try:
+        os.mkdir("tasks", 0o700, dir_fd=control_fd)
+        created = True
+    except OSError as error:
+        if error.errno != errno.EEXIST:
+            raise
+    value = os.stat("tasks", dir_fd=control_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(value.st_mode):
+        raise SystemExit(1)
+    tasks_fd = os.open("tasks", flags, dir_fd=control_fd)
+    try:
+        opened = os.fstat(tasks_fd)
+        if ((opened.st_dev, opened.st_ino) != (value.st_dev, value.st_ino) or
+                not stat.S_ISDIR(opened.st_mode)):
+            raise SystemExit(1)
+        os.fsync(tasks_fd)
+    finally:
+        os.close(tasks_fd)
+    os.fsync(control_fd)
+finally:
+    os.close(control_fd)
+print("created" if created else "existing")
+PY
+}
+
 if [[ "$MODE" != "freeze" ]]; then
   validate_dag "$SOURCE_DAG"
   exit "$?"
@@ -378,6 +443,10 @@ for APPROVED in approved-design.md approved-plan.md brief-exec.md approved.sha25
     exit 1
   }
 done
+validate_task_registry_path "$CONTROL_DIR" || {
+  echo "coordinator task registry is an incompatible existing path" >&2
+  exit 1
+}
 
 DEST="$CONTROL_DIR/approved-task-dag.json"
 LOCK_DIR="$CONTROL_DIR/.task-dag-freeze.lock"
@@ -389,6 +458,7 @@ BACKUP_HASH=""
 PARTIAL_DAG_GUARD=""
 PARTIAL_GUARD_DIR=""
 DAG_DEST_OWNED=0
+TASK_REGISTRY_OWNED=0
 HASH_PUBLICATION_ATTEMPTED=0
 FREEZE_SUCCEEDED=0
 cleanup() {
@@ -405,6 +475,12 @@ cleanup() {
         rm -f "$DEST"
       else
         echo "published DAG ownership changed; preserving destination" >&2
+        RC=1
+      fi
+    fi
+    if [[ "$TASK_REGISTRY_OWNED" -eq 1 ]]; then
+      if ! rmdir "$CONTROL_DIR/tasks" 2>/dev/null; then
+        echo "created task registry changed; preserving it" >&2
         RC=1
       fi
     fi
@@ -470,6 +546,11 @@ else
 fi
 
 if [[ "$FREEZE_STATE" == "complete" ]]; then
+  TASK_REGISTRY_RESULT="$(ensure_task_registry "$CONTROL_DIR")" || {
+    echo "coordinator task registry could not be initialized safely" >&2
+    exit 1
+  }
+  [[ "$TASK_REGISTRY_RESULT" != created ]] || TASK_REGISTRY_OWNED=1
   FREEZE_SUCCEEDED=1
   rm -f "$BACKUP_HASH"
   BACKUP_HASH=""
@@ -509,6 +590,12 @@ if [[ "$FREEZE_STATE" == "partial" ]]; then
     exit 1
   }
 fi
+
+TASK_REGISTRY_RESULT="$(ensure_task_registry "$CONTROL_DIR")" || {
+  echo "coordinator task registry could not be initialized safely" >&2
+  exit 1
+}
+[[ "$TASK_REGISTRY_RESULT" != created ]] || TASK_REGISTRY_OWNED=1
 HASH_PUBLICATION_ATTEMPTED=1
 mv "$STAGED_HASH" "$CONTROL_DIR/approved.sha256" || exit 1
 STAGED_HASH=""

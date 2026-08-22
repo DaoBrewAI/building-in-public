@@ -9,11 +9,15 @@ LOCK_TOKEN=""
 LOCK_OWNED=0
 LOCK_CANDIDATE_OWNED=0
 LOCK_PUBLISH_INTENT=0
+GUARD_DIR=""
+GUARD_TOKEN=""
+GUARD_OWNED=0
 NEW_AUTHORITY_DESTS=()
 NEW_AUTHORITY_TEMPS=()
 
 usage() {
-  echo "usage: task-worktree.sh <create|reprovision> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir> [--expected-generation <n>]" >&2
+  echo "usage: task-worktree.sh create --create-mode <native-0.4|legacy> --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir>" >&2
+  echo "       task-worktree.sh reprovision --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir> --expected-generation <n>" >&2
 }
 
 fail() {
@@ -460,16 +464,130 @@ finalize_new_authority() {
   NEW_AUTHORITY_TEMPS=()
 }
 
+lifecycle_guard_operation() {
+  python3 - "$1" "$GUARD_DIR" "$$" "$GUARD_TOKEN" <<'PY'
+import os, re, stat, sys
+operation, guard, pid, token = sys.argv[1:]
+expected = (pid + "\t" + token + "\n").encode("ascii")
+parent = os.path.dirname(guard) or "."
+candidate = guard + ".candidate." + pid + "." + token
+flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+def syncdir(path):
+    fd=os.open(path,flags)
+    try: os.fsync(fd)
+    finally: os.close(fd)
+def prepare():
+    if os.path.lexists(candidate): raise SystemExit(1)
+    os.mkdir(candidate,0o700)
+    d=os.open(candidate,flags)
+    try:
+        f=os.open("owner",os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=d)
+        try:
+            if os.write(f,expected)!=len(expected): raise OSError("short guard write")
+            os.fsync(f)
+        finally: os.close(f)
+        os.fsync(d)
+    finally: os.close(d)
+    syncdir(parent)
+def publish():
+    os.rename(candidate,guard)
+    syncdir(parent)
+def cleanup_candidate():
+    if not os.path.lexists(candidate): return
+    d=os.open(candidate,flags)
+    try:
+        if owner(d)!=expected: raise SystemExit(1)
+        os.unlink("owner",dir_fd=d); os.fsync(d)
+    finally: os.close(d)
+    os.rmdir(candidate); syncdir(parent)
+def opened():
+    before=os.lstat(guard)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode): raise SystemExit(1)
+    d=os.open(guard,flags); now=os.fstat(d); current=os.lstat(guard)
+    if (now.st_dev,now.st_ino)!=(before.st_dev,before.st_ino) or (current.st_dev,current.st_ino)!=(before.st_dev,before.st_ino):
+        os.close(d); raise SystemExit(1)
+    return d,before
+def owner(d):
+    f=os.open("owner",os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=d)
+    try:
+        before=os.fstat(f)
+        if not stat.S_ISREG(before.st_mode) or before.st_size>512: raise SystemExit(1)
+        data=os.read(f,513); after=os.fstat(f)
+        if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns): raise SystemExit(1)
+        return data
+    finally: os.close(f)
+def live(value):
+    try: os.kill(value,0); return True
+    except ProcessLookupError: return False
+    except PermissionError: return True
+def remove(d,before):
+    os.unlink("owner",dir_fd=d); os.fsync(d)
+    current=os.lstat(guard)
+    if (current.st_dev,current.st_ino)!=(before.st_dev,before.st_ino): raise SystemExit(1)
+    os.rmdir(guard); syncdir(parent)
+if operation=="acquire":
+    try:
+        prepare()
+        if not os.path.lexists(guard):
+            try: publish(); raise SystemExit(0)
+            except OSError:
+                if not os.path.lexists(guard): raise
+        d,before=opened()
+        try:
+            try: data=owner(d)
+            except FileNotFoundError:
+                if os.listdir(d): raise SystemExit(1)
+                current=os.lstat(guard)
+                if (current.st_dev,current.st_ino)!=(before.st_dev,before.st_ino): raise SystemExit(1)
+                os.rmdir(guard); syncdir(parent)
+            else:
+                try: p,t=data.decode("ascii").rstrip("\n").split("\t")
+                except Exception: raise SystemExit(1)
+                if (data!=(p+"\t"+t+"\n").encode("ascii") or not p.isdigit() or
+                        not re.fullmatch(r"[A-Za-z0-9._-]+",t) or live(int(p))): raise SystemExit(1)
+                remove(d,before)
+        finally: os.close(d)
+        try: publish()
+        except OSError: raise SystemExit(1)
+    finally:
+        cleanup_candidate()
+elif operation=="release":
+    d,before=opened()
+    try:
+        if owner(d)!=expected: raise SystemExit(1)
+        remove(d,before)
+    finally: os.close(d)
+else: raise SystemExit(1)
+PY
+}
+
+acquire_lifecycle_guard() {
+  GUARD_DIR="$LOCK_FILE.guard"
+  GUARD_TOKEN="$RANDOM.$(date +%s).guard"
+  lifecycle_guard_operation acquire || return 1
+  GUARD_OWNED=1
+}
+
+release_lifecycle_guard() {
+  [[ "$GUARD_OWNED" -eq 1 ]] || return 0
+  lifecycle_guard_operation release || return 1
+  GUARD_OWNED=0
+}
+
 release_lock() {
   local release_ok=1
+  if [[ "$GUARD_OWNED" -eq 0 && ( "$LOCK_PUBLISH_INTENT" -eq 1 || "$LOCK_CANDIDATE_OWNED" -eq 1 ) ]]; then
+    acquire_lifecycle_guard || return 1
+  fi
   if [[ "$LOCK_PUBLISH_INTENT" -eq 1 ]]; then
     if [[ -f "$LOCK_FILE" && ! -L "$LOCK_FILE" && -f "$LOCK_CANDIDATE" && ! -L "$LOCK_CANDIDATE" && "$LOCK_FILE" -ef "$LOCK_CANDIDATE" ]]; then
-      if ! rm -f -- "$LOCK_FILE"; then
+      if ! guarded_remove_stale_lock "$LOCK_CANDIDATE" "$$" "$LOCK_TOKEN"; then
         echo "task-worktree: coordinator lock release failed" >&2
         release_ok=0
       else
         LOCK_OWNED=0
         LOCK_PUBLISH_INTENT=0
+        LOCK_CANDIDATE_OWNED=0
       fi
     elif [[ "$LOCK_OWNED" -eq 1 ]]; then
       echo "task-worktree: coordinator lock ownership changed; lock preserved" >&2
@@ -482,12 +600,266 @@ release_lock() {
     rm -f -- "$LOCK_CANDIDATE"
     LOCK_CANDIDATE_OWNED=0
   fi
+  release_lifecycle_guard || release_ok=0
   [[ "$release_ok" -eq 1 ]]
 }
 
 pid_is_live() {
   local pid="$1"
   kill -0 "$pid" 2>/dev/null || ps -p "$pid" -o pid= 2>/dev/null | grep -q '[0-9]'
+}
+
+guarded_remove_stale_lock() {
+  local stale_candidate="$1" stale_pid="$2" stale_token="$3"
+  python3 - "$LOCK_FILE" "$stale_candidate" "$stale_pid" "$stale_token" <<'PY'
+import os
+import stat
+import sys
+
+lock_path, candidate_path, stale_pid, stale_token = sys.argv[1:]
+
+def snapshot(path):
+    before = os.lstat(path)
+    if (stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) or
+            before.st_size > 512):
+        raise SystemExit(1)
+    metadata = lambda value: (value.st_dev, value.st_ino, value.st_mode,
+                              value.st_nlink, value.st_uid, value.st_gid,
+                              value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if metadata(opened) != metadata(before):
+            raise SystemExit(1)
+        data = os.read(descriptor, 513)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    current = os.lstat(path)
+    if metadata(after) != metadata(before) or metadata(current) != metadata(before):
+        raise SystemExit(1)
+    return metadata(before) + (data,)
+
+lock_snapshot = snapshot(lock_path)
+candidate_snapshot = snapshot(candidate_path)
+if lock_snapshot != candidate_snapshot:
+    raise SystemExit(1)
+if lock_snapshot[-1] != (stale_pid + "\t" + stale_token + "\n").encode("ascii"):
+    raise SystemExit(1)
+
+# Deterministic test hook: atomically publish a different, correctly linked
+# owner between the stale snapshot and the destructive boundary.
+replacement = os.environ.get("ORC_STALE_LOCK_TEST_REPLACEMENT")
+marker = os.environ.get("ORC_STALE_LOCK_TEST_MARKER")
+if replacement:
+    snapshot(replacement)
+    os.replace(replacement, lock_path)
+    if marker:
+        with open(marker, "wb") as handle:
+            handle.write(b"replaced\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    directory_fd = os.open(os.path.dirname(lock_path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+if snapshot(lock_path) != lock_snapshot or snapshot(candidate_path) != candidate_snapshot:
+    raise SystemExit(1)
+
+final_replacement = os.environ.get("ORC_STALE_LOCK_TEST_FINAL_REPLACEMENT")
+if final_replacement:
+    snapshot(final_replacement)
+    os.replace(final_replacement, lock_path)
+    if marker:
+        with open(marker, "wb") as handle:
+            handle.write(b"final-replaced\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+quarantine = lock_path + ".recovery." + str(os.getpid()) + "." + os.urandom(8).hex()
+if os.path.lexists(quarantine):
+    raise SystemExit(1)
+os.rename(lock_path, quarantine)
+quarantine_snapshot = snapshot(quarantine)
+stable_fields = (0, 1, 2, 4, 5, 6, 7, 9)
+same_epoch = lambda left, right: tuple(left[index] for index in stable_fields) == tuple(
+    right[index] for index in stable_fields)
+if not same_epoch(quarantine_snapshot, lock_snapshot):
+    try:
+        os.link(quarantine, lock_path)
+    except FileExistsError:
+        raise SystemExit(1)
+    restored = snapshot(lock_path)
+    quarantined_after_link = snapshot(quarantine)
+    if not same_epoch(restored, quarantine_snapshot) or not same_epoch(
+            quarantined_after_link, quarantine_snapshot):
+        raise SystemExit(1)
+    os.unlink(quarantine)
+    directory_fd = os.open(os.path.dirname(lock_path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    raise SystemExit(1)
+candidate_quarantined = snapshot(candidate_path)
+if not same_epoch(candidate_quarantined, candidate_snapshot):
+    raise SystemExit(1)
+if snapshot(quarantine) != quarantine_snapshot or snapshot(candidate_path) != candidate_quarantined:
+    raise SystemExit(1)
+os.unlink(quarantine)
+candidate_after_quarantine = snapshot(candidate_path)
+if not same_epoch(candidate_after_quarantine, candidate_snapshot):
+    raise SystemExit(1)
+if snapshot(candidate_path) != candidate_after_quarantine:
+    raise SystemExit(1)
+os.unlink(candidate_path)
+directory_fd = os.open(os.path.dirname(lock_path) or ".", os.O_RDONLY)
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+PY
+}
+
+verify_native_create_ready() {
+  local validator classifier classification tasks_initialized=0
+  validator="$(cd "$(dirname "$0")" && pwd -P)/validate-task-dag.sh"
+  classifier="$(cd "$(dirname "$0")" && pwd -P)/classify-mission-version.sh"
+  [[ -x "$validator" && -x "$classifier" ]] || fail "native scheduling helpers are unavailable"
+  "$validator" "$CONTROL_PHYS/approved-task-dag.json" >/dev/null || fail "approved task DAG is invalid"
+
+  python3 - "$MISSION_DIR_PHYS" "$CONTROL_PHYS" "$TASK_ID" <<'PY'
+import hashlib
+import json
+import os
+import re
+import stat
+import sys
+
+mission, control, task_id = sys.argv[1:]
+approved = os.path.join(control, "approved.sha256")
+expected = [
+    (os.path.join(control, "approved-design.md"), "approved-design.md"),
+    (os.path.join(control, "approved-plan.md"), "approved-plan.md"),
+    (os.path.join(control, "brief-exec.md"), "brief-exec.md"),
+    (os.path.join(control, "approved-task-dag.json"), "approved-task-dag.json"),
+]
+
+def regular(path):
+    value = os.lstat(path)
+    if stat.S_ISLNK(value.st_mode) or not stat.S_ISREG(value.st_mode):
+        raise ValueError(path)
+    return value
+
+regular(approved)
+with open(approved, "r", encoding="utf-8", newline="") as handle:
+    lines = handle.read().splitlines()
+if len(lines) != 4:
+    raise SystemExit("approved manifest must contain exactly four entries")
+for line, (path, basename) in zip(lines, expected):
+    match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9._-]+)", line)
+    if not match or match.group(2) != basename:
+        raise SystemExit("approved manifest entries are not canonical")
+    regular(path)
+    with open(path, "rb") as handle:
+        digest = hashlib.sha256(handle.read()).hexdigest()
+    if digest != match.group(1):
+        raise SystemExit("approved authority hash mismatch")
+
+dag_path = os.path.join(control, "approved-task-dag.json")
+with open(dag_path, "r", encoding="utf-8") as handle:
+    dag = json.load(handle)
+nodes = {node["id"]: node for node in dag["tasks"]}
+if task_id not in nodes:
+    raise SystemExit("requested task is not an exact approved DAG node")
+node = nodes[task_id]
+if node.get("state") not in ("pending", "ready"):
+    raise SystemExit("requested task is not schedulable")
+
+tasks_root = os.path.join(control, "tasks")
+if os.path.lexists(tasks_root):
+    root_stat = os.lstat(tasks_root)
+    if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
+        raise SystemExit("task authority root is unsafe")
+
+def task_dir(identifier):
+    path = os.path.join(tasks_root, identifier)
+    if os.path.lexists(path):
+        value = os.lstat(path)
+        if stat.S_ISLNK(value.st_mode) or not stat.S_ISDIR(value.st_mode):
+            raise SystemExit("task authority path is unsafe")
+    return path
+
+def authority_value(path):
+    regular(path)
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        value = handle.read()
+    if not value.endswith("\n") or value.count("\n") != 1:
+        raise SystemExit("task authority is malformed")
+    return value[:-1]
+
+for predecessor in node.get("depends_on", []):
+    predecessor_dir = task_dir(predecessor)
+    if authority_value(os.path.join(predecessor_dir, "state")) not in ("integrated", "collected"):
+        raise SystemExit("predecessor is not integrated or collected")
+    if os.path.lexists(os.path.join(predecessor_dir, "unresolved-rework")):
+        raise SystemExit("predecessor has unresolved rework")
+
+requested_dir = task_dir(task_id)
+for blocker in ("accepted-thread-id", "user-approval-blocker", "unresolved-rework"):
+    if os.path.lexists(os.path.join(requested_dir, blocker)):
+        raise SystemExit("requested task has an unresolved owner or approval blocker")
+
+requested_files = set(node.get("files", []))
+requested_contracts = set(node.get("contracts", []))
+active_states = {"pending", "ready", "running", "review", "rework", "completed", "cleanup_pending"}
+for other_id, other in nodes.items():
+    if other_id == task_id:
+        continue
+    other_dir = task_dir(other_id)
+    state_path = os.path.join(other_dir, "state")
+    if not os.path.lexists(state_path):
+        continue
+    state = authority_value(state_path)
+    if state not in active_states:
+        continue
+    if requested_files.intersection(other.get("files", [])) or requested_contracts.intersection(other.get("contracts", [])):
+        raise SystemExit("requested task conflicts with another active DAG node")
+PY
+  if [[ ! -e "$CONTROL_PHYS/tasks" && ! -L "$CONTROL_PHYS/tasks" ]]; then
+    mkdir "$CONTROL_PHYS/tasks" || fail "cannot initialize native task authority root"
+    durable_fsync_paths "$CONTROL_PHYS/tasks" || fail "cannot sync native task authority root"
+    tasks_initialized=1
+  fi
+  if ! classification="$($classifier --mission-dir "$MISSION_DIR_PHYS" --control-dir "$CONTROL_PHYS")"; then
+    if [[ "$tasks_initialized" -eq 1 ]]; then
+      rmdir "$CONTROL_PHYS/tasks" 2>/dev/null || true
+      durable_fsync_paths "$CONTROL_PHYS" >/dev/null 2>&1 || true
+    fi
+    fail "mission authority cannot be classified"
+  fi
+  if [[ "$classification" != hybrid-0.4 ]]; then
+    if [[ "$tasks_initialized" -eq 1 ]]; then
+      rmdir "$CONTROL_PHYS/tasks" 2>/dev/null || true
+      durable_fsync_paths "$CONTROL_PHYS" >/dev/null 2>&1 || true
+    fi
+    fail "native-0.4 create requires classified Hybrid 0.4 authority"
+  fi
+}
+
+verify_legacy_create_classification() {
+  local classifier classification
+  classifier="$(cd "$(dirname "$0")" && pwd -P)/classify-mission-version.sh"
+  [[ -x "$classifier" ]] || fail "mission classifier is unavailable"
+  classification="$($classifier --mission-dir "$MISSION_DIR_PHYS" --control-dir "$CONTROL_PHYS")" || \
+    fail "mission authority cannot be classified"
+  case "$classification" in
+    hybrid-0.3|legacy-0.2) ;;
+    hybrid-0.4) fail "legacy create cannot bypass native Hybrid 0.4 scheduling" ;;
+    *) fail "legacy create requires a supported classified mission" ;;
+  esac
 }
 
 acquire_lock() {
@@ -499,6 +871,7 @@ acquire_lock() {
   local candidate_token=""
   local candidate_extra=""
 
+  acquire_lifecycle_guard || fail "coordinator lifecycle guard is unsafe or busy"
   LOCK_TOKEN="$RANDOM.$(date +%s)"
   LOCK_CANDIDATE="$LOCK_FILE.$$.$LOCK_TOKEN"
   [[ ! -e "$LOCK_CANDIDATE" && ! -L "$LOCK_CANDIDATE" ]] || fail "coordinator lock candidate already exists"
@@ -511,6 +884,7 @@ acquire_lock() {
   if ln "$LOCK_CANDIDATE" "$LOCK_FILE" 2>/dev/null; then
     [[ "$LOCK_FILE" -ef "$LOCK_CANDIDATE" ]] || fail "coordinator lock publication could not be verified"
     LOCK_OWNED=1
+    release_lifecycle_guard || fail "coordinator lifecycle guard release failed"
     return 0
   fi
 
@@ -529,8 +903,7 @@ acquire_lock() {
   [[ "$candidate_pid" == "$stale_pid" && "$candidate_token" == "$stale_token" && -z "$candidate_extra" ]] || fail "stale coordinator lock candidate does not match"
   pid_is_live "$stale_pid" && fail "coordinator mutation lock became active"
   [[ "$LOCK_FILE" -ef "$stale_candidate" ]] || fail "stale coordinator lock changed during reconciliation"
-  rm -f -- "$LOCK_FILE"
-  rm -f -- "$stale_candidate"
+  guarded_remove_stale_lock "$stale_candidate" "$stale_pid" "$stale_token" || fail "stale coordinator lock changed during reconciliation"
 
   LOCK_PUBLISH_INTENT=1
   if ! ln "$LOCK_CANDIDATE" "$LOCK_FILE" 2>/dev/null; then
@@ -538,6 +911,7 @@ acquire_lock() {
   fi
   [[ "$LOCK_FILE" -ef "$LOCK_CANDIDATE" ]] || fail "coordinator lock publication could not be verified"
   LOCK_OWNED=1
+  release_lifecycle_guard || fail "coordinator lifecycle guard release failed"
 }
 
 lock_exit() {
@@ -562,6 +936,8 @@ REPO=""
 PARENT_WORKTREE=""
 WORKTREE=""
 EXPECTED_GENERATION=""
+CREATE_MODE=""
+MISSION_DIR=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -573,13 +949,22 @@ while [[ $# -gt 0 ]]; do
     --parent-worktree) [[ $# -ge 2 ]] || { usage; exit 1; }; PARENT_WORKTREE="$2"; shift 2 ;;
     --worktree) [[ $# -ge 2 ]] || { usage; exit 1; }; WORKTREE="$2"; shift 2 ;;
     --expected-generation) [[ $# -ge 2 ]] || { usage; exit 1; }; EXPECTED_GENERATION="$2"; shift 2 ;;
+    --create-mode) [[ $# -ge 2 ]] || { usage; exit 1; }; CREATE_MODE="$2"; shift 2 ;;
+    --mission-dir) [[ $# -ge 2 ]] || { usage; exit 1; }; MISSION_DIR="$2"; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
 if [[ "$MODE" == create ]]; then
   [[ -z "$EXPECTED_GENERATION" ]] || fail "create does not accept an expected generation"
+  case "$CREATE_MODE" in
+    native-0.4|legacy) ;;
+    '') fail "create requires an explicit create mode" ;;
+    *) fail "unsupported create mode: $CREATE_MODE" ;;
+  esac
+  [[ -n "$MISSION_DIR" ]] || fail "create requires a mission directory"
 else
+  [[ -z "$CREATE_MODE" && -z "$MISSION_DIR" ]] || fail "reprovision does not accept create classification arguments"
   case "$EXPECTED_GENERATION" in
     ''|*[!0-9]*|0) fail "reprovision requires a positive expected generation" ;;
   esac
@@ -591,7 +976,7 @@ done
 valid_identity "$MISSION" || fail "invalid mission identity"
 valid_identity "$TASK_ID" || fail "invalid task identity"
 
-for PATH_VALUE in "$CONTROL_DIR" "$TASK_DIR" "$REPO" "$PARENT_WORKTREE" "$WORKTREE"; do
+for PATH_VALUE in "$CONTROL_DIR" "$TASK_DIR" "$REPO" "$PARENT_WORKTREE" "$WORKTREE" ${MISSION_DIR:+"$MISSION_DIR"}; do
   absolute_path "$PATH_VALUE" || fail "paths must be absolute"
   case "$PATH_VALUE" in
     *$'\t'*|*$'\n'*|*$'\r'*) fail "paths may not contain tabs or newlines" ;;
@@ -600,6 +985,10 @@ for PATH_VALUE in "$CONTROL_DIR" "$TASK_DIR" "$REPO" "$PARENT_WORKTREE" "$WORKTR
 done
 
 [[ -d "$CONTROL_DIR" && ! -L "$CONTROL_DIR" ]] || fail "control directory missing or symlinked: $CONTROL_DIR"
+if [[ "$MODE" == create ]]; then
+  [[ -d "$MISSION_DIR" && ! -L "$MISSION_DIR" ]] || fail "mission directory missing or symlinked: $MISSION_DIR"
+  MISSION_DIR_PHYS="$(cd "$MISSION_DIR" && pwd -P)"
+fi
 [[ -d "$REPO" && ! -L "$REPO" ]] || fail "repository missing or symlinked: $REPO"
 [[ -d "$PARENT_WORKTREE" && ! -L "$PARENT_WORKTREE" ]] || fail "parent worktree missing or symlinked: $PARENT_WORKTREE"
 REPROVISION_RECOVERY=0
@@ -648,6 +1037,13 @@ LOCK_FILE="$CONTROL_PHYS/.task-worktree.lock"
 trap 'lock_exit "$?"' EXIT
 trap 'exit 1' HUP INT TERM
 acquire_lock
+
+if [[ "$MODE" == create ]]; then
+  case "$CREATE_MODE" in
+    native-0.4) verify_native_create_ready ;;
+    legacy) verify_legacy_create_classification ;;
+  esac
+fi
 
 CONTROL_TASKS_DIR="$CONTROL_PHYS/tasks"
 CONTROL_TASK_DIR="$CONTROL_TASKS_DIR/$TASK_ID"

@@ -10,6 +10,8 @@
 
 set -uo pipefail
 
+GC_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+
 HUB=""
 CLEAN=0
 FOUND=0
@@ -19,6 +21,10 @@ GC_LOCK_CANDIDATE=""
 GC_LOCK_OWNED=0
 GC_LOCK_CANDIDATE_OWNED=0
 GC_LOCK_PUBLISH_INTENT=0
+GC_LOCK_TOKEN=""
+GC_GUARD_DIR=""
+GC_GUARD_TOKEN=""
+GC_GUARD_OWNED=0
 
 usage() {
   echo "usage: orchestrator-gc.sh --hub <hub dir> [--clean]" >&2
@@ -81,15 +87,242 @@ gc_pid_is_live() {
   kill -0 "$pid" 2>/dev/null || ps -p "$pid" -o pid= 2>/dev/null | grep -q '[0-9]'
 }
 
+gc_guard_operation() {
+  python3 - "$1" "$GC_GUARD_DIR" "$$" "$GC_GUARD_TOKEN" <<'PY'
+import os, re, stat, sys
+operation, guard, pid, token = sys.argv[1:]
+expected=(pid+"\t"+token+"\n").encode("ascii"); parent=os.path.dirname(guard) or "."
+candidate=guard+".candidate."+pid+"."+token
+flags=os.O_RDONLY|getattr(os,"O_DIRECTORY",0)|getattr(os,"O_NOFOLLOW",0)
+def syncdir(path):
+    f=os.open(path,flags)
+    try: os.fsync(f)
+    finally: os.close(f)
+def prepare():
+    if os.path.lexists(candidate): raise SystemExit(1)
+    os.mkdir(candidate,0o700); d=os.open(candidate,flags)
+    try:
+        f=os.open("owner",os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0),0o600,dir_fd=d)
+        try:
+            if os.write(f,expected)!=len(expected): raise OSError("short guard write")
+            os.fsync(f)
+        finally: os.close(f)
+        os.fsync(d)
+    finally: os.close(d)
+    syncdir(parent)
+def publish():
+    os.rename(candidate,guard); syncdir(parent)
+def cleanup_candidate():
+    if not os.path.lexists(candidate): return
+    d=os.open(candidate,flags)
+    try:
+        if owner(d)!=expected: raise SystemExit(1)
+        os.unlink("owner",dir_fd=d); os.fsync(d)
+    finally: os.close(d)
+    os.rmdir(candidate); syncdir(parent)
+def opened():
+    before=os.lstat(guard)
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISDIR(before.st_mode): raise SystemExit(1)
+    d=os.open(guard,flags); now=os.fstat(d); current=os.lstat(guard)
+    if (now.st_dev,now.st_ino)!=(before.st_dev,before.st_ino) or (current.st_dev,current.st_ino)!=(before.st_dev,before.st_ino): os.close(d); raise SystemExit(1)
+    return d,before
+def owner(d):
+    f=os.open("owner",os.O_RDONLY|getattr(os,"O_NOFOLLOW",0),dir_fd=d)
+    try:
+        before=os.fstat(f)
+        if not stat.S_ISREG(before.st_mode) or before.st_size>512: raise SystemExit(1)
+        data=os.read(f,513); after=os.fstat(f)
+        if (before.st_dev,before.st_ino,before.st_size,before.st_mtime_ns,before.st_ctime_ns)!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns): raise SystemExit(1)
+        return data
+    finally: os.close(f)
+def live(value):
+    try: os.kill(value,0); return True
+    except ProcessLookupError: return False
+    except PermissionError: return True
+def remove(d,before):
+    os.unlink("owner",dir_fd=d); os.fsync(d); current=os.lstat(guard)
+    if (current.st_dev,current.st_ino)!=(before.st_dev,before.st_ino): raise SystemExit(1)
+    os.rmdir(guard); syncdir(parent)
+if operation=="acquire":
+    try:
+        prepare()
+        if not os.path.lexists(guard):
+            try: publish(); raise SystemExit(0)
+            except OSError:
+                if not os.path.lexists(guard): raise
+        d,before=opened()
+        try:
+            try: data=owner(d)
+            except FileNotFoundError:
+                if os.listdir(d): raise SystemExit(1)
+                current=os.lstat(guard)
+                if (current.st_dev,current.st_ino)!=(before.st_dev,before.st_ino): raise SystemExit(1)
+                os.rmdir(guard); syncdir(parent)
+            else:
+                try: p,t=data.decode("ascii").rstrip("\n").split("\t")
+                except Exception: raise SystemExit(1)
+                if (data!=(p+"\t"+t+"\n").encode("ascii") or not p.isdigit() or
+                        not re.fullmatch(r"[A-Za-z0-9._-]+",t) or live(int(p))): raise SystemExit(1)
+                remove(d,before)
+        finally: os.close(d)
+        try: publish()
+        except OSError: raise SystemExit(1)
+    finally:
+        cleanup_candidate()
+elif operation=="release":
+    d,before=opened()
+    try:
+        if owner(d)!=expected: raise SystemExit(1)
+        remove(d,before)
+    finally: os.close(d)
+else: raise SystemExit(1)
+PY
+}
+
+gc_acquire_guard() {
+  GC_GUARD_DIR="$GC_LOCK_FILE.guard"
+  GC_GUARD_TOKEN="$RANDOM.$(date +%s).guard"
+  gc_guard_operation acquire || return 1
+  GC_GUARD_OWNED=1
+}
+
+gc_release_guard() {
+  [[ "$GC_GUARD_OWNED" -eq 1 ]] || return 0
+  gc_guard_operation release || return 1
+  GC_GUARD_OWNED=0
+}
+
+gc_guarded_remove_stale_lock() {
+  local stale_candidate="$1" stale_pid="$2" stale_token="$3"
+  python3 - "$GC_LOCK_FILE" "$stale_candidate" "$stale_pid" "$stale_token" <<'PY'
+import os
+import stat
+import sys
+
+lock_path, candidate_path, stale_pid, stale_token = sys.argv[1:]
+
+def snapshot(path):
+    before = os.lstat(path)
+    if (stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode) or
+            before.st_size > 512):
+        raise SystemExit(1)
+    metadata = lambda value: (value.st_dev, value.st_ino, value.st_mode,
+                              value.st_nlink, value.st_uid, value.st_gid,
+                              value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(descriptor)
+        if metadata(opened) != metadata(before):
+            raise SystemExit(1)
+        data = os.read(descriptor, 513)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    current = os.lstat(path)
+    if metadata(after) != metadata(before) or metadata(current) != metadata(before):
+        raise SystemExit(1)
+    return metadata(before) + (data,)
+
+lock_snapshot = snapshot(lock_path)
+candidate_snapshot = snapshot(candidate_path)
+if lock_snapshot != candidate_snapshot:
+    raise SystemExit(1)
+if lock_snapshot[-1] != (stale_pid + "\t" + stale_token + "\n").encode("ascii"):
+    raise SystemExit(1)
+
+replacement = os.environ.get("ORC_GC_STALE_LOCK_TEST_REPLACEMENT")
+marker = os.environ.get("ORC_GC_STALE_LOCK_TEST_MARKER")
+if replacement:
+    snapshot(replacement)
+    os.replace(replacement, lock_path)
+    if marker:
+        with open(marker, "wb") as handle:
+            handle.write(b"replaced\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    directory_fd = os.open(os.path.dirname(lock_path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+if snapshot(lock_path) != lock_snapshot or snapshot(candidate_path) != candidate_snapshot:
+    raise SystemExit(1)
+
+# Exercise the last possible name-race boundary, after the final validation.
+final_replacement = os.environ.get("ORC_GC_STALE_LOCK_TEST_FINAL_REPLACEMENT")
+if final_replacement:
+    snapshot(final_replacement)
+    os.replace(final_replacement, lock_path)
+    if marker:
+        with open(marker, "wb") as handle:
+            handle.write(b"final-replaced\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+
+quarantine = lock_path + ".recovery." + str(os.getpid()) + "." + os.urandom(8).hex()
+if os.path.lexists(quarantine):
+    raise SystemExit(1)
+os.rename(lock_path, quarantine)
+quarantine_snapshot = snapshot(quarantine)
+stable_fields = (0, 1, 2, 4, 5, 6, 7, 9)
+same_epoch = lambda left, right: tuple(left[index] for index in stable_fields) == tuple(
+    right[index] for index in stable_fields)
+if not same_epoch(quarantine_snapshot, lock_snapshot):
+    # The name changed after validation. Restore that exact inode with a
+    # no-clobber hard link; never unlink the replacement on this failure path.
+    try:
+        os.link(quarantine, lock_path)
+    except FileExistsError:
+        raise SystemExit(1)
+    restored = snapshot(lock_path)
+    quarantined_after_link = snapshot(quarantine)
+    if not same_epoch(restored, quarantine_snapshot) or not same_epoch(
+            quarantined_after_link, quarantine_snapshot):
+        raise SystemExit(1)
+    os.unlink(quarantine)
+    directory_fd = os.open(os.path.dirname(lock_path) or ".", os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+    raise SystemExit(1)
+candidate_quarantined = snapshot(candidate_path)
+if not same_epoch(candidate_quarantined, candidate_snapshot):
+    raise SystemExit(1)
+if snapshot(quarantine) != quarantine_snapshot or snapshot(candidate_path) != candidate_quarantined:
+    raise SystemExit(1)
+os.unlink(quarantine)
+candidate_after_quarantine = snapshot(candidate_path)
+if not same_epoch(candidate_after_quarantine, candidate_snapshot):
+    raise SystemExit(1)
+if snapshot(candidate_path) != candidate_after_quarantine:
+    raise SystemExit(1)
+os.unlink(candidate_path)
+directory_fd = os.open(os.path.dirname(lock_path) or ".", os.O_RDONLY)
+try:
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+PY
+}
+
 gc_release_lifecycle_lock() {
   local ok=1
+  if [[ "$GC_GUARD_OWNED" -eq 0 && ( "$GC_LOCK_PUBLISH_INTENT" -eq 1 || "$GC_LOCK_CANDIDATE_OWNED" -eq 1 ) ]]; then
+    gc_acquire_guard || return 1
+  fi
   if [[ "$GC_LOCK_PUBLISH_INTENT" -eq 1 ]]; then
     if [[ -f "$GC_LOCK_FILE" && ! -L "$GC_LOCK_FILE" && \
       -f "$GC_LOCK_CANDIDATE" && ! -L "$GC_LOCK_CANDIDATE" && \
       "$GC_LOCK_FILE" -ef "$GC_LOCK_CANDIDATE" ]]; then
-      rm -f -- "$GC_LOCK_FILE" || ok=0
-      GC_LOCK_OWNED=0
-      GC_LOCK_PUBLISH_INTENT=0
+      if gc_guarded_remove_stale_lock "$GC_LOCK_CANDIDATE" "$$" "$GC_LOCK_TOKEN"; then
+        GC_LOCK_OWNED=0
+        GC_LOCK_PUBLISH_INTENT=0
+        GC_LOCK_CANDIDATE_OWNED=0
+      else
+        ok=0
+      fi
     elif [[ "$GC_LOCK_OWNED" -eq 1 ]]; then
       ok=0
     else
@@ -102,6 +335,7 @@ gc_release_lifecycle_lock() {
   fi
   GC_LOCK_FILE=""
   GC_LOCK_CANDIDATE=""
+  gc_release_guard || ok=0
   [[ "$ok" -eq 1 ]]
 }
 
@@ -109,7 +343,9 @@ gc_acquire_lifecycle_lock() {
   local control="$1" token stale_pid stale_token stale_extra stale_candidate
   local candidate_pid candidate_token candidate_extra
   GC_LOCK_FILE="$control/.task-worktree.lock"
+  gc_acquire_guard || return 1
   token="$RANDOM.$(date +%s)"
+  GC_LOCK_TOKEN="$token"
   GC_LOCK_CANDIDATE="$GC_LOCK_FILE.$$.$token"
   [[ ! -e "$GC_LOCK_CANDIDATE" && ! -L "$GC_LOCK_CANDIDATE" ]] || return 1
   (umask 077 && printf '%s\t%s\n' "$$" "$token" > "$GC_LOCK_CANDIDATE") || return 1
@@ -118,6 +354,7 @@ gc_acquire_lifecycle_lock() {
   if ln "$GC_LOCK_CANDIDATE" "$GC_LOCK_FILE" 2>/dev/null; then
     [[ "$GC_LOCK_FILE" -ef "$GC_LOCK_CANDIDATE" ]] || return 1
     GC_LOCK_OWNED=1
+    gc_release_guard || return 1
     return 0
   fi
   [[ -f "$GC_LOCK_FILE" && ! -L "$GC_LOCK_FILE" ]] || return 1
@@ -134,11 +371,12 @@ gc_acquire_lifecycle_lock() {
   [[ "$candidate_pid" == "$stale_pid" && "$candidate_token" == "$stale_token" && -z "$candidate_extra" ]] || return 1
   gc_pid_is_live "$stale_pid" && return 1
   [[ "$GC_LOCK_FILE" -ef "$stale_candidate" ]] || return 1
-  rm -f -- "$GC_LOCK_FILE" "$stale_candidate" || return 1
+  gc_guarded_remove_stale_lock "$stale_candidate" "$stale_pid" "$stale_token" || return 1
   GC_LOCK_PUBLISH_INTENT=1
   ln "$GC_LOCK_CANDIDATE" "$GC_LOCK_FILE" 2>/dev/null || return 1
   [[ "$GC_LOCK_FILE" -ef "$GC_LOCK_CANDIDATE" ]] || return 1
   GC_LOCK_OWNED=1
+  gc_release_guard || return 1
 }
 
 trap 'gc_release_lifecycle_lock >/dev/null 2>&1 || true' EXIT
@@ -1097,8 +1335,47 @@ finally:
 PY
 }
 
+verify_parent_version_authority() {
+  local control="$1" version="$2"
+  python3 - "$control" "$version" <<'PY'
+import hashlib
+import os
+import re
+import stat
+import sys
+
+control, version = sys.argv[1:]
+names = ["approved-design.md", "approved-plan.md", "brief-exec.md"]
+if version == "hybrid-0.4":
+    names.append("approved-task-dag.json")
+elif version != "hybrid-0.3":
+    raise SystemExit(1)
+
+def regular(path):
+    value = os.lstat(path)
+    if stat.S_ISLNK(value.st_mode) or not stat.S_ISREG(value.st_mode):
+        raise SystemExit(1)
+
+manifest = os.path.join(control, "approved.sha256")
+regular(manifest)
+with open(manifest, "r", encoding="utf-8", newline="") as handle:
+    lines = handle.read().splitlines()
+if len(lines) != len(names):
+    raise SystemExit(1)
+for line, name in zip(lines, names):
+    match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9._-]+)", line)
+    if not match or match.group(2) != name:
+        raise SystemExit(1)
+    path = os.path.join(control, name)
+    regular(path)
+    with open(path, "rb") as handle:
+        if hashlib.sha256(handle.read()).hexdigest() != match.group(1):
+            raise SystemExit(1)
+PY
+}
+
 archive_parent_artifacts() {
-  local mission_dir="$1" control="$2" slug="$3"
+  local mission_dir="$1" control="$2" slug="$3" mission_version="$4"
   local archive_root="$HUB/archive" archive_dir="$HUB/archive/$slug"
   local design_source plan_source source destination archive_index
   local sources=() destinations=()
@@ -1118,7 +1395,9 @@ archive_parent_artifacts() {
   sources=(
     "$design_source"
     "$plan_source"
-    "$control/approved-task-dag.json"
+    "$control/approved-design.md"
+    "$control/approved-plan.md"
+    "$control/brief-exec.md"
     "$control/decisions.md"
     "$mission_dir/report.md"
     "$control/verification.md"
@@ -1126,11 +1405,17 @@ archive_parent_artifacts() {
   destinations=(
     "$archive_dir/design.md"
     "$archive_dir/plan.md"
-    "$archive_dir/approved-task-dag.json"
+    "$archive_dir/approved-design.md"
+    "$archive_dir/approved-plan.md"
+    "$archive_dir/brief-exec.md"
     "$archive_dir/DECISIONS.md"
     "$archive_dir/report.md"
     "$archive_dir/verification.md"
   )
+  if [[ "$mission_version" == hybrid-0.4 ]]; then
+    sources+=("$control/approved-task-dag.json")
+    destinations+=("$archive_dir/approved-task-dag.json")
+  fi
   for source in "${sources[@]}"; do
     [[ -f "$source" && ! -L "$source" ]] || return 1
   done
@@ -1249,9 +1534,11 @@ clean_exact_parent_mission() {
   local target_snapshot target_snapshot_hash snapshot_stage snapshot_count snapshot_lines snapshot_tip
   local snapshot_repo snapshot_target snapshot_parent snapshot_extra
   local worktree branch parent_tip repo target extra expected_branch
+  local normalized_target_ref normalized_parent_ref resolved_target_ref
   local pr_metadata pr_repo pr_target pr_status pr_id pr_merge pr_extra pr_line
   local repo_phys repo_common worktree_common actual_tip target_tip local_tip remote_tip registered
   local archive_dir="$HUB/archive/$slug" row_count=0 index
+  local mission_version classifier
   local worktrees=() branches=() tips=() repos=() targets=() target_tips=()
   local epoch_target_tips=() local_tips=() remote_tips=()
 
@@ -1291,6 +1578,26 @@ clean_exact_parent_mission() {
     parent_cleanup_failure "$control" "$slug parent cleanup manifest is missing or unsafe"
     return 1
   }
+  classifier="$GC_SCRIPT_DIR/classify-mission-version.sh"
+  [[ -x "$classifier" ]] || {
+    parent_cleanup_failure "$control" "$slug mission classifier is unavailable"
+    return 1
+  }
+  mission_version="$($classifier --mission-dir "$mission_dir" --control-dir "$control" 2>/dev/null)" || {
+    parent_cleanup_failure "$control" "$slug mission version authority is partial, contradictory, or unsafe"
+    return 1
+  }
+  case "$mission_version" in
+    hybrid-0.3|hybrid-0.4) ;;
+    *)
+      parent_cleanup_failure "$control" "$slug parent DAG GC supports only classified Hybrid 0.3 or 0.4 authority"
+      return 1
+      ;;
+  esac
+  verify_parent_version_authority "$control" "$mission_version" || {
+    parent_cleanup_failure "$control" "$slug approved authority manifest is incomplete, noncanonical, or changed"
+    return 1
+  }
   if [[ "$CLEAN" -eq 1 ]]; then
     pending_request_rc=0
     consume_parent_lock_pending "$control" || pending_request_rc=$?
@@ -1315,7 +1622,9 @@ clean_exact_parent_mission() {
       return 1
       ;;
   esac
-  parent_children_are_archived "$control" "$slug" || return 1
+  if [[ "$mission_version" == hybrid-0.4 ]]; then
+    parent_children_are_archived "$control" "$slug" || return 1
+  fi
   manifest_hash="$(file_hash "$manifest")"
   pr_metadata="$control/pr-merge-metadata"
   if [[ -e "$pr_metadata" || -L "$pr_metadata" ]]; then
@@ -1346,6 +1655,20 @@ clean_exact_parent_mission() {
       parent_cleanup_failure "$control" "$slug target branch is invalid"
       return 1
     }
+    normalized_target_ref="$(git -C "$repo" check-ref-format --normalize "refs/heads/$target" 2>/dev/null || true)"
+    normalized_parent_ref="$(git -C "$repo" check-ref-format --normalize "refs/heads/$branch" 2>/dev/null || true)"
+    resolved_target_ref="$(git -C "$repo" symbolic-ref --quiet "$normalized_target_ref" 2>/dev/null || true)"
+    if [[ -n "$resolved_target_ref" ]]; then
+      resolved_target_ref="$(git -C "$repo" check-ref-format --normalize "$resolved_target_ref" 2>/dev/null || true)"
+    else
+      resolved_target_ref="$normalized_target_ref"
+    fi
+    if [[ -z "$normalized_target_ref" || -z "$normalized_parent_ref" || \
+      -z "$resolved_target_ref" || "$normalized_target_ref" == "$normalized_parent_ref" || \
+      "$resolved_target_ref" == "$normalized_parent_ref" ]]; then
+      parent_cleanup_failure "$control" "$slug target branch aliases the mission-owned parent ref"
+      return 1
+    fi
     [[ -d "$repo" && ! -L "$repo" ]] || {
       parent_cleanup_failure "$control" "$slug manifest repository is unavailable"
       return 1
@@ -1526,7 +1849,7 @@ clean_exact_parent_mission() {
     parent_cleanup_failure "$control" "$slug parent cleanup journal preparation failed"
     return 1
   }
-  archive_parent_artifacts "$mission_dir" "$control" "$slug" || {
+  archive_parent_artifacts "$mission_dir" "$control" "$slug" "$mission_version" || {
     parent_cleanup_failure "$control" "$slug required parent archive artifacts are missing, unsafe, or changed"
     return 1
   }
@@ -1651,80 +1974,261 @@ clean_exact_parent_mission() {
   }
 }
 
-clean_manifest_row() {
-  local slug="$1" worktree="$2" branch="$3" repo="$4"
-  local row_safe=1 remote_state
+legacy_worktree_is_clean_or_planted() {
+  local slug="$1" worktree="$2" status settings stamp expected actual
+  status="$(git -C "$worktree" status --porcelain --untracked-files=all 2>/dev/null)" || return 1
+  [[ -z "$status" ]] && return 0
+  [[ "$status" == "?? .claude/settings.local.json" ]] || return 1
+  settings="$worktree/.claude/settings.local.json"
+  stamp="$HUB/control/$slug/worker-settings.sha256"
+  [[ -f "$settings" && ! -L "$settings" && -f "$stamp" && ! -L "$stamp" ]] || return 1
+  expected="$(read_task_value "$stamp" 2>/dev/null || true)"
+  actual="$(file_hash "$settings")"
+  [[ -n "$expected" && "$expected" == "$actual" ]]
+}
 
-  case "$branch" in
-    orc/*) ;;
-    *) return 0 ;;
+legacy_manifest_epoch_matches() {
+  local slug="$1" mission_state_file="$2" manifest="$3" manifest_hash="$4"
+  local worktree="$5" branch="$6" base="$7" repo="$8"
+  local expected_worktree="$9" expected_local="${10}" expected_remote="${11}"
+  local repo_phys repo_common registered=0 worktree_phys worktree_common actual_branch
+  local actual_tip local_tip remote_tip state
+
+  [[ -f "$mission_state_file" && ! -L "$mission_state_file" ]] || return 1
+  state="$(read_task_value "$mission_state_file" 2>/dev/null || true)"
+  is_completed_state "$state" || return 1
+  [[ -f "$manifest" && ! -L "$manifest" && "$(file_hash "$manifest")" == "$manifest_hash" ]] || return 1
+  [[ -d "$repo" && ! -L "$repo" ]] || return 1
+  repo_phys="$(cd "$repo" && pwd -P 2>/dev/null || true)"
+  [[ -n "$repo_phys" && "$repo_phys" == "$repo" ]] || return 1
+  repo_common="$(cd "$repo" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P 2>/dev/null || true)"
+  [[ -n "$repo_common" ]] || return 1
+  [[ "$branch" == "orc/$slug" ]] || return 1
+  [[ "$(git -C "$repo" check-ref-format --normalize "refs/heads/$branch" 2>/dev/null || true)" == "refs/heads/$branch" ]] || return 1
+  case "$base" in ''|*[!0-9a-fA-F]*) return 1 ;; esac
+  [[ "$(git -C "$repo" rev-parse --verify "${base}^{commit}" 2>/dev/null || true)" == "$base" ]] || return 1
+
+  git -C "$repo" worktree list --porcelain 2>/dev/null | grep -Fxq "worktree $worktree" && registered=1
+  case "$expected_worktree" in
+    present)
+      [[ -d "$worktree" && ! -L "$worktree" && "$registered" -eq 1 ]] || return 1
+      worktree_phys="$(cd "$worktree" && pwd -P 2>/dev/null || true)"
+      [[ -n "$worktree_phys" && "$worktree_phys" == "$worktree" ]] || return 1
+      worktree_common="$(cd "$worktree" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P 2>/dev/null || true)"
+      [[ "$worktree_common" == "$repo_common" ]] || return 1
+      actual_branch="$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+      actual_tip="$(git -C "$worktree" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+      [[ "$actual_branch" == "$branch" && "$actual_tip" == "$base" ]] || return 1
+      legacy_worktree_is_clean_or_planted "$slug" "$worktree" || return 1
+      ;;
+    absent)
+      [[ "$registered" -eq 0 && ! -e "$worktree" && ! -L "$worktree" ]] || return 1
+      ;;
+    *) return 1 ;;
   esac
-  if [[ -z "$repo" || ! -d "$repo/.git" ]]; then
+
+  local_tip="$(git -C "$repo" rev-parse --verify "refs/heads/${branch}^{commit}" 2>/dev/null || true)"
+  case "$expected_local" in
+    present) [[ "$local_tip" == "$base" ]] || return 1 ;;
+    absent) [[ -z "$local_tip" ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+  remote_tip="$(child_remote_branch_tip "$repo" "$branch")"
+  [[ "$remote_tip" != error ]] || return 1
+  case "$expected_remote" in
+    present) [[ "$remote_tip" == "$base" ]] || return 1 ;;
+    absent) [[ "$remote_tip" == absent ]] || return 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+clean_manifest_row() {
+  local slug="$1" mission_state_file="$2" manifest="$3" manifest_hash="$4"
+  local worktree="$5" branch="$6" base="$7" repo="$8"
+  local expected_branch="orc/$slug" repo_phys repo_common worktree_common worktree_state
+  local registered=0 local_tip remote_tip local_state remote_state
+
+  [[ "$branch" == "$expected_branch" ]] || {
+    problem "$slug legacy manifest branch is outside its exact mission namespace"
+    return 1
+  }
+  if [[ -z "$repo" || (! -e "$repo" && ! -L "$repo") ]]; then
     # Cross-device hubs legitimately contain absolute repo paths from another
     # machine. They are not actionable here and must not block local cleanup.
     return 0
   fi
+  [[ -d "$repo" && ! -L "$repo" ]] || {
+    problem "$slug legacy manifest repository path is unsafe"
+    return 1
+  }
+  repo_phys="$(cd "$repo" && pwd -P 2>/dev/null || true)"
+  [[ -n "$repo_phys" && "$repo_phys" == "$repo" ]] || {
+    problem "$slug legacy manifest repository path is not exact and canonical"
+    return 1
+  }
+  repo_common="$(cd "$repo" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P 2>/dev/null || true)"
+  [[ -n "$repo_common" ]] || {
+    problem "$slug legacy manifest repository is not Git"
+    return 1
+  }
+  [[ "$(git -C "$repo" check-ref-format --normalize "refs/heads/$branch" 2>/dev/null || true)" == "refs/heads/$branch" ]] || {
+    problem "$slug legacy manifest branch is invalid"
+    return 1
+  }
+  case "$base" in ''|*[!0-9a-fA-F]*)
+    problem "$slug legacy manifest base SHA is invalid"
+    return 1
+    ;;
+  esac
+  [[ "$(git -C "$repo" rev-parse --verify "${base}^{commit}" 2>/dev/null || true)" == "$base" ]] || {
+    problem "$slug legacy manifest base SHA does not resolve exactly"
+    return 1
+  }
 
-  if [[ -d "$worktree" ]]; then
-    note "stale worktree ($slug): $worktree"
-  fi
-  if git -C "$repo" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-    note "stale local branch ($slug): $branch in $repo"
-  fi
-  remote_state="$(remote_branch_state "$repo" "$branch")"
-  if [[ "$remote_state" == present ]]; then
-    note "stale remote branch ($slug): $branch on origin"
-  elif [[ "$remote_state" == error ]]; then
-    ERRORS=$((ERRORS + 1))
-    row_safe=0
-  fi
-
-  [[ "$CLEAN" -eq 1 ]] || return 0
-  [[ "$row_safe" -eq 1 ]] || return 1
-
-  if [[ -d "$worktree" ]]; then
-    remove_planted_settings "$slug" "$worktree" || row_safe=0
-    if [[ "$row_safe" -eq 1 ]] && [[ -n "$(git -C "$worktree" status --porcelain --untracked-files=all 2>/dev/null)" ]]; then
+  git -C "$repo" worktree list --porcelain 2>/dev/null | grep -Fxq "worktree $worktree" && registered=1
+  if [[ -d "$worktree" && ! -L "$worktree" ]]; then
+    [[ "$registered" -eq 1 && "$(cd "$worktree" && pwd -P 2>/dev/null || true)" == "$worktree" ]] || {
+      problem "$slug legacy worktree path or registration is not exact"
+      return 1
+    }
+    worktree_common="$(cd "$worktree" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P 2>/dev/null || true)"
+    [[ "$worktree_common" == "$repo_common" && \
+      "$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" == "$branch" && \
+      "$(git -C "$worktree" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)" == "$base" ]] || {
+      problem "$slug legacy worktree identity or tip differs from exact authority"
+      return 1
+    }
+    legacy_worktree_is_clean_or_planted "$slug" "$worktree" || {
       problem "$worktree has uncommitted or untracked files"
-      row_safe=0
-    fi
-    if [[ "$row_safe" -eq 1 ]]; then
-      if git -C "$repo" worktree remove "$worktree" >/dev/null 2>&1; then
-        echo "  removed worktree"
-      else
-        problem "git refused to remove worktree $worktree"
-        row_safe=0
-      fi
-    fi
+      return 1
+    }
+    worktree_state=present
+    note "stale worktree ($slug): $worktree"
+  elif [[ "$registered" -eq 1 || -e "$worktree" || -L "$worktree" ]]; then
+    problem "$slug legacy worktree path is unsafe or missing while registered"
+    return 1
+  else
+    worktree_state=absent
   fi
 
-  if [[ "$row_safe" -eq 1 ]] && git -C "$repo" show-ref --verify --quiet "refs/heads/$branch" 2>/dev/null; then
-    git -C "$repo" worktree prune >/dev/null 2>&1 || true
-    if git -C "$repo" branch -D "$branch" >/dev/null 2>&1; then
-      echo "  deleted local branch"
-    else
-      problem "could not delete local branch $branch (it may be checked out elsewhere)"
-      row_safe=0
-    fi
+  local_tip="$(git -C "$repo" rev-parse --verify "refs/heads/${branch}^{commit}" 2>/dev/null || true)"
+  if [[ -n "$local_tip" ]]; then
+    [[ "$local_tip" == "$base" ]] || {
+      problem "$slug legacy local branch tip changed"
+      return 1
+    }
+    local_state=present
+    note "stale local branch ($slug): $branch in $repo"
+  else
+    local_state=absent
+  fi
+  remote_tip="$(child_remote_branch_tip "$repo" "$branch")"
+  if [[ "$remote_tip" == error ]]; then
+    problem "$slug legacy remote-state check failed; exact resources preserved"
+    return 1
+  elif [[ "$remote_tip" != absent ]]; then
+    [[ "$remote_tip" == "$base" ]] || {
+      problem "$slug legacy remote branch tip changed; exact resources preserved"
+      return 1
+    }
+    remote_state=present
+    note "stale remote branch ($slug): $branch on origin"
+  else
+    remote_state=absent
   fi
 
-  if [[ "$row_safe" -eq 1 && "$remote_state" == present ]]; then
-    if git -C "$repo" push origin --delete "$branch" >/dev/null 2>&1; then
-      echo "  deleted remote branch"
-    else
-      problem "could not delete remote branch origin/$branch"
-      row_safe=0
-    fi
+  legacy_manifest_epoch_matches "$slug" "$mission_state_file" "$manifest" "$manifest_hash" \
+    "$worktree" "$branch" "$base" "$repo" "$worktree_state" "$local_state" "$remote_state" || {
+    problem "$slug legacy cleanup authority changed after validation; exact resources preserved"
+    return 1
+  }
+  [[ "$CLEAN" -eq 1 ]] || return 0
+
+  if [[ "$worktree_state" == present ]]; then
+    legacy_manifest_epoch_matches "$slug" "$mission_state_file" "$manifest" "$manifest_hash" \
+      "$worktree" "$branch" "$base" "$repo" present "$local_state" "$remote_state" || {
+      problem "$slug legacy cleanup authority changed before worktree deletion"
+      return 1
+    }
+    remove_planted_settings "$slug" "$worktree" || return 1
+    legacy_manifest_epoch_matches "$slug" "$mission_state_file" "$manifest" "$manifest_hash" \
+      "$worktree" "$branch" "$base" "$repo" present "$local_state" "$remote_state" || {
+      problem "$slug legacy cleanup authority changed after local settings removal"
+      return 1
+    }
+    git -C "$repo" worktree remove "$worktree" >/dev/null 2>&1 || {
+      problem "git refused to remove exact worktree $worktree"
+      return 1
+    }
+    worktree_state=absent
+    echo "  removed worktree"
   fi
 
-  if [[ "$row_safe" -eq 1 ]]; then
-    rmdir "$(dirname "$worktree")" 2>/dev/null || true
+  if [[ "$local_state" == present ]]; then
+    legacy_manifest_epoch_matches "$slug" "$mission_state_file" "$manifest" "$manifest_hash" \
+      "$worktree" "$branch" "$base" "$repo" "$worktree_state" present "$remote_state" || {
+      problem "$slug legacy cleanup authority changed before local branch deletion"
+      return 1
+    }
+    git -C "$repo" update-ref -d "refs/heads/$branch" "$base" >/dev/null 2>&1 || {
+      problem "could not delete exact local branch $branch"
+      return 1
+    }
+    local_state=absent
+    echo "  deleted local branch"
+  fi
+
+  if [[ "$remote_state" == present ]]; then
+    legacy_manifest_epoch_matches "$slug" "$mission_state_file" "$manifest" "$manifest_hash" \
+      "$worktree" "$branch" "$base" "$repo" "$worktree_state" "$local_state" present || {
+      problem "$slug legacy cleanup authority changed before remote branch deletion"
+      return 1
+    }
+    git -C "$repo" push --force-with-lease="refs/heads/$branch:$base" \
+      origin ":refs/heads/$branch" >/dev/null 2>&1 || {
+      problem "could not delete exact remote branch origin/$branch"
+      return 1
+    }
+    remote_state=absent
+    [[ "$(child_remote_branch_tip "$repo" "$branch")" == absent ]] || {
+      problem "$slug legacy remote branch deletion could not be verified"
+      return 1
+    }
+    echo "  deleted remote branch"
+  fi
+
+  legacy_manifest_epoch_matches "$slug" "$mission_state_file" "$manifest" "$manifest_hash" \
+    "$worktree" "$branch" "$base" "$repo" "$worktree_state" "$local_state" "$remote_state" || {
+    problem "$slug legacy cleanup authority changed after exact deletion"
+    return 1
+  }
+  [[ "$worktree_state" == absent ]] && rmdir "$(dirname "$worktree")" 2>/dev/null || true
+}
+
+scan_legacy_manifest_rows() {
+  local slug="$1" mission_state_file="$2" manifest="$3" manifest_hash="$4"
+  local worktree branch base repo extra row_count=0 row_safe=1
+  while IFS=$'\t' read -r worktree branch base repo extra || [[ -n "${worktree:-}" ]]; do
+    row_count=$((row_count + 1))
+    if [[ -z "${worktree:-}" || -z "${branch:-}" || -z "${base:-}" || \
+      -z "${repo:-}" || -n "${extra:-}" ]]; then
+      problem "$slug legacy worktree manifest is malformed"
+      row_safe=0
+      continue
+    fi
+    clean_manifest_row "$slug" "$mission_state_file" "$manifest" "$manifest_hash" \
+      "$worktree" "$branch" "$base" "$repo" || row_safe=0
+  done < "$manifest"
+  if [[ "$row_count" -eq 0 || "$row_count" -ne "$(wc -l < "$manifest" | tr -d ' ')" ]]; then
+    problem "$slug legacy worktree manifest has blank, unterminated, or malformed rows"
+    row_safe=0
   fi
   [[ "$row_safe" -eq 1 ]]
 }
 
 scan_root() {
-  local root="$1" root_phys mission mission_phys slug state manifest worktree branch base repo
+  local root="$1" root_phys mission mission_phys slug state manifest manifest_hash
+  local requested_clean control control_phys control_root_phys lock_held legacy_safe
   [[ -d "$root" && ! -L "$root" ]] || return 0
   root_phys="$(cd "$root" && pwd -P 2>/dev/null || true)"
   [[ -n "$root_phys" ]] || return 0
@@ -1745,15 +2249,49 @@ scan_root() {
       -L "$HUB/control/$slug/parent-cleanup-manifest.txt" ]]; then
       continue
     fi
-    [[ -f "$mission/state" ]] || continue
-    state="$(tr -d '[:space:]' < "$mission/state")"
+    [[ -f "$mission/state" && ! -L "$mission/state" ]] || continue
+    state="$(read_task_value "$mission/state" 2>/dev/null || true)"
     is_completed_state "$state" || continue
     manifest="$mission/worktrees.txt"
-    [[ -f "$manifest" ]] || continue
-    while IFS=$'\t' read -r worktree branch base repo || [[ -n "${worktree:-}" ]]; do
-      [[ -n "${worktree:-}" && -n "${branch:-}" && -n "${repo:-}" ]] || continue
-      clean_manifest_row "$slug" "$worktree" "$branch" "$repo" || true
-    done < "$manifest"
+    [[ -f "$manifest" && ! -L "$manifest" ]] || continue
+    manifest_hash="$(file_hash "$manifest")"
+    requested_clean="$CLEAN"
+    lock_held=0
+    control="$HUB/control/$slug"
+    if [[ "$requested_clean" -eq 1 && (-e "$control" || -L "$control") ]]; then
+      [[ -d "$control" && ! -L "$control" ]] || {
+        problem "$slug legacy coordinator control entry is unsafe"
+        continue
+      }
+      control_root_phys="$(cd "$HUB/control" && pwd -P 2>/dev/null || true)"
+      control_phys="$(cd "$control" && pwd -P 2>/dev/null || true)"
+      if [[ -z "$control_root_phys" || -z "$control_phys" || "$control_phys" != "$control" || \
+        "$(dirname "$control_phys")" != "$control_root_phys" || "$(basename "$control_phys")" != "$slug" ]]; then
+        problem "$slug legacy coordinator control entry is not exact and canonical"
+        continue
+      fi
+      if ! gc_acquire_lifecycle_lock "$control_phys"; then
+        problem "$slug legacy coordinator lifecycle mutation lock is unsafe or busy"
+        gc_release_lifecycle_lock >/dev/null 2>&1 || true
+        continue
+      fi
+      lock_held=1
+    fi
+    legacy_safe=1
+    if [[ "$requested_clean" -eq 1 ]]; then
+      CLEAN=0
+      if ! scan_legacy_manifest_rows "$slug" "$mission/state" "$manifest" "$manifest_hash"; then
+        legacy_safe=0
+      fi
+      CLEAN=1
+    fi
+    if [[ "$legacy_safe" -eq 1 ]]; then
+      scan_legacy_manifest_rows "$slug" "$mission/state" "$manifest" "$manifest_hash" || true
+    fi
+    CLEAN="$requested_clean"
+    if [[ "$lock_held" -eq 1 ]] && ! gc_release_lifecycle_lock; then
+      problem "$slug legacy coordinator lifecycle mutation lock release failed"
+    fi
   done
 }
 

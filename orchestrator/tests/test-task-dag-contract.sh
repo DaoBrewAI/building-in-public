@@ -5,6 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TEMPLATE="$ROOT/templates/task-dag.json"
 VALIDATOR="$ROOT/scripts/validate-task-dag.sh"
+CLASSIFIER="$ROOT/scripts/classify-mission-version.sh"
 BRIEF="$ROOT/templates/brief-codex.md"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -170,6 +171,85 @@ make_control() {
   printf 'approved brief\n' > "$control/brief-exec.md"
   (cd "$control" && shasum -a 256 approved-design.md approved-plan.md brief-exec.md > approved.sha256)
 }
+make_native_mission() {
+  local root="$1"
+  local mission="$root/hub/missions/contract-test"
+  local control="$root/hub/control/contract-test"
+  mkdir -p "$mission" "$control"
+  make_control "$control"
+  printf '0.4.0\n' > "$control/pipeline-version"
+  printf 'request\n' > "$mission/request.md"
+  printf 'Briefs: brief.md, brief-exec.md\n' > "$mission/MISSION.md"
+  printf 'planned\n' > "$mission/state"
+  printf 'backend: hybrid\nstage: plan\n' > "$mission/session.txt"
+}
+freeze_initializes_classifiable_empty_registry() {
+  local root="$TMP/classifiable-freeze"
+  local mission control
+  mkdir -p "$root"
+  root="$(cd "$root" && pwd -P)"
+  mission="$root/hub/missions/contract-test"
+  control="$root/hub/control/contract-test"
+  make_native_mission "$root"
+  "$VALIDATOR" --freeze "$TMP/valid.json" "$control" || return 1
+  [[ -d "$control/tasks" && ! -L "$control/tasks" ]] || return 1
+  [[ -z "$(find "$control/tasks" -mindepth 1 -print -quit)" ]] || return 1
+  [[ "$($CLASSIFIER --mission-dir "$mission" --control-dir "$control")" == hybrid-0.4 ]]
+}
+completed_freeze_retry_initializes_registry() {
+  local root="$TMP/completed-registry-retry"
+  local mission control
+  mkdir -p "$root"
+  root="$(cd "$root" && pwd -P)"
+  mission="$root/hub/missions/contract-test"
+  control="$root/hub/control/contract-test"
+  make_native_mission "$root"
+  cp "$TMP/valid.json" "$control/approved-task-dag.json"
+  (cd "$control" && shasum -a 256 approved-task-dag.json >> approved.sha256)
+  [[ ! -e "$control/tasks" && ! -L "$control/tasks" ]] || return 1
+  "$VALIDATOR" --freeze "$TMP/valid.json" "$control" || return 1
+  [[ -d "$control/tasks" && ! -L "$control/tasks" ]] || return 1
+  [[ -z "$(find "$control/tasks" -mindepth 1 -print -quit)" ]] || return 1
+  (cd "$control" && shasum -a 256 -c approved.sha256 >/dev/null) || return 1
+  [[ "$($CLASSIFIER --mission-dir "$mission" --control-dir "$control")" == hybrid-0.4 ]]
+}
+existing_task_registry_is_preserved() {
+  local root="$TMP/existing-registry"
+  local control="$root/hub/control/contract-test"
+  make_native_mission "$root"
+  mkdir "$control/tasks"
+  mkdir "$control/tasks/task-a"
+  printf 'integrated\n' > "$control/tasks/task-a/state"
+  "$VALIDATOR" --freeze "$TMP/valid.json" "$control" || return 1
+  [[ "$(cat "$control/tasks/task-a/state")" == integrated ]]
+}
+incompatible_task_registry_is_rejected() {
+  local file_control="$TMP/file-registry-control"
+  local link_control="$TMP/link-registry-control"
+  local link_target="$TMP/link-registry-target"
+  local file_manifest="$TMP/file-registry-approved.sha256"
+  local link_manifest="$TMP/link-registry-approved.sha256"
+  make_control "$file_control"
+  printf 'occupied\n' > "$file_control/tasks"
+  cp "$file_control/approved.sha256" "$file_manifest"
+  if "$VALIDATOR" --freeze "$TMP/valid.json" "$file_control"; then
+    return 1
+  fi
+  [[ "$(cat "$file_control/tasks")" == occupied ]] || return 1
+  [[ ! -e "$file_control/approved-task-dag.json" ]] || return 1
+  cmp -s "$file_manifest" "$file_control/approved.sha256" || return 1
+
+  make_control "$link_control"
+  mkdir "$link_target"
+  ln -s "$link_target" "$link_control/tasks"
+  cp "$link_control/approved.sha256" "$link_manifest"
+  if "$VALIDATOR" --freeze "$TMP/valid.json" "$link_control"; then
+    return 1
+  fi
+  [[ -L "$link_control/tasks" && "$(readlink "$link_control/tasks")" == "$link_target" ]] || return 1
+  [[ ! -e "$link_control/approved-task-dag.json" ]] || return 1
+  cmp -s "$link_manifest" "$link_control/approved.sha256"
+}
 freezes() {
   local control="$TMP/control"
   make_control "$control"
@@ -193,7 +273,11 @@ freezes_staged_snapshot() {
 #!/bin/sh
 "$ORC_TEST_REAL_PYTHON" "$@"
 rc="$?"
-if [ "$rc" -eq 0 ] && [ "$#" -eq 2 ] && \
+case "${2:-}" in
+  */.approved-task-dag.json.*) staged_validation=1 ;;
+  *) staged_validation=0 ;;
+esac
+if [ "$rc" -eq 0 ] && [ "$staged_validation" -eq 1 ] && \
     [ ! -e "$ORC_TEST_MUTATION_MARKER" ]; then
   printf '{}\n' > "$ORC_TEST_MUTATE_DAG"
   : > "$ORC_TEST_MUTATION_MARKER"
@@ -510,6 +594,14 @@ check "validator requires declared verification commands" rejects "$TMP/incomple
 check "validator rejects unknown task states" rejects "$TMP/bad-state.json"
 check "Fable brief requires task-dag.json beside plan.md" grep -Fq -- 'task-dag.json' "$BRIEF"
 check "validated DAG freezes into the approved hash contract" freezes
+check "successful native freeze leaves an immediately classifiable empty task registry" \
+  freeze_initializes_classifiable_empty_registry
+check "retry from DAG-present registry-absent authority converges classification" \
+  completed_freeze_retry_initializes_registry
+check "successful freeze preserves an existing coordinator task registry" \
+  existing_task_registry_is_preserved
+check "freeze rejects file and symlink task registry authority without publication" \
+  incompatible_task_registry_is_rejected
 check "validator rejects non-canonical repo-relative file paths" rejects_each \
   "$TMP/bad-path-absolute.json" "$TMP/bad-path-leading-dot.json" \
   "$TMP/bad-path-dot-segment.json" "$TMP/bad-path-dotdot-segment.json"
