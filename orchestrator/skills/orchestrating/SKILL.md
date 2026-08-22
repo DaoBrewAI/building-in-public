@@ -574,6 +574,125 @@ reworks, or explicit user cancellation. Stop a live worker before writing
 `failed`. Preserve worktrees, branches, artifacts, and last errors for salvage;
 a failed mission does not block another repo owner.
 
+## Codex continuation boundary
+
+Codex continuation uses only supported lifecycle boundaries: the plugin's
+`hooks/hooks.json` runs `hooks/codex-continuation.sh` at `PreCompact` and at
+`SessionStart` with `source=compact`.
+The exact Codex context percentage is unavailable; never claim or emulate the Claude coordinator's separate threshold.
+The adapter does not parse `transcript_path` because its format is not stable.
+The binding helper supports Python 3.9 or newer and avoids syntax introduced
+after Python 3.9.
+
+Before recording a continuation request, write every pending mission, task, registry, decision, BLOCKED, report, and coordinator state update durably.
+Publish a strict one-line coordinator session authority under
+`$HUB/control/coordinators/` for each exact coordinator task that may own this
+boundary. A session is not a coordinator merely because it is not an accepted
+child. Only an exact authorized session with at least one eligible nonterminal
+mission may publish, emit, record, reject, or accept a continuation. Completed,
+accepted, collected, failed, unrelated, and child sessions emit nothing.
+
+The adapter writes an immutable request-scoped carryover under
+`$HUB/control/continuations/carryovers/`; `$HUB/CARRYOVER.md` is only a latest
+human-readable pointer and never acceptance authority. The canonical request
+binds the exact mission, task generation, and durable state snapshot. It also
+binds the physical hub and mission/task paths; exact coordinator authority;
+every mission/task state, generation, and accepted-child
+identity with bytes, hashes, device, inode, size, and path; plus the immutable
+carryover bytes and epoch. Its request ID is the SHA-256 of the entire canonical
+binding. Publish both the strict one-line request and its inode/content binding
+receipt with fsync and no-clobber semantics. Set `umask 077` before store work:
+continuation directories use mode `0700`, and request, carryover, health,
+receipt, provenance, promotion, and coordinator-authority files use mode `0600`.
+Every `SessionStart`, attempt, rejection, and acceptance entry must
+recompute the digest, re-derive the current hub and carryover authority, and
+reject any mutation, symlink, escape, malformed JSON, or state drift.
+
+Automatic and manual triggers for the same exact coordinator and hub-state
+epoch are equivalent and converge to one request ID. Event and trigger values
+never enter request identity or canonical carryover bytes; preserve them as
+request-scoped no-clobber provenance receipts. Equivalent concurrent calls
+reuse the request while preserving each distinct provenance.
+
+Preflight every physical hub/control/mission/task/store/carryover component
+before mutation; never `mkdir -p` through an unverified ancestor. Store creation
+uses dirfd/openat-style no-follow traversal. One bounded in-memory coordinator
+snapshot supplies the state hash, carryover, binding, request, and receipt; do
+not independently reread the hub between those outputs. If a matching
+`PreCompact` cannot prove carryover, request, binding-receipt, and directory
+durability, return the supported blocking response with `continue:false` and do
+not allow compaction. Repeated delivery for the same exact source and state
+reuses the immutable request. Never restart, replace, resume, or duplicate active child execution during carryover.
+
+After compact `SessionStart` injects the request ID, append any relevant
+in-context-only knowledge to durable state before task creation, then revalidate
+the request's exact state and carryover hashes. Render
+`templates/continuation.md` and create one fresh project-local Codex task, not a
+fork. Record its provisional ID with the adapter. Apply the full Codex Loop
+Engineering continuation health check: exact list/read visibility, title, first
+turn, normal active/completed status, startup evidence, and requested settings
+evidence.
+Pass the request's exact coordinator session ID on every attempt/reject/accept
+adapter call. One crash-recoverable, no-symlink, hard-link protocol lock covers
+request and attempt terminal transitions so accept and reject cannot both win.
+Stale-lock recovery first returns one fd-read canonical epoch containing exact
+dev/inode/size/content hash/token plus owner liveness. Guard hard-link creation,
+guard/current same-fd reread, exact epoch comparison, and relative unlink all
+run in the verified parent dirfd. If the path changes from dead A to any B,
+recovery removes only its exact guard, preserves B, and retries or fails closed;
+no transition may publish until this lock acquisition succeeds.
+The accept operation reads bounded health evidence once, validates and hashes
+those same bytes, publishes an immutable request-scoped copy, and binds the
+accepted receipt to that copy and the request binding receipt. Only then publish
+the accepted continuation receipt. A failed or unreadable provisional task gets a durable
+rejection receipt and at most one replacement. A second failure is BLOCKED;
+exactly one task can be accepted for the request.
+
+Immediately after health acceptance, run the explicit promotion operation:
+
+```text
+hooks/codex-continuation.sh --promote-coordinator \
+  --hub "$HUB" --request-id "<request-id>" \
+  --coordinator-session-id "<source-coordinator-id>" \
+  --thread-id "<exact-accepted-thread-id>"
+```
+
+Promotion uses the same protocol lock, verifies the accepted receipt and exact
+request generation, and publishes a private staged authority plus exact intent.
+The staged authority is inactive. A single canonical regular fsynced atomic
+no-clobber `<request-id>.promotion-commit.json` marker binds the old authority
+inode/bytes/hash, staged new authority, accepted receipt/thread, request binding,
+and mission/task generation/state. Classification derives ownership only from
+that committed epoch: old is the sole coordinator before commit and new is the
+sole coordinator after commit. New-authority, legacy supersession, and promotion
+summary files are post-commit retriable evidence and never control eligibility.
+Crash, TERM, or ordinary retry at every boundary converges idempotently. The
+accepted task is not a coordinator until the commit marker is durable; never
+infer promotion from a filename convention.
+
+Every authority read opens the verified absolute parent component-by-component
+with dirfd plus `O_DIRECTORY|O_NOFOLLOW`, then opens the leaf relative to that
+dirfd with `O_NOFOLLOW`, checks the exact dev/inode/mode/size epoch, performs a
+bounded read on that same file descriptor, and rechecks the epoch. Never use a
+path-based `open()` after `lstat()` for request, state, coordinator, receipt,
+health, carryover, or lock authority.
+
+An exact accepted receipt is terminal. `PreCompact`, compact `SessionStart`, and
+manual retries for that request are silent terminal no-ops; they never inject or
+create another continuation. Malformed terminal receipts fail closed rather
+than being treated as absent.
+An exhausted second attempt is also terminal. Record, accept, and exact-reason
+reject replays are artifact-free successes; a conflicting reject reason fails
+closed and preserves the original receipt.
+
+When automatic lifecycle delivery or task creation is unavailable, use the
+same manual coordinator boundary: finish and fsync the durable coordinator
+state, invoke `hooks/codex-continuation.sh --manual --hub "$HUB" --session-id
+"<current-task-id>"`, then follow the identical provisional-attempt, health
+check, and acceptance protocol, passing `--coordinator-session-id
+"<current-task-id>"` for each transition. Manual continuation does not invent a context
+percentage and does not weaken duplicate or child-execution suppression.
+
 ## Board and carryover
 
 Regenerate board.html from `$PLUGIN_DIR/templates/board.html` on every state

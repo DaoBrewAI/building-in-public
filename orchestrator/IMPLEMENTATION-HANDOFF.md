@@ -258,6 +258,65 @@ same-bytes/new-inode manifest replacement.
 Task 8 still waits for Task 7. Start Task 7 from the accepted Task 6
 coordinator skill so continuation behavior does not overwrite GC/rework rules.
 
+## Task 7 accepted evidence
+
+Task 7 is implemented and independently accepted. The existing Claude 65%
+`Stop` hook and Claude plugin manifest remain byte-identical. Codex continuation
+uses the supported default `hooks/hooks.json` shape with `PreCompact` and
+`SessionStart source=compact`; it does not invent or emulate an unsupported
+Codex context percentage. Manual coordinator continuation uses the same durable
+protocol.
+
+The adapter writes one trigger-neutral, content-addressed request per exact
+coordinator/hub epoch. One in-memory snapshot produces state, request-scoped
+carryover, binding, and request bytes. All protocol mutations use verified
+dirfds, `O_NOFOLLOW`, fsynced no-clobber publication, private 0700/0600 modes,
+and a recoverable transaction lock. PreCompact returns `continue:false` when
+durability cannot be proven. Active children, unrelated sessions, terminal
+missions, accepted requests, and exhausted requests do not replay.
+
+Acceptance uses an immutable single-read health snapshot and allows at most one
+replacement. Promotion is explicit: inactive staged authority and intent never
+affect eligibility; one fsynced atomic promotion-commit marker switches the
+sole coordinator owner. Every injected promotion crash boundary and protocol
+lock recovery preserves exactly one eligible coordinator. The promoted task can
+then issue exactly one next continuation; the old coordinator is suppressed.
+
+Exact final evidence on macOS Bash 3.2.57 and Python 3.9.6:
+
+```text
+$ bash orchestrator/tests/test-continuation-contract.sh
+continuation-contract: 164/164
+
+$ bash orchestrator/tests/run.sh
+all 13 primary test files PASS
+
+$ bash orchestrator/codex-tests/run.sh
+All three compatibility tests PASS.
+
+$ /usr/bin/python3 --version
+Python 3.9.6
+
+$ git diff --check
+exit 0
+```
+
+Independent specification and quality reviews both returned PASS. They replayed
+request mutation, path/store swaps, torn snapshots, accept/reject concurrency,
+terminal replay, auto/manual deduplication, health swaps, coordinator promotion,
+six promotion crash stages, stale/malformed/symlink authorities, fd-safe read
+swaps, and dead-lock-to-live-lock replacement.
+
+## Dependency-ready set after Task 7
+
+| Task | Why ready | Exclusive file set |
+| --- | --- | --- |
+| 8. End-to-end verification, documentation, and packaging | Tasks 5+6+7 independently accepted | End-to-end tests, README/state diagrams/migration notes, validated existing-plugin manifests/version, and coordinator documentation only as needed |
+
+Task 8 is the only remaining implementation checkpoint. It must start from the
+accepted Task 7 commit, preserve every earlier focused contract, and finish with
+one final independent full-diff review before local integration.
+
 ## Dependency-ready set after Tasks 2-4
 
 | Task | Why ready | Exclusive file set |

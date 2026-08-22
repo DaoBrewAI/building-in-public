@@ -1,0 +1,31 @@
+{
+  "description": "Durable Codex coordinator carryover at supported compaction lifecycle boundaries.",
+  "hooks": {
+    "PreCompact": [
+      {
+        "matcher": "^(manual|auto)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/hooks/codex-continuation.sh\"",
+            "timeout": 30,
+            "statusMessage": "Saving durable orchestrator carryover"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "^compact$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${PLUGIN_ROOT}/hooks/codex-continuation.sh\"",
+            "timeout": 30,
+            "statusMessage": "Loading durable orchestrator continuation"
+          }
+        ]
+      }
+    ]
+  }
+}
