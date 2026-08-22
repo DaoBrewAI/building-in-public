@@ -479,5 +479,269 @@ check "tab or newline task identity is refused" bash -c \
 check "worktree owned by another active task is refused" bash -c \
   '[[ -x "$1" && "$2" -ne 0 ]]' _ "$LIFECYCLE" "$OWNER_RC"
 
+# Rework may reuse only the exact retained task authority after collection.
+REWORK_CONTROL_TASK="$CONTROL/tasks/task-a"
+printf 'collected\n' > "$REWORK_CONTROL_TASK/state"
+printf 'collected\n' > "$TASK_DIR/state"
+printf '01a0task-worktree-thread\n' > "$REWORK_CONTROL_TASK/accepted-thread-id"
+printf '01a0task-worktree-thread\n' > "$TASK_DIR/accepted-thread-id"
+printf 'unarchived\n' > "$REWORK_CONTROL_TASK/task-window-state"
+printf 'updated parent\n' > "$PARENT/rework-parent.txt"
+git -C "$PARENT" add rework-parent.txt
+git -C "$PARENT" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+  commit -qm rework-parent
+UPDATED_PARENT_TIP="$(git -C "$PARENT" rev-parse HEAD)"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 1 \
+  >/dev/null 2>&1
+REWORK_BRANCH_PRESENT_RC=$?
+check "reprovision refuses while the old local branch remains" bash -c \
+  '[[ "$1" -ne 0 && ! -e "$2" ]] && git -C "$3" show-ref --verify --quiet refs/heads/orc-task/mission/task-a' \
+  _ "$REWORK_BRANCH_PRESENT_RC" "$CHILD" "$REPO"
+git -C "$REPO" update-ref -d refs/heads/orc-task/mission/task-a
+
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$TMP/wrong-rework-child" --expected-generation 1 \
+  >/dev/null 2>&1
+check "reprovision refuses a worktree path different from retained authority" bash -c \
+  '[[ "$1" -ne 0 && ! -e "$2" && ! -e "$3" ]]' \
+  _ "$?" "$TMP/wrong-rework-child" "$CHILD"
+
+printf 'archived\n' > "$REWORK_CONTROL_TASK/task-window-state"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 1 \
+  >/dev/null 2>&1
+check "reprovision requires the exact accepted thread to be unarchived" bash -c \
+  '[[ "$1" -ne 0 && ! -e "$2" ]]' _ "$?" "$CHILD"
+
+printf 'unarchived\n' > "$REWORK_CONTROL_TASK/task-window-state"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 2 \
+  >/dev/null 2>&1
+check "reprovision rejects a stale or skipped expected generation" bash -c \
+  '[[ "$1" -ne 0 && ! -e "$2" && "$(cat "$3/generation" 2>/dev/null)" = 1 ]]' \
+  _ "$?" "$CHILD" "$REWORK_CONTROL_TASK"
+
+REPROVISION_FSYNC_MARKER="$TMP/reprovision-fsync-marker"
+ORC_REPROVISION_FSYNC_TEST_MARKER="$REPROVISION_FSYNC_MARKER" \
+  ORC_REPROVISION_REQUIRE_FSYNC_TEST_MARKER="$REPROVISION_FSYNC_MARKER" \
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 1 \
+  >"$TMP/reprovision-final.out" 2>"$TMP/reprovision-final.err"
+REPROVISION_RC=$?
+if [[ "$REPROVISION_RC" -ne 0 ]]; then
+  sed 's/^/  reprovision diagnostic: /' "$TMP/reprovision-final.err"
+fi
+check "exact collected authority reprovisions generation two from updated parent" bash -c \
+  '[[ "$1" -eq 0 && -d "$2" && "$(git -C "$2" rev-parse HEAD)" = "$3" && "$(cat "$4/generation")" = 2 && "$(cat "$5/generation")" = 2 && "$(cat "$4/state")" = ready && "$(cat "$5/state")" = ready && "$(cat "$4/accepted-thread-id")" = "$6" ]] && cmp -s "$4/worktrees.txt" "$5/worktrees.txt" && [[ ! "$4/worktrees.txt" -ef "$5/worktrees.txt" ]]' \
+  _ "$REPROVISION_RC" "$CHILD" "$UPDATED_PARENT_TIP" "$REWORK_CONTROL_TASK" "$TASK_DIR" 01a0task-worktree-thread
+check "reprovision fsync boundary runs before authority replacement" test -s "$REPROVISION_FSYNC_MARKER"
+
+printf 'collected\n' > "$REWORK_CONTROL_TASK/state"
+printf 'collected\n' > "$TASK_DIR/state"
+git -C "$REPO" worktree remove "$CHILD" >/dev/null
+git -C "$REPO" update-ref -d refs/heads/orc-task/mission/task-a
+printf 'second updated parent\n' > "$PARENT/rework-parent-2.txt"
+git -C "$PARENT" add rework-parent-2.txt
+git -C "$PARENT" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+  commit -qm rework-parent-2
+SECOND_UPDATED_PARENT_TIP="$(git -C "$PARENT" rev-parse HEAD)"
+ORC_REPROVISION_TEST_FAIL_PUBLISH_AFTER=3 \
+  ORC_REPROVISION_TEST_FAIL_RESTORE_AFTER=1 \
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 2 \
+  >/dev/null 2>&1
+PARTIAL_REPROVISION_RC=$?
+check "mid-batch publication plus restore failure preserves durable recovery evidence" bash -c \
+  '[[ "$1" -ne 0 && -s "$2/reprovision-intent" && -d "$3" ]] && git -C "$4" show-ref --verify --quiet refs/heads/orc-task/mission/task-a && [[ -n "$(find "$2" -maxdepth 1 -name ".reprovision-stage.*" -print -quit)" && -n "$(find "$2" -maxdepth 1 -name ".reprovision-backup.*" -print -quit)" ]]' \
+  _ "$PARTIAL_REPROVISION_RC" "$REWORK_CONTROL_TASK" "$CHILD" "$REPO"
+
+ORC_REPROVISION_TEST_FAIL_AFTER_CONVERGE=1 \
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 2 \
+  >"$TMP/reprovision-reconcile.out" 2>"$TMP/reprovision-reconcile.err"
+INTERRUPTED_RECONCILE_RC=$?
+if [[ "$INTERRUPTED_RECONCILE_RC" -eq 0 ]]; then
+  sed 's/^/  reprovision reconcile diagnostic: /' "$TMP/reprovision-reconcile.err"
+fi
+check "post-convergence interruption retains intent over exact generation three" bash -c \
+  '[[ "$1" -ne 0 && "$(cat "$2/generation")" = 3 && "$(cat "$3/generation")" = 3 && "$(cat "$2/state")" = ready && "$(cat "$3/state")" = ready && -s "$2/reprovision-intent" ]] && cmp -s "$2/worktrees.txt" "$3/worktrees.txt"' \
+  _ "$INTERRUPTED_RECONCILE_RC" "$REWORK_CONTROL_TASK" "$TASK_DIR"
+for PARTIAL_CLEANUP_DIR in "$REWORK_CONTROL_TASK"/.reprovision-backup.* "$TASK_DIR"/.reprovision-stage.*; do
+  [[ -d "$PARTIAL_CLEANUP_DIR" && ! -L "$PARTIAL_CLEANUP_DIR" ]] || continue
+  rm -rf "$PARTIAL_CLEANUP_DIR"
+done
+
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 2 \
+  >/dev/null 2>&1
+RECONCILE_REPROVISION_RC=$?
+check "reprovision retry reconciles partial authority to exact generation three" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/generation")" = 3 && "$(cat "$3/generation")" = 3 && "$(cat "$2/state")" = ready && "$(cat "$3/state")" = ready && "$(cat "$2/accepted-thread-id")" = "$4" && "$(git -C "$5" rev-parse HEAD)" = "$6" && ! -e "$2/reprovision-intent" ]] && cmp -s "$2/worktrees.txt" "$3/worktrees.txt" && [[ -z "$(find "$2" -maxdepth 1 \( -name ".reprovision-stage.*" -o -name ".reprovision-backup.*" \) -print -quit)" ]]' \
+  _ "$RECONCILE_REPROVISION_RC" "$REWORK_CONTROL_TASK" "$TASK_DIR" 01a0task-worktree-thread "$CHILD" "$SECOND_UPDATED_PARENT_TIP"
+
+printf 'collected\n' > "$REWORK_CONTROL_TASK/state"
+printf 'collected\n' > "$TASK_DIR/state"
+git -C "$REPO" worktree remove "$CHILD" >/dev/null
+git -C "$REPO" update-ref -d refs/heads/orc-task/mission/task-a
+printf 'third updated parent\n' > "$PARENT/rework-parent-3.txt"
+git -C "$PARENT" add rework-parent-3.txt
+git -C "$PARENT" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+  commit -qm rework-parent-3
+THIRD_UPDATED_PARENT_TIP="$(git -C "$PARENT" rev-parse HEAD)"
+ORC_REPROVISION_TEST_FAIL_AFTER_INTENT_REMOVAL_NORMAL=1 \
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+NORMAL_POST_INTENT_RC=$?
+check "normal success interruption after intent removal leaves exact generation four" bash -c \
+  '[[ "$1" -ne 0 && "$(cat "$2/generation")" = 4 && "$(cat "$3/generation")" = 4 && "$(cat "$2/state")" = ready && "$(cat "$3/state")" = ready && ! -e "$2/reprovision-intent" && -s "$2/reprovision-completion.json" && "$(git -C "$4" rev-parse HEAD)" = "$5" ]] && cmp -s "$2/worktrees.txt" "$3/worktrees.txt"' \
+  _ "$NORMAL_POST_INTENT_RC" "$REWORK_CONTROL_TASK" "$TASK_DIR" "$CHILD" "$THIRD_UPDATED_PARENT_TIP"
+
+printf 'unrelated-thread\n' > "$REWORK_CONTROL_TASK/accepted-thread-id"
+printf 'unrelated-thread\n' > "$TASK_DIR/accepted-thread-id"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+check "completion receipt rejects both-side accepted-thread mutation" test "$?" -ne 0
+printf '01a0task-worktree-thread\n' > "$REWORK_CONTROL_TASK/accepted-thread-id"
+printf '01a0task-worktree-thread\n' > "$TASK_DIR/accepted-thread-id"
+
+cp "$REWORK_CONTROL_TASK/worktrees.txt" "$TMP/receipt-control-manifest"
+cp "$TASK_DIR/worktrees.txt" "$TMP/receipt-worker-manifest"
+printf '\n' >> "$REWORK_CONTROL_TASK/worktrees.txt"
+printf '\n' >> "$TASK_DIR/worktrees.txt"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+check "completion receipt rejects extra blank manifest lines on both sides" test "$?" -ne 0
+cp "$TMP/receipt-control-manifest" "$REWORK_CONTROL_TASK/worktrees.txt"
+cp "$TMP/receipt-worker-manifest" "$TASK_DIR/worktrees.txt"
+
+printf 'dirty completion\n' > "$CHILD/receipt-dirty.txt"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+check "completion receipt rejects a dirty worktree" test "$?" -ne 0
+rm -f "$CHILD/receipt-dirty.txt"
+
+RECEIPT_BRANCH_TIP="$(git -C "$REPO" rev-parse "refs/heads/orc-task/mission/task-a")"
+RECEIPT_MUTATED_TIP="$(printf 'receipt branch mutation\n' | git -C "$REPO" commit-tree "$(git -C "$REPO" rev-parse "${RECEIPT_BRANCH_TIP}^{tree}")" -p "$RECEIPT_BRANCH_TIP")"
+git -C "$REPO" update-ref refs/heads/orc-task/mission/task-a "$RECEIPT_MUTATED_TIP" "$RECEIPT_BRANCH_TIP"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+check "completion receipt rejects branch and worktree tip mutation" test "$?" -ne 0
+git -C "$REPO" update-ref refs/heads/orc-task/mission/task-a "$RECEIPT_BRANCH_TIP" "$RECEIPT_MUTATED_TIP"
+
+printf 'blocked\n' > "$TASK_DIR/state"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+check "completion receipt rejects one-sided worker authority mutation" test "$?" -ne 0
+printf 'ready\n' > "$TASK_DIR/state"
+
+RECEIPT_PATH="$REWORK_CONTROL_TASK/reprovision-completion.json"
+RECEIPT_BACKUP="$TMP/reprovision-completion.json"
+RECEIPT_WAS_PRESENT=0
+if [[ -f "$RECEIPT_PATH" && ! -L "$RECEIPT_PATH" ]]; then
+  cp "$RECEIPT_PATH" "$RECEIPT_BACKUP"
+  RECEIPT_WAS_PRESENT=1
+  rm -f "$RECEIPT_PATH"
+fi
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+check "completion inference fails closed when the exact receipt is absent" test "$?" -ne 0
+if [[ "$RECEIPT_WAS_PRESENT" -eq 1 ]]; then
+  cp "$RECEIPT_BACKUP" "$RECEIPT_PATH"
+fi
+
+if [[ "$RECEIPT_WAS_PRESENT" -eq 1 ]]; then
+  rm -f "$RECEIPT_PATH"
+  ln -s "$RECEIPT_BACKUP" "$RECEIPT_PATH"
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+    --mission mission --task-id task-a --repo "$REPO" \
+    --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+    >/dev/null 2>&1
+  RECEIPT_SYMLINK_RC=$?
+  rm -f "$RECEIPT_PATH"
+  cp "$RECEIPT_BACKUP" "$RECEIPT_PATH"
+else
+  RECEIPT_SYMLINK_RC=0
+fi
+check "completion receipt symlink is refused" test "$RECEIPT_SYMLINK_RC" -ne 0
+
+if [[ "$RECEIPT_WAS_PRESENT" -eq 1 ]]; then
+  printf '{"invalid":true}\n' > "$RECEIPT_PATH"
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+    --mission mission --task-id task-a --repo "$REPO" \
+    --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+    >/dev/null 2>&1
+  RECEIPT_FORMAT_RC=$?
+  cp "$RECEIPT_BACKUP" "$RECEIPT_PATH"
+else
+  RECEIPT_FORMAT_RC=0
+fi
+check "malformed completion receipt is refused" test "$RECEIPT_FORMAT_RC" -ne 0
+
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 3 \
+  >/dev/null 2>&1
+NORMAL_COMPLETION_RETRY_RC=$?
+check "exact retry recognizes already-completed normal generation four" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/generation")" = 4 && "$(cat "$3/generation")" = 4 && -d "$4" && "$(git -C "$4" rev-parse HEAD)" = "$5" ]]' \
+  _ "$NORMAL_COMPLETION_RETRY_RC" "$REWORK_CONTROL_TASK" "$TASK_DIR" "$CHILD" "$THIRD_UPDATED_PARENT_TIP"
+
+printf 'collected\n' > "$REWORK_CONTROL_TASK/state"
+printf 'collected\n' > "$TASK_DIR/state"
+git -C "$REPO" worktree remove "$CHILD" >/dev/null
+git -C "$REPO" update-ref -d refs/heads/orc-task/mission/task-a
+printf 'fourth updated parent\n' > "$PARENT/rework-parent-4.txt"
+git -C "$PARENT" add rework-parent-4.txt
+git -C "$PARENT" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+  commit -qm rework-parent-4
+FOURTH_UPDATED_PARENT_TIP="$(git -C "$PARENT" rev-parse HEAD)"
+ORC_REPROVISION_TEST_FAIL_PUBLISH_AFTER=3 \
+  ORC_REPROVISION_TEST_FAIL_RESTORE_AFTER=1 \
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 4 \
+  >/dev/null 2>&1
+RECOVERY_WINDOW_PREP_RC=$?
+ORC_REPROVISION_TEST_FAIL_AFTER_INTENT_REMOVAL_RECOVERY=1 \
+  "$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 4 \
+  >/dev/null 2>&1
+RECOVERY_POST_INTENT_RC=$?
+check "recovery success interruption after intent removal leaves exact generation five" bash -c \
+  '[[ "$1" -ne 0 && "$2" -ne 0 && "$(cat "$3/generation")" = 5 && "$(cat "$4/generation")" = 5 && ! -e "$3/reprovision-intent" && -s "$3/reprovision-completion.json" && "$(cat "$3/state")" = ready && "$(cat "$4/state")" = ready && "$(git -C "$5" rev-parse HEAD)" = "$6" ]] && cmp -s "$3/worktrees.txt" "$4/worktrees.txt"' \
+  _ "$RECOVERY_WINDOW_PREP_RC" "$RECOVERY_POST_INTENT_RC" "$REWORK_CONTROL_TASK" "$TASK_DIR" "$CHILD" "$FOURTH_UPDATED_PARENT_TIP"
+"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  --mission mission --task-id task-a --repo "$REPO" \
+  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 4 \
+  >/dev/null 2>&1
+RECOVERY_COMPLETION_RETRY_RC=$?
+check "exact retry recognizes already-completed recovery generation five" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/generation")" = 5 && "$(cat "$3/generation")" = 5 && -d "$4" && "$(git -C "$4" rev-parse HEAD)" = "$5" ]]' \
+  _ "$RECOVERY_COMPLETION_RETRY_RC" "$REWORK_CONTROL_TASK" "$TASK_DIR" "$CHILD" "$FOURTH_UPDATED_PARENT_TIP"
+
 echo "  child-worktree-contract: $OK/$N"
 [[ "$OK" -eq "$N" ]]

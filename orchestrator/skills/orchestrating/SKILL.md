@@ -202,6 +202,14 @@ integrates verified commits, and collects child resources. Mission child
 threads never create grandchildren and never schedule, replace, or resume
 another task.
 
+The durable child lifecycle is `ready -> running -> completed -> integrated -> collected`.
+Only the coordinator advances `completed` to `integrated` after exact manifest
+and verification checks, and only exact resource GC advances `integrated` to
+`collected`. `cleanup_pending` is a retriable cleanup overlay: it records the
+last safe terminal step plus a cleanup-journal reason and retains every exact
+authority record needed for retry. It never makes a task dependency-ready and
+never authorizes integration or deletion by itself.
+
 ### Compute the ready set
 
 Use only the coordinator-owned, frozen task DAG and task registry. A task is
@@ -242,6 +250,10 @@ the continuation health check proves all of the following:
 
 Only after all checks pass may the coordinator add the thread ID and owner to
 the authoritative task registry and expose it in mission handoff/status files.
+Publish the exact accepted thread ID as a strict one-line, fsynced scalar in
+both the coordinator task authority and its separate worker-facing authority
+copy; the coordinator copy remains authoritative, and later reprovision must
+require the two values to match before issuing a completion receipt.
 On a failed or unreadable health check, remove or mark stale any provisional
 record and allow at most one replacement from the same current durable brief.
 If that one replacement also fails, write a coordinator BLOCKED outcome; never
@@ -265,6 +277,48 @@ when the task reaches a terminal state or a tracked wake fires. After each
 verified integration, recompute the ready set; when every task is integrated,
 set the parent mission to `executed` and enter Fable review.
 
+### Integrate and collect a completed child
+
+Run `scripts/integrate-task.sh` only from the coordinator with the exact
+coordinator control directory, task directory, mission/task identities, parent
+worktree, and current expected parent tip. It verifies `completed`, the exact
+one-row coordinator manifest, `orc-task/<mission>/<task-id>`, the recorded
+base, exact child and parent tips, clean worktrees, child-tip and parent-tip
+verification attestations, a durable report, and no unresolved rework.
+Hold the mission's inherited-FD advisory integration lock across the final
+tip check, merge, and authority publication. Integrate with a normal merge
+commit of the immutable verified child-tip SHA, never the mutable child branch
+name, so both recorded histories remain
+ancestors; never rebase, squash, reset, amend, force-update, or otherwise
+rewrite either history. Record `integrated_sha` and the exact child/parent
+evidence before advancing both durable states to `integrated`. A verified
+repeat is an idempotent no-op.
+
+Immediate child GC consumes only the exact coordinator manifest and integration
+records. It proves that the parent contains `integrated_sha`, the integration
+contains the recorded child tip, the child worktree is clean and still owns the
+exact branch, and local and remote refs still match. It removes only that
+worktree and exact local ref. It may delete the matching remote ref only after
+a successful remote-state check. Dirty, unmerged, malformed, changed, running,
+completed-but-unintegrated, failed, blocked, review, and rework resources are
+preserved. A transient or unsafe cleanup failure appends the reason, records
+`cleanup_pending`, and retries from durable authority during Phase 0. Missing
+already-removed exact resources are accepted only when all remaining ancestry
+and authority evidence verifies, so repeated collection is idempotent.
+GC and `task-worktree.sh create/reprovision` hold one shared coordinator lifecycle mutation lock
+for each mission. The lock uses exact inode ownership,
+live-owner refusal, and dead-owner recovery; no separate GC lock domain is
+allowed. GC snapshots generation plus the exact manifest hash and must
+revalidate the exact generation and manifest immediately before every
+worktree/ref deletion, cleanup-intent phase change, and final state publication.
+An epoch mismatch is stale work: stop without publishing state or deleting any
+newer-generation resource.
+Before the first destructive removal, publish and fsync an exact cleanup intent
+and append a durable cleanup-journal entry. After every exact resource is gone,
+advance that intent to `resources_collected` before publishing `collected`.
+If final state publication fails, retain the intent and reconcile it on retry;
+never infer collection merely from missing paths.
+
 ### Archive collected child task windows
 
 After durable verified integration and exact child worktree and branch
@@ -272,6 +326,9 @@ collection, archive the exact accepted child thread ID recorded in the
 authoritative task registry. Thread archival is post-collection hygiene, not
 evidence of completion, integration, or collection. Never archive running,
 blocked, review, or unresolved-rework tasks.
+
+Never archive running, blocked, review, or unresolved-rework tasks.
+Failed task windows and every active rework generation also remain visible.
 
 Repeated archival is idempotent. If the authoritative registry already records
 that exact thread ID as archived, perform no API call and leave the task state
@@ -281,6 +338,11 @@ On any other archive API failure, append `task-window archive failure: <reason>`
 to the cleanup journal, set the task cleanup state to retriable
 `cleanup_pending`, retain the exact accepted thread ID, and retry during Phase 0
 reconcile. Never report or record an unverified archive as successful.
+The coordinator records `task-window-archive-pending` so Git GC cannot mistake
+an archive-only retry for completed resource cleanup. After an authoritative
+successful or already-archived result, remove that marker and restore
+`collected`; archive failure remains `cleanup_pending` without deleting or
+forgetting the exact thread identity.
 
 ## Phase 4 — Event-driven wake handling
 
@@ -311,6 +373,40 @@ Read state when the tracked process exits:
   set retriable `cleanup_pending`, and do not reprovision or resume. After a
   verified unarchive, re-provision the task's exact manifest-recorded worktree
   path and branch from the updated parent tip, using the same sandbox root.
+  Invoke `$PLUGIN_DIR/scripts/task-worktree.sh reprovision` with the exact
+  retained control directory, task directory, mission/task identities, repo,
+  parent worktree, worktree path, and `--expected-generation <current>`. The
+  operation must hold the existing coordinator mutation lock; require terminal
+  `integrated`/`collected` authority, an absent old worktree and local branch,
+  the exact accepted thread recorded as unarchived, an updated parent tip, and
+  unchanged worktree/branch/repo/sandbox authority. It atomically publishes
+  matching coordinator and worker manifests, advances generation by exactly
+  one, records the new base, and returns both states to `ready`. Ordinary
+  `create` never overwrites retained task ownership. If new-authority batch
+  publication fails, attempt an exact guarded restore. When that restore is
+  incomplete, preserve reprovision-intent, staging, and backups together with
+  the exact new worktree/ref; never discard recovery evidence. A retry under
+  the same lifecycle lock validates the intent, thread identity, paths, branch,
+  new base, and clean worktree, then reconciles every coordinator and worker
+  authority file to the one recorded next generation before removing recovery
+  artifacts. Before publishing the intent or replacing authority, explicitly
+  fsync intent, stage, and backup contents plus their containing directories.
+  If execution stops after intent removal but before success returns, an exact
+  retry may recognize an already-converged reprovision epoch only when the
+  requested generation is exactly N, both authority copies are exactly N+1 and
+  `ready`, manifest/base/thread/sandbox/worktree/ref all match, and the worktree
+  is clean. This recognition additionally requires a regular, non-symlink,
+  fsynced reprovision completion receipt published before intent removal. The
+  receipt binds mission/task, old/new generation and base, canonical parent,
+  repo, worktree and task paths, branch and exact tips, accepted thread ID,
+  sandbox authority, strict one-row manifests and one-line scalar authorities,
+  plus exact coordinator and worker content hashes. Missing, malformed,
+  symlinked, stale, or hash-mismatched receipts fail closed. Return idempotent
+  success without rewriting that epoch only after validating the receipt.
+  A later exact operation may atomically supersede the receipt only while
+  holding the shared lifecycle lock; a stale receipt never authorizes a newer epoch.
+  Any partial or unrelated pre-existing resource remains a hard failure, and
+  ordinary `create` never enters this recognition path.
   Re-render its task brief and record the new generation and base SHA in the
   authoritative task registry. Only after those records are durable, resume
   the same accepted child thread with the exact findings it owns. Never resume
@@ -323,6 +419,9 @@ Read state when the tracked process exits:
   or task identity exists, use the explicit legacy single-executor fallback:
   resume the recorded `codex_thread_id` through `spawn-worker.sh --stage exec`
   in its existing mission worktree.
+  In short: unarchive the exact accepted child thread before any rework
+  reprovision or resume. Rearchive only after verified reintegration and exact
+  worktree and branch collection, always using that same accepted thread ID.
 - `blocked`: mediate in Phase 5 and resume whichever backend is named by the
   last `stage:` line.
 - `review`: verify approved hashes again, then accept in Phase 6.

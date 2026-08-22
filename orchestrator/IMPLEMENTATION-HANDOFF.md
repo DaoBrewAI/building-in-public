@@ -148,6 +148,62 @@ collisions, approved-hash inheritance, kernel-released advisory freeze locks,
 no-clobber publication, exact worktree ownership, concurrent single-winner
 creation, signal-window rollback, and child task-window archive/unarchive rules.
 
+## Task 5 accepted evidence
+
+Task 5 is implemented and independently accepted. Child integration merges only
+the attested immutable child SHA and verifies the exact merge parents. Immediate
+child GC is generation- and manifest-bound, shares the lifecycle lock with
+create/reprovision, persists cleanup intent before mutation, revalidates the
+epoch before every destructive or final-publication boundary, and deletes a
+remote branch only with an exact-tip lease plus absence verification.
+
+Task-scoped rework now has an executable exact reprovision path. It reuses the
+accepted task ID and canonical repo/worktree/branch/sandbox authority, advances
+the generation from the updated parent tip, and retains fsynced intent,
+staging, backups, and a canonical completion receipt across every ambiguous
+signal window. The completion receipt binds the exact authority bytes/hashes,
+task ID, generations, paths, bases, and tips; missing, symlinked, malformed,
+stale, dirty, multiline, or mutated authority fails closed.
+
+Exact final evidence on macOS Bash 3.2.57:
+
+```text
+$ bash orchestrator/tests/test-child-integration-gc-contract.sh
+child-integration-gc-contract: 74/74
+
+$ bash orchestrator/tests/test-child-worktree-contract.sh
+child-worktree-contract: 45/45
+
+$ bash orchestrator/tests/test-orchestrator-gc.sh
+orchestrator-gc: completed parent and integrated child resources removed; unsafe resources preserved
+
+$ bash orchestrator/tests/run.sh
+all 11 primary test files PASS
+
+$ bash orchestrator/codex-tests/run.sh
+All three compatibility tests PASS.
+
+$ git diff --check
+exit 0
+```
+
+Independent specification and adversarial quality reviews both returned PASS.
+The quality review replayed the GC/reprovision interleaving, partial rollback,
+post-intent-removal signals, both-side accepted-task mutation, multiline
+manifest mutation, dirty/tip/one-sided authority mutation, and missing,
+symlinked, malformed, and stale completion receipts.
+
+## Dependency-ready set after Task 5
+
+| Task | Why ready | Exclusive file set |
+| --- | --- | --- |
+| 6. Parent mission GC | Task 5 accepted | Parent-GC extension of `scripts/orchestrator-gc.sh`, coordinator contract, parent-GC tests, and archive fixtures |
+| 7. Carryover and verified continuation | Task 4 accepted; must start from the Task 5 coordinator contract | Codex hook manifest/adapter, continuation template/test, and continuation-only coordinator documentation |
+
+Task 8 still waits for Tasks 6+7. Task 6 and Task 7 may be delegated only
+after exact worktree/thread health checks and only if their final writable file
+sets are disjoint; otherwise run them sequentially.
+
 ## Dependency-ready set after Tasks 2-4
 
 | Task | Why ready | Exclusive file set |
