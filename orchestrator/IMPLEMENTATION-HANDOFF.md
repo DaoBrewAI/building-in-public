@@ -204,6 +204,60 @@ Task 8 still waits for Tasks 6+7. Task 6 and Task 7 may be delegated only
 after exact worktree/thread health checks and only if their final writable file
 sets are disjoint; otherwise run them sequentially.
 
+## Task 6 accepted evidence
+
+Task 6 is implemented and independently accepted. Parent collection now runs as
+Phase 0 compensation before scheduling, requires resolved review, a clean exact
+manifest worktree, and proof that the recorded parent tip is contained in the
+target branch. Optional PR metadata is additive and its merge commit must also
+contain the recorded parent tip. Local and remote deletion are exact-tip leased.
+
+Transient archive, network, target-movement, and lifecycle-lock failures retain
+resources and durable retry evidence. A losing GC never overwrites the live lock
+owner's state: it publishes a canonical, fsynced hard-link/no-clobber pending
+request bound to the manifest hash/device/inode/size and state
+hash/device/inode/bytes. Locked reconciliation consumes only an exact epoch.
+Same-bytes/new-inode replacements, symlink/path aliases, malformed authority,
+target rewind, partial archive writes, and stale markers all fail closed.
+
+The required archive bundle preserves design, plan, approved DAG, decisions,
+report, verification, and cleanup journal. Parent GC also requires every
+recorded terminal child task window to have an exact accepted task ID and
+archived state; nonterminal or unresolved children preserve the parent.
+
+Exact final evidence on macOS Bash 3.2.57:
+
+```text
+$ bash orchestrator/tests/test-parent-gc-contract.sh
+parent-gc-contract: 46/46
+
+$ bash orchestrator/tests/run.sh
+all 12 primary test files PASS
+
+$ bash orchestrator/codex-tests/run.sh
+All three compatibility tests PASS.
+
+$ bash -n orchestrator/scripts/orchestrator-gc.sh
+exit 0
+
+$ git diff --check
+exit 0
+```
+
+Independent specification and quality reviews both returned PASS after replaying
+PR-parent binding, hub/mission/control/tasks/task symlink aliases, missing task
+identity, target rewind, archive short-write, live-lock publication races, and
+same-bytes/new-inode manifest replacement.
+
+## Dependency-ready set after Task 6
+
+| Task | Why ready | Exclusive file set |
+| --- | --- | --- |
+| 7. Carryover and verified continuation | Task 4 accepted; Task 5/6 coordinator contract is now stable | Codex hook manifest/adapter, continuation template/test, and continuation-only coordinator documentation |
+
+Task 8 still waits for Task 7. Start Task 7 from the accepted Task 6
+coordinator skill so continuation behavior does not overwrite GC/rework rules.
+
 ## Dependency-ready set after Tasks 2-4
 
 | Task | Why ready | Exclusive file set |

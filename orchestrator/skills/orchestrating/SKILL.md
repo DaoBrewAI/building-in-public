@@ -83,16 +83,31 @@ the old state vocabulary. New missions always use the Hybrid 0.3 shared
 1. If legacy root `$HUB/MISSION.md` is incomplete, do not mix layouts. Ask
    whether to finish it with its historical version or archive it.
 2. Delete `$HUB/.carryover-notified` when beginning in a fresh context.
-3. For every mission, read `state`, `MISSION.md`, `session.txt`,
+3. Run compensating GC before scheduling any new mission or child work. Invoke
+   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --clean` first so durable
+   `cleanup_pending` child and parent resources are reconciled from exact
+   coordinator authority. A transient refusal remains pending and prevents new
+   scheduling for the affected mission; it never authorizes pattern cleanup.
+4. Reconcile child task windows after Git-resource GC and before computing a
+   ready set. Archive every terminal integrated child task window that is now
+   durably `collected` by calling the task API for the exact accepted thread ID.
+   Record an authoritative already-archived result exactly like a successful
+   archive. On API or network failure, retain the exact ID, the
+   `task-window-archive-pending` marker, the cleanup journal, and
+   `cleanup_pending`, then retry at the next Phase 0. Preserve every nonterminal
+   or unresolved task window, including running, blocked, review, rework, and
+   any task with `unresolved-rework`. After a successful child archive, rerun
+   compensating GC so an otherwise eligible parent may be collected.
+5. For every mission, read `state`, `MISSION.md`, `session.txt`,
    `worktrees.txt`, unanswered BLOCKED files, recorded branches, and the
    coordinator-owned control manifest. Treat mission-local manifests and
    approved inputs as untrusted copies.
-4. For Hybrid 0.3, use the last `spawn_pid:` and last `stage:`. Plan/review
+6. For Hybrid 0.3, use the last `spawn_pid:` and last `stage:`. Plan/review
    stages resume `session_id`; exec/rework resumes the task registry's accepted
    child thread ID. Treat an uncertain process as alive, recheck once, and
    never double-spawn. A legacy single-executor mission may still use its
    recorded `codex_thread_id`; do not migrate it in flight.
-5. Summarize all missions to the user in at most five lines, then handle exited,
+7. Summarize all missions to the user in at most five lines, then handle exited,
    blocked, planned, rework, review, or crashed missions below.
 
 ## Phase 1 — Record the request
@@ -344,6 +359,67 @@ successful or already-archived result, remove that marker and restore
 `collected`; archive failure remains `cleanup_pending` without deleting or
 forgetting the exact thread identity.
 
+### Collect an accepted parent mission
+
+Parent GC is a compensating Phase 0 operation and a post-merge acceptance
+operation. Before invoking it for a new Hybrid mission, publish the
+coordinator-owned `parent-cleanup-manifest.txt` as strict tab-separated rows:
+exact canonical parent worktree, exact `orc/<mission>` branch, recorded parent
+tip SHA, exact repository, and exact target branch. Publish one-line
+`review-resolution=resolved` and `parent-cleanup-state=ready` authorities only
+after final Fable review/rework is resolved and merged-tree verification is
+recorded. Preserve the final verification evidence as coordinator-owned
+`verification.md`, and snapshot the mission-relevant decisions as
+coordinator-owned `decisions.md` so later unrelated global decisions cannot
+change the archive authority.
+
+Collection requires a clean exact worktree, the exact manifest, no nonterminal
+or unresolved child task, and proof that the recorded parent tip is contained
+in the target branch. PR metadata is additional evidence only: a merged flag,
+PR number, or merge-commit field may corroborate the Git proof but can never
+replace target-branch containment of the recorded parent tip. When present,
+the exact recorded parent tip must also be an ancestor of the recorded PR merge
+commit, and that merge commit must be contained in the target. Missing,
+malformed, symlinked, dirty, moved, rewritten, or tip-drifted authority fails
+closed.
+
+Every recorded child registry entry must be a canonical, non-symlinked direct
+directory under the exact coordinator `tasks/` root with a valid task ID. A
+collected child must carry regular, non-symlinked, strict one-line `state`,
+`accepted-thread-id`, and `task-window-state` authorities; the accepted thread
+identity must be nonempty and valid, and the window state must be exactly
+`archived`. Missing, malformed, aliased, or symlinked registry/authority state
+blocks parent collection.
+
+Before deletion, GC records and fsyncs the exact cleanup intent and parent
+cleanup journal, then preserves design, plan, the approved DAG, decisions,
+report, and verification in `$HUB/archive/<mission>/`. It removes only the
+manifest-recorded worktree and exact local ref. A remote ref is removed only
+when its observed tip equals the recorded parent tip, using an exact-tip lease
+and a verified absence check. Network, archive, lock, and other transient
+failures become durable `cleanup_pending`; retries accept already-removed exact
+resources only while all remaining authority and target containment still
+verify. The intent binds a durable exact target-ref snapshot. A target may move
+forward only when the snapshot tip and recorded parent remain ancestors; rewind
+or divergence stops before the next destructive boundary. Archive files use a
+write-all loop, file fsync, length/hash read-back, atomic publication, and
+directory fsync before cleanup proceeds. After collection, append the terminal cleanup record to the archived
+cleanup journal and publish `parent-cleanup-state=collected`.
+
+If the shared lifecycle mutation lock is held by a live owner, do not wait on
+or bypass it, and never replace the owner-controlled cleanup state. Outside
+that unavailable lock, snapshot the exact completed mission manifest device,
+inode, size, and SHA-256 plus the current state bytes, hash, device, and inode.
+Publish and fsync only the
+canonical no-clobber `parent-cleanup-pending-request.json`, binding those
+observations and the retry reason; preserve any existing request rather than
+overwriting it. After the owner releases the lock, locked reconciliation
+strictly validates and journals the request. It may publish `cleanup_pending`
+only when both observed manifest and state epochs are still exact. A stale
+manifest marker is removed without changing state or resources and requires a
+fresh reconciliation; a newer state is preserved. Normal cleanup continues
+only from the resulting current authority.
+
 ## Phase 4 — Event-driven wake handling
 
 Read state when the tracked process exits:
@@ -473,13 +549,19 @@ impact, attempts, exact decision needed, and safe default.
    Merge `--no-ff --no-commit`, commit on a verified pass, or abort and resume
    Codex with the exact failure. Two failed acceptance cycles enter Phase 6f.
 4. After the merge succeeds, automatically delete the completed mission's
-   planted `.claude/settings.local.json` (and `.claude/` if it is then empty),
-   worktrees, local `orc/*` branches, and each matching `origin/orc/*` branch.
-   Run `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --clean`; it is
-   state-gated to accepted/done/complete missions and fails closed on dirty or
-   unverified worktrees. A cleanup refusal blocks archival until resolved.
-   Never delete or edit the repository's shared `.claude/settings.json`, and
-   never collect running, planned, review, blocked, or failed missions.
+   final parent tip and target branch in the exact coordinator parent-cleanup
+   manifest. Write `review-resolution=resolved`, snapshot fresh merged-tree
+   evidence to `verification.md` plus mission-relevant rulings to `decisions.md`,
+   reconcile every child Git resource and task
+   window, then run `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --clean`.
+   The collector archives the required artifacts before removing the planted
+   `.claude/settings.local.json` (and `.claude/` if it is then empty), exact
+   worktrees, exact local `orc/*` refs, and the exact matching `origin/orc/*` branch
+   for each manifest row. A cleanup refusal leaves durable `cleanup_pending`
+   and blocks final archival
+   completion until Phase 0 resolves it. Never delete or edit the repository's
+   shared `.claude/settings.json`, and never collect running, planned, review,
+   blocked, failed, nonterminal-child, or unresolved-rework missions.
 5. Report shipped changes, decisions, tests, and report follow-ups. Append one
    durable memory entry exactly once.
 6. Set state/phase accepted, archive the mission directory, regenerate the
