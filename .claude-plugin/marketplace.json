@@ -69,6 +69,33 @@
       },
       "category": "development",
       "source": "./restyle-ceramic-product-photo"
+    },
+    {
+      "name": "daobrew-video",
+      "description": "Apply DaoBrew's video editing house style to HyperFrames compositions — script-sourced captions, readable semi-transparent overlays, soft-blended PiP panels, and the DaoBrew amber + Plus Jakarta Sans outro card. Ships verbatim templates, brand tokens, and fonts.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./daobrew-video"
+    },
+    {
+      "name": "bazi-reader",
+      "description": "Generates a personalized Bazi (Chinese Four Pillars) reading from a birth datetime, including current monthly pillar (流月) interactions, with deterministic pillar computation scripts — never LLM arithmetic — plus red-flag validation tests.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./bazi-reader"
+    },
+    {
+      "name": "design-language-translator",
+      "description": "Translates plain-language design intentions into professional designer vocabulary (matching input language), with 2-3 alternative phrasings per complaint; when an image is attached, also runs an independent design audit flagging 1-3 high-impact issues.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./design-language-translator"
     }
   ]
 }

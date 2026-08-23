@@ -65,7 +65,9 @@ Here's the full flow for a depth-first query like "how does the auth system work
 
 7. Orchestrator applies the reporting contract:
    - Converts the verified draft into one canonical, self-contained mobile HTML report
-   - Adds the early `graphify-source` semantic template and persists only the HTML
+   - Persists it as `<dated-descriptive-folder>/report.html`; the folder README is only
+     a GitHub-rendered Reader link card and the repository root README stays unchanged
+   - Adds the early `graphify-source` semantic template and indexes only the HTML
    - Runs the Graphify conclusion/rationale/decision-status retrieval gate against the HTML
    - Runs 390 × 844 and 430 × 932 browser validation and publishes the private artifact
    - Creates centralized fallback Markdown only after a measured HTML retrieval failure plus retry

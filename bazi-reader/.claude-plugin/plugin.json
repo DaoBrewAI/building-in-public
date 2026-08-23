@@ -1,0 +1,14 @@
+{
+  "name": "bazi-reader",
+  "version": "0.1.0",
+  "description": "Generates a personalized Bazi (Chinese Four Pillars) reading from a birth datetime, including current monthly pillar (流月) interactions, with deterministic pillar computation scripts — never LLM arithmetic — plus red-flag validation tests.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "skills": [
+    "./skills/"
+  ],
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}

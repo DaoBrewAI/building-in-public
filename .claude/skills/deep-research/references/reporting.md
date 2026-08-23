@@ -29,17 +29,16 @@ After all tasks are complete (or enough data collected):
    is the source location, not the reading URL; for a private repository, publish the
    report as a direct, unarchived Actions artifact. Do not generate a sibling Markdown
    file unless the real Graphify retrieval gate fails. Follow
-   [mobile_delivery.md](mobile_delivery.md); the companion PDF in rule 2 is also part
-   of every delivery.
-2. **Companion PDF, every time (Linhan, 2026-08-10 — supersedes "PDF is not part of
-   this delivery workflow").** Alongside the canonical HTML, always deliver a PDF render
-   for phone/offline reading and easy sharing (GitHub renders PDFs inline, unlike HTML).
-   Requirements: preserve the HTML rendering (headless-Chrome print, forced light theme,
-   `<details>` opened, print CSS) and keep ALL hyperlinks working — external URLs and
-   internal anchor jumps alike.
+   [mobile_delivery.md](mobile_delivery.md).
+2. **PDF is an explicit fallback, not a default deliverable.** Generate it only when
+   the user asks for a PDF or when the verified HTML reading route cannot be published.
+   The HTML remains canonical and Graphify-indexed; the PDF is a derivative for
+   offline/download use. Preserve the HTML rendering (headless-Chrome print, forced
+   light theme, `<details>` opened, print CSS) and keep all external and internal links
+   working.
    **Use the ready pipeline: `references/scripts/html_report_to_pdf.py`** (SRC_HTML /
    PDF_ZOOM env vars; adjust GROUPS + NEEDLES per report — see its header comments).
-   The tuned recipe it encodes:
+   When PDF fallback is required, the tuned recipe is:
    - Chrome print crashes on large SVG-heavy documents → print in chunks, merge with
      pypdf; every chunk boundary forces a page break (a potential half-empty page), so
      make chunk groups as large as printing succeeds, splitting only the failing group.
@@ -124,12 +123,13 @@ After synthesizing the research findings:
 
 ### Step 1: Generate the canonical HTML
 
-Generate one self-contained `.html` report containing inline CSS, inline SVG diagrams,
+Generate one self-contained `report.html` containing inline CSS, inline SVG diagrams,
 confidence-colored citation superscripts, the numbered reference table, and the
 structured semantic template required by [mobile_delivery.md](mobile_delivery.md). Put
-that one file in the repository when the report is project state; use `/tmp` only for
-drafts or when the user asked for local-only artifacts. Then generate the companion PDF
-from this canonical HTML (Report Format rule 2) and commit it alongside.
+it inside one dated, descriptively named folder such as
+`explorations/2026-08-10-b2b-agent-harness-customers-market/report.html`; use `/tmp` only
+for drafts or when the user asked for local-only artifacts. Do not persist a Markdown
+report copy. Do not generate or persist a PDF unless Report Format rule 2 applies.
 
 Do not leave unique conclusions inside SVG text or interactive controls. Preserve a
 text equivalent in accessible body content and the semantic template. Add the report
@@ -146,8 +146,9 @@ Choose the least-public delivery method that meets the user's request:
 - **Private GitHub repository (default):** use the workflow in
   `templates/private-html-preview.yml` to publish a non-zipped, directly viewable HTML
   artifact. Run the workflow definition from the default branch and pass the exact
-  pushed report commit as `source_ref`. Return the completed run/artifact URL, not the
-  `blob` URL.
+  pushed report commit as `source_ref`. For a GitHub Free private repository, keep the
+  workflow's `archive: false` direct artifact. Return the completed run/artifact URL,
+  not the `blob` URL; `blob` and `raw` always identify source bytes.
 - **Stable private URL:** with explicit authorization, use an identity-protected static
   site as described in `mobile_delivery.md`.
 - **Local-only delivery:** return the absolute HTML file path and state that it is not
@@ -155,6 +156,15 @@ Choose the least-public delivery method that meets the user's request:
 
 Do not upload to a paste service or public Pages site unless the user explicitly
 authorizes public disclosure.
+
+After the artifact succeeds and opens, publish the report-folder link card required by
+`mobile_delivery.md`: create only that folder's tiny `README.md`, put the vertical
+`📱 阅读网页` block first, and record the immutable `report.html` source commit and
+timezone-qualified expiry timestamp. Never modify the repository root README or append
+to a global report index. Exclude navigation cards from Graphify with the verified
+parent-scoped pattern, then commit and push the focused handoff. When the artifact
+expires, rerun it from the same immutable source commit and replace only that folder's
+URL and expiry.
 
 ### Step 3: Verify Graphify retrieval
 
@@ -172,6 +182,8 @@ semantic-template correction/retry may you create the centralized
   handoff
 - Include the exact-commit canonical HTML source link and Graphify smoke-test result
 - State whether the link requires GitHub sign-in and when it expires
+- Confirm that the report-folder README entry and its parent-scoped navigation-only
+  `.graphifyignore` rule were committed and pushed, with the root README unchanged
 - Provide a brief summary (2-3 sentences) in the response
 
 ## Resource Budgets

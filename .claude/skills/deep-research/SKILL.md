@@ -1,6 +1,6 @@
 ---
 name: deep-research
-description: Advanced multi-agent research system for large codebases and infrastructure. Use when users need deep, comprehensive research across monorepos, requiring analysis of code patterns, diffs, build systems, or data infrastructure. Especially useful for complex questions requiring multiple perspectives, extensive codebase exploration, or investigation across multiple systems.
+description: Advanced multi-agent research and evidence-backed report production for codebases, infrastructure, markets, and strategy. Use when users need comprehensive research across many sources or perspectives, coordinated subagents, Trust Gate verification, or a canonical mobile HTML report with Graphify indexing and private GitHub delivery.
 ---
 
 # Deep Research
@@ -380,10 +380,9 @@ Your job is to produce the final research report by integrating all findings.
   companion PDF's GitHub blob URL (GitHub renders the <10MB PDF inline on mobile).
   Do not persist sibling Markdown unless the real retrieval smoke test fails.
   See references/mobile_delivery.md.
-- Companion PDF every time (Linhan 2026-08-10): render the canonical HTML to PDF with
-  references/scripts/html_report_to_pdf.py (preserved rendering; ALL links working —
-  external + internal GoTo; <10MB so GitHub renders inline; 0.82 print zoom + largest
-  printable chunk groups to avoid blank areas) and commit it alongside the HTML.
+- Do not generate a PDF by default. Produce one only when the user explicitly asks for
+  it or the verified HTML reading route is unavailable; it is a derivative fallback,
+  never the canonical report or Graphify source. See references/reporting.md.
 - Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
   timelines); prose only carries what a figure cannot
 - Derivation transparency: internal estimates/assumptions/targets are tagged IN the
@@ -456,26 +455,42 @@ ZERO green. Adapt this rule to your accessibility needs or remove it if not appl
 
 ### Phase 3.75: Persistence and Mobile Publication
 
-1. Resolve the target repository, destination path, and report status with the user
-   request and repository conventions. Persist exactly one canonical `.html` report.
+1. Resolve the target repository, parent collection, descriptive report slug, and
+   report status from the user request and repository conventions. Create one dated
+   report folder such as
+   `explorations/2026-08-10-b2b-agent-harness-customers-market/`. Persist exactly one
+   canonical report document inside it as `report.html`. Do not persist a report
+   Markdown copy. The only Markdown allowed in this folder is the tiny navigation-only
+   `README.md` created in step 6.
 2. Re-run the HTML validator and mobile checks after the final persisted content.
 3. Keep the HTML indexable and update Graphify from it. Run the report-specific
    retrieval smoke test before any push. Only after a real failure plus one corrected
    retry may you generate `graph-sources/<same-relative-path>.md` and target only the
    failed HTML path in `.graphifyignore`; never put fallback Markdown beside the report.
-4. Generate the companion PDF from the final canonical HTML via
-   references/scripts/html_report_to_pdf.py and persist it beside the HTML.
-5. Commit and push only when that repository mutation is authorized by the user's
+4. Commit and push only when that repository mutation is authorized by the user's
    request and current workflow. Push the exact ref containing the canonical HTML.
-6. PAUSED (Linhan 2026-08-23, GitHub Actions budget): do NOT install or dispatch the
-   private-html-preview workflow. Instead, deliver both committed links: the canonical
-   HTML blob URL (source of record) and the companion PDF blob URL as the
-   phone-readable link — GitHub renders the <10MB PDF inline, including in the mobile
-   app. The workflow template stays in templates/ for when a replacement channel is
-   decided.
-7. If commit or push is not authorized/available, return the local HTML path and state
-   plainly that no phone-readable URL exists yet. A `/tmp` path is not a published
-   report.
+5. PAUSED (Linhan 2026-08-23, GitHub Actions budget): do NOT install or dispatch the
+   private-html-preview workflow. While paused, the verified HTML reading route is
+   unavailable, so the PDF fallback applies: generate the companion PDF from the
+   canonical `report.html` (references/scripts/html_report_to_pdf.py, <10MB so GitHub
+   renders it inline on mobile) and persist it inside the same report folder.
+6. Create or replace only that report folder's navigation-only `README.md`. Put the
+   conspicuous vertical `📱 阅读网页` link first — while paused it points to the
+   committed PDF's blob URL (gated by repository read access; no expiry) — followed by
+   the immutable `report.html` source commit. Never add report links to the repository
+   root README or to a growing global report index. Configure `.graphifyignore` once
+   with a parent-scoped pattern such as `/explorations/*/README.md`, after verifying
+   that it matches only navigation cards; never ignore `report.html`. Commit and push
+   this focused folder handoff. Do not use a Markdown table.
+7. Treat GitHub `blob` and `raw` links to `report.html` only as source links. While
+   the Actions channel is paused, the PDF blob URL is the reading surface. When the
+   channel is revived (e.g. on a self-hosted runner), switch the folder README link
+   back to the workflow's `archive: false` artifact and manage retention/expiry there;
+   the canonical HTML and its Graphify identity never change.
+8. If commit, push, workflow installation, or dispatch is not authorized/available,
+   return the local HTML path and state plainly that no phone-readable URL
+   exists yet. A `/tmp` path, GitHub blob URL, or unverified Actions run is not a
+   published report.
 
 ### Phase 4: Cleanup
 

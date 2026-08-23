@@ -1,0 +1,14 @@
+{
+  "name": "daobrew-video",
+  "version": "0.1.0",
+  "description": "Apply DaoBrew's video editing house style to HyperFrames compositions — script-sourced captions, readable semi-transparent overlays, soft-blended PiP panels, and the DaoBrew amber + Plus Jakarta Sans outro card. Ships verbatim templates, brand tokens, and fonts.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "skills": [
+    "./skills/"
+  ],
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}

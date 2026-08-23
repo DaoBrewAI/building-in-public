@@ -1,0 +1,14 @@
+{
+  "name": "design-language-translator",
+  "version": "0.1.0",
+  "description": "Translates plain-language design intentions into professional designer vocabulary (matching input language), with 2-3 alternative phrasings per complaint; when an image is attached, also runs an independent design audit flagging 1-3 high-impact issues.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "skills": [
+    "./skills/"
+  ],
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}
