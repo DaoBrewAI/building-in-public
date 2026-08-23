@@ -1,0 +1,22 @@
+{
+  "name": "restyle-ceramic-product-photo",
+  "version": "0.1.0",
+  "description": "Apply a reproducible soft studio treatment to ceramic product photos — neutral gray wall and table, soft upper-left key light, lower-right cast shadow, preserved glaze detail, adaptive segmentation, and depth of field. For consistent catalog or Instagram looks on ceramic and pottery product images.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "photo",
+    "restyle",
+    "product-photography",
+    "ceramics",
+    "image-processing",
+    "daobrew"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}

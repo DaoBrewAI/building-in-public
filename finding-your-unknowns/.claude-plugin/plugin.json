@@ -1,0 +1,22 @@
+{
+  "name": "finding-your-unknowns",
+  "version": "0.1.0",
+  "description": "Surfaces and classifies task unknowns before and during non-trivial coding work — maps known knowns / known unknowns / unknown knowns / unknown unknowns, keeps diagnostics compact with ranked hypotheses and decisive discriminators, and carries unresolved assumptions into loop handoff docs.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "unknowns",
+    "risk-mapping",
+    "diagnostics",
+    "hypotheses",
+    "planning",
+    "daobrew"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}

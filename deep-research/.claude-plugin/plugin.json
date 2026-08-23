@@ -1,0 +1,23 @@
+{
+  "name": "deep-research",
+  "version": "1.0.0",
+  "description": "Advanced multi-agent research system for large codebases and infrastructure — team-based orchestration, structured findings with a fail-closed Trust Gate (>=95% machine-verified claims), and delivery as one canonical mobile-first HTML report with a companion PDF.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "multi-agent",
+    "codebase-analysis",
+    "trust-gate",
+    "verification",
+    "reporting",
+    "daobrew"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}

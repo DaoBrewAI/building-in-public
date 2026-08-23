@@ -499,6 +499,7 @@ jobs:
           path: ${{ steps.validate.outputs.published_path }}
           archive: false
           if-no-files-found: error
+          retention-days: 14
 
       - name: Add private mobile link
         env:
@@ -509,7 +510,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          RETENTION_DAYS="${GITHUB_RETENTION_DAYS:-90}"
+          RETENTION_DAYS="${GITHUB_RETENTION_DAYS:-14}"
           if [[ ! "$RETENTION_DAYS" =~ ^[0-9]+$ ]]; then
             RETENTION_DAYS=90
           fi

@@ -33,6 +33,42 @@
       },
       "category": "development",
       "source": "./orchestrator"
+    },
+    {
+      "name": "project-planner",
+      "description": "DaoBrew's multi-phase project planning and execution framework for Claude Code. Generates detailed, task-level implementation plans from a master plan, tracks phase status, and executes plans task-by-task with build verification, parallel execution, and checkpoint-based progress tracking.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./project-planner"
+    },
+    {
+      "name": "deep-research",
+      "description": "Advanced multi-agent research system for large codebases and infrastructure — team-based orchestration, structured findings with a fail-closed Trust Gate (>=95% machine-verified claims), and delivery as one canonical mobile-first HTML report with a companion PDF.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./deep-research"
+    },
+    {
+      "name": "finding-your-unknowns",
+      "description": "Surfaces and classifies task unknowns before and during non-trivial coding work — maps known knowns / known unknowns / unknown knowns / unknown unknowns, with ranked hypotheses, decisive discriminators, and loop-handoff integration.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./finding-your-unknowns"
+    },
+    {
+      "name": "restyle-ceramic-product-photo",
+      "description": "Apply a reproducible soft studio treatment to ceramic product photos — neutral gray backdrop, soft key light, preserved glaze detail, adaptive segmentation, and depth of field for consistent catalog or Instagram looks.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./restyle-ceramic-product-photo"
     }
   ]
 }
