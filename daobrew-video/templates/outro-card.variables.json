@@ -1,0 +1,14 @@
+[
+  {
+    "id": "outro_l1",
+    "type": "string",
+    "label": "Outro line 1",
+    "default": "Find the work-stress root cause."
+  },
+  {
+    "id": "outro_l2",
+    "type": "string",
+    "label": "Outro line 2",
+    "default": "One click. Brief your agent. Detonate."
+  }
+]

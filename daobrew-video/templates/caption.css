@@ -1,0 +1,38 @@
+/* daobrew-video — dark-bubble caption styles
+ *
+ * Requires <div id="cap-layer"></div> inside the root composition div, and a
+ * window.__CAPS array of { t, s, e } for English-only captions or
+ * { zh, en, s, e } for bilingual captions, populated before caption.gsap.js runs.
+ *
+ * The @font-face below is shared with outro-card.css and pip-panel.css —
+ * dedup if it's already declared in the composition.
+ */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal; font-weight: 800; font-display: block;
+  src: url('fonts/PlusJakartaSans-ExtraBold.woff2') format('woff2');
+}
+
+#cap-layer { position: absolute; inset: 0; z-index: 30; pointer-events: none; }
+
+.cap { position: absolute; left: 0; right: 0; bottom: 78px; text-align: center; opacity: 0; }
+.cap-inner {
+  display: inline-block; max-width: 1200px;
+  background: rgba(9,6,4,0.88); padding: 13px 30px; border-radius: 16px;
+  color: #fff;
+  box-shadow: 0 8px 34px rgba(0,0,0,0.45); text-shadow: 0 2px 12px rgba(0,0,0,0.6);
+}
+.cap-single {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 800; font-size: 44px; line-height: 1.18; letter-spacing: -0.01em;
+}
+.cap-bilingual { padding-top: 15px; padding-bottom: 17px; }
+.cap-zh {
+  font-family: 'Hiragino Sans GB';
+  font-weight: 600; font-size: 44px; line-height: 1.16; letter-spacing: -0.015em;
+}
+.cap-en {
+  margin-top: 5px; color: rgba(255,255,255,0.88);
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 800; font-size: 32px; line-height: 1.2; letter-spacing: -0.01em;
+}

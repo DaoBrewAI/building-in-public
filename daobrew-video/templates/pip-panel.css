@@ -1,0 +1,73 @@
+/* daobrew-video — blended PiP overlay styles
+ *
+ * Markup per overlay:
+ *
+ *   <div class="pip" id="pip-NAME">
+ *     <div class="pip-blur"></div>
+ *     <div class="pip-frame">
+ *       <video id="m-NAME" class="clip pip-media"
+ *              data-start="..." data-duration="..." data-track-index="N"
+ *              src="..." muted playsinline></video>
+ *       <div class="pip-cap"><span class="dot"></span>NAME</div>
+ *     </div>
+ *   </div>
+ *
+ * Then add a per-id positioning rule and per-id media size below (see commented
+ * examples at the bottom).
+ *
+ * The @font-face below is shared with outro-card.css and caption.css —
+ * dedup if it's already declared in the composition.
+ */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal; font-weight: 800; font-display: block;
+  src: url('fonts/PlusJakartaSans-ExtraBold.woff2') format('woff2');
+}
+
+.pip { position: absolute; opacity: 0; z-index: 22; }
+
+/* Subtle backdrop-blur halo softens the edge against a face. */
+.pip-blur {
+  position: absolute; inset: -22px;
+  border-radius: 34px;
+  backdrop-filter: blur(7px);
+  -webkit-backdrop-filter: blur(7px);
+  mask-image: radial-gradient(ellipse at center, black 75%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse at center, black 75%, transparent 100%);
+  pointer-events: none;
+}
+
+.pip-frame {
+  position: relative; border-radius: 16px; overflow: hidden;
+  box-shadow: 0 30px 80px -14px rgba(0,0,0,0.58), 0 8px 24px rgba(0,0,0,0.34);
+  outline: 1px solid rgba(255,255,255,0.11); outline-offset: -1px;
+}
+
+/* Semi-transparent video so the founder's face shows through where panels cover. */
+.pip-media { display: block; opacity: 0.86; }
+
+.pip-cap {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
+  padding: 32px 16px 11px; display: flex; align-items: center; gap: 8px;
+  background: linear-gradient(to top, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0) 100%);
+  color: #F4ECE2; font-family: 'Plus Jakarta Sans', sans-serif;
+  font-weight: 800; font-size: 19px; letter-spacing: 0.01em; text-shadow: 0 1px 6px rgba(0,0,0,0.75);
+}
+.pip-cap .dot       { width: 8px; height: 8px; border-radius: 50%; background: #7CF2A0; box-shadow: 0 0 9px #7CF2A0; }
+.pip-cap .dot.amber { background: #ECA94C; box-shadow: 0 0 9px #ECA94C; }
+
+/* --- Example positioning + sizing (uncomment + adapt per panel) ---
+ * Spread simultaneous overlays to different corners (top-left + top-right);
+ * match transform-origin to the anchored corner so the entrance scales from there.
+ *
+ * #pip-sentinel { top: 46px; right: 46px; transform-origin: 100% 0%; }
+ * #pip-breath   { top: 46px; left: 46px;  transform-origin: 0% 0%; }
+ * #pip-mcp      { top: 46px; right: 46px; transform-origin: 100% 0%; }
+ * #pip-b2b      { top: 46px; left: 46px;  transform-origin: 0% 0%; }
+ *
+ * Sizes from the a16z pitch reference (1920x1080) — go big, half-screen is fine:
+ * #pip-sentinel .pip-media { width: 920px; height: 720px; }
+ * #pip-mcp      .pip-media { width: 1040px; height: 585px; }
+ * #pip-breath   .pip-media { width: 400px;  height: 769px; }
+ * #pip-b2b      .pip-media { width: 420px;  height: 748px; object-fit: cover; object-position: 50% 42%; }
+ */

@@ -18,6 +18,7 @@ Each guide, skill, or plugin lives in its own folder with a short README. Codex 
 
 | Skill | What it does |
 | :--- | :--- |
+| 🎬 &nbsp;[**daobrew-video**](./daobrew-video) | DaoBrew's HyperFrames video house style: script-derived captions, founder-safe overlays, brand templates, and the standard amber outro. |
 | 🧭 &nbsp;[**finding-your-unknowns**](./finding-your-unknowns) | Codex-native skill for surfacing hidden task unknowns before implementation: Goal frame, ranked hypotheses, decisive discriminators, down-ranked blindspots, scaled Unknowns Maps, and `codex-loop-engineering` handoff integration. |
 | 🔁 &nbsp;[**codex-loop-engineering**](./codex-loop-engineering) | Codex skill and installer for repo-local goal/tracker/constraints/handoff loops, checkpoint verification, and verified auto-chain continuation sessions. |
 | 🎨 &nbsp;[**design-language-translator**](./design-language-translator) | Translates plain-language design intent (EN / 中文) into professional designer vocabulary. With an image attached, also runs an independent design audit and flags 1–3 high-impact issues you didn't mention. |

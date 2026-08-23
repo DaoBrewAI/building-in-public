@@ -1,0 +1,22 @@
+/* daobrew-video — outro card styles
+ * Merge into the composition's <style> block.
+ * The @font-face below is shared with caption.css and pip-panel.css —
+ * dedup if it's already declared in the composition.
+ */
+@font-face {
+  font-family: 'Plus Jakarta Sans';
+  font-style: normal; font-weight: 800; font-display: block;
+  src: url('fonts/PlusJakartaSans-ExtraBold.woff2') format('woff2');
+}
+
+#outro { position: absolute; inset: 0; z-index: 50; opacity: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse 60% 60% at 50% 46%, rgba(48,26,8,0.55) 0%, rgba(0,0,0,0.98) 72%);
+  font-family: 'Plus Jakarta Sans', sans-serif; }
+#oc-icon { width: 196px; height: 196px; border-radius: 44px; opacity: 0;
+  box-shadow: 0 0 90px rgba(236,169,76,0.45), 0 18px 60px rgba(0,0,0,0.6); margin-bottom: 44px; }
+#oc-l1 { opacity: 0; color: #F3EEE8; font-weight: 800; font-size: 56px; letter-spacing: -0.02em; }
+#oc-l2 { opacity: 0; color: #ECA94C; font-weight: 800; font-size: 70px; letter-spacing: -0.02em;
+  margin-top: 4px; text-shadow: 0 0 38px rgba(236,169,76,0.45); }
+#oc-wm { opacity: 0; margin-top: 46px; color: rgba(236,169,76,0.85); font-weight: 800;
+  font-size: 23px; letter-spacing: 0.42em; }
