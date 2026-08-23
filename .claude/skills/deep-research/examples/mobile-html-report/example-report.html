@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="report-id" content="example-canonical-mobile-report-v1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; connect-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:; worker-src 'none'; child-src 'none'; object-src 'none'; frame-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'">
+  <template id="graphify-source">
+# Executive Summary
+- Report: One HTML for Reading and Retrieval. Status: final exploration.
+- Persist one canonical self-contained HTML report, not adjacent Markdown and HTML copies.
+- The same HTML is the phone and desktop reading surface and Graphify's default indexed document.
+- Put complete key semantics in the early graphify-source template so Graphify 0.8.33 sees them before its 20,000-character per-file cap.
+- Publish the HTML as a private direct-file GitHub Actions artifact because a committed GitHub blob displays source rather than a rendered page.
+- PDF is not part of the default report workflow.
+
+# Conclusions
+## One canonical report keeps explorations clean
+- A single HTML path is the report identity in Git history. There is no sibling Markdown file to keep synchronized.
+- The stable identity is report_id plus repository path plus commit. The artifact reading URL is replaceable and may expire.
+
+## Graphify can index the HTML directly
+- Graphify 0.8.33 classifies .html as a document and sends at most the first 20,000 characters of each file to semantic extraction.
+- The graphify-source template closes before character 16,000, leaving headroom while preserving findings, recommendations, decision status, and sources.
+- The canonical HTML must remain out of .graphifyignore while direct retrieval works.
+
+## A fallback is exceptional and centralized
+- Run an actual report-specific Graphify query after building the graph.
+- If retrieval fails, correct the embedded semantic template and retry once.
+- Only if the retry fails, derive Markdown at graph-sources/deep-research/examples/mobile-html-report/example-report.md and ignore only the canonical HTML path to prevent duplicate nodes.
+- Never place fallback Markdown beside the HTML report.
+
+## Mobile delivery uses the HTML artifact, not the blob
+- The private workflow validates the restrictive CSP, self-contained assets, safe links, semantic template, and source-link placeholder.
+- It publishes one unarchived HTML artifact that authorized readers can open on phone or desktop.
+- The committed-source footer points back to this same HTML at the exact source commit.
+
+## Recommendations
+- Make canonical .html the default output for every final deep-research strategy report.
+- Keep the graphify-source block complete, compact, and aligned with visible claims.
+- Gate delivery on 390 by 844 and 430 by 932 viewport checks plus a Graphify retrieval smoke test.
+- Create centralized Markdown fallback files only for individually proven HTML retrieval failures.
+
+# Decision Status
+- This sample demonstrates the delivery contract. It does not confirm a product or strategy decision.
+- A separate decision record is created only after explicit human confirmation and when repository policy requires it.
+
+# Sources
+- [1] GitHub documentation: Working with non-code files — https://docs.github.com/en/repositories/working-with-files/using-files/working-with-non-code-files
+- [2] GitHub changelog: Direct non-zipped Actions artifacts — https://github.blog/changelog/2026-02-26-github-actions-now-supports-uploading-and-downloading-non-zipped-artifacts/
+- [3] Installed Graphify 0.8.33 source: .html is a document and semantic extraction uses a 20,000-character per-file cap.
+  </template>
+  <title>Sample · One HTML for reading and retrieval</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f4f2ed;
+      --paper: #fffdf8;
+      --ink: #17191d;
+      --muted: #5d6470;
+      --line: #d8d5cc;
+      --blue: #1559c7;
+      --blue-soft: #e9f0ff;
+      --orange: #a14b00;
+      --shadow: 0 18px 50px rgba(31, 35, 42, 0.1);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111419;
+        --paper: #191d24;
+        --ink: #f2f4f8;
+        --muted: #abb3c0;
+        --line: #343a45;
+        --blue: #82adff;
+        --blue-soft: #202e4d;
+        --orange: #ffab63;
+        --shadow: none;
+      }
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 17px/1.68 -apple-system, BlinkMacSystemFont, "SF Pro Text",
+        "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+    }
+    main {
+      width: min(760px, calc(100% - 32px));
+      margin: 28px auto 64px;
+      padding: clamp(24px, 6vw, 54px);
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      box-shadow: var(--shadow);
+    }
+    .eyebrow {
+      color: var(--blue);
+      font: 700 12px/1.3 ui-monospace, "SFMono-Regular", Menlo, monospace;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+    h1, h2 { line-height: 1.18; letter-spacing: -0.025em; }
+    h1 { margin: 14px 0 12px; font-size: clamp(32px, 8vw, 54px); }
+    h2 { margin: 42px 0 14px; font-size: clamp(24px, 5vw, 30px); }
+    p { margin: 0.8em 0; }
+    .lede { color: var(--muted); font-size: 1.08em; }
+    .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 24px 0 34px; }
+    .pill {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      padding: 9px 14px;
+      color: var(--blue);
+      background: var(--blue-soft);
+      border: 1px solid color-mix(in srgb, var(--blue) 28%, transparent);
+      border-radius: 999px;
+      font-weight: 700;
+    }
+    figure { margin: 24px 0; }
+    .flow {
+      display: grid;
+      grid-template-columns: minmax(170px, 1fr) 42px minmax(170px, 1fr);
+      gap: 14px;
+      align-items: center;
+    }
+    .flow-node {
+      min-height: 100px;
+      display: grid;
+      place-content: center;
+      padding: 16px;
+      text-align: center;
+      background: var(--paper);
+      border: 2px solid var(--line);
+      border-radius: 16px;
+    }
+    .flow-node strong { display: block; font-size: 17px; }
+    .flow-node span { color: var(--muted); font-size: 15px; }
+    .flow-source { background: var(--blue-soft); border-color: var(--blue); }
+    .flow-arrow { color: var(--blue); text-align: center; font-size: 28px; font-weight: 800; }
+    figcaption { margin-top: 12px; color: var(--muted); font-size: 0.92em; }
+    .callout {
+      margin: 24px 0;
+      padding: 18px 20px;
+      border-left: 4px solid var(--orange);
+      background: color-mix(in srgb, var(--orange) 8%, var(--paper));
+      border-radius: 0 12px 12px 0;
+    }
+    details {
+      margin: 20px 0;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: clip;
+    }
+    summary {
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      cursor: pointer;
+      color: var(--blue);
+      font-weight: 750;
+      list-style: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "＋"; margin-left: auto; font-size: 1.2em; }
+    details[open] summary::after { content: "−"; }
+    details > div { padding: 0 16px 16px; color: var(--muted); }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    footer {
+      margin-top: 44px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 0.9em;
+    }
+    @media (max-width: 520px) {
+      main {
+        width: 100%;
+        margin: 0;
+        border: 0;
+        border-radius: 0;
+        padding: 28px 20px 48px;
+      }
+      body { font-size: 17px; }
+      .flow { grid-template-columns: 1fr; }
+      .flow > .flow-arrow { transform: rotate(90deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Deep Research · Canonical HTML Sample</div>
+      <h1>一份 HTML，阅读和检索都用它</h1>
+      <p class="lede">explorations 里只留一个报告文件：手机和电脑直接读，Graphify 也直接索引。</p>
+      <div class="pills" aria-label="报告交付状态">
+        <span class="pill">One canonical HTML</span>
+        <span class="pill">Graphify indexed</span>
+        <span class="pill">Private mobile link</span>
+      </div>
+    </header>
+
+    <section aria-labelledby="flow-title">
+      <h2 id="flow-title">同一个文件，两种入口</h2>
+      <figure>
+        <div class="flow" role="img" aria-label="One canonical HTML report is indexed by Graphify and published as a private interactive artifact for phone and desktop reading.">
+          <div class="flow-node flow-source"><strong>Canonical HTML</strong><span>semantic block plus visual report</span></div>
+          <div class="flow-arrow" aria-hidden="true">→</div>
+          <div class="flow-node"><strong>Graphify + private artifact</strong><span>retrieve later · read now</span></div>
+        </div>
+        <figcaption>HTML 是唯一报告。Graphify 读取文件开头的结构化语义，读者打开同一文件的渲染链接。</figcaption>
+      </figure>
+    </section>
+
+    <section aria-labelledby="rule-title">
+      <h2 id="rule-title">默认不生成第二份 Markdown</h2>
+      <div class="callout">
+        先对 HTML 运行真实的 Graphify 查询。只有查询失败、修正语义块后重试仍失败，才在集中式 graph-sources 目录生成 fallback。
+      </div>
+      <details>
+        <summary>如果真的需要 fallback，会放在哪里？</summary>
+        <div>
+          放在 <code>graph-sources/</code> 下并镜像原 HTML 路径，不放在 explorations 旁边；同时只忽略失败的那个 HTML，避免重复索引。
+        </div>
+      </details>
+    </section>
+
+    <section aria-labelledby="evidence-title">
+      <h2 id="evidence-title">为什么还需要阅读链接</h2>
+      <p>GitHub 的 HTML blob 会显示源代码；私有 direct-file Actions artifact 才是手机和电脑上的渲染阅读入口。</p>
+      <p>
+        <a href="https://docs.github.com/en/repositories/working-with-files/using-files/working-with-non-code-files" target="_blank" rel="noopener noreferrer">GitHub: Working with non-code files</a>
+        ·
+        <a href="https://github.blog/changelog/2026-02-26-github-actions-now-supports-uploading-and-downloading-non-zipped-artifacts/" target="_blank" rel="noopener noreferrer">GitHub: Non-zipped Actions artifacts</a>
+      </p>
+    </section>
+
+    <footer>
+      Report ID: <code>example-canonical-mobile-report-v1</code> ·
+      <a href="__REPORT_SOURCE_URL__" target="_blank" rel="noopener noreferrer">Committed HTML source</a>
+    </footer>
+  </main>
+</body>
+</html>

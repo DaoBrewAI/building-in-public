@@ -2,13 +2,10 @@
 
 ## One-file decision
 
-Persist each report as one self-contained HTML document inside its own dated,
-descriptively named folder:
+Persist one canonical, self-contained report:
 
 ```text
-explorations/2026-08-09-direction-portfolio/
-├── README.md     # navigation card only; not report content
-└── report.html   # canonical report and Graphify source
+explorations/2026-08-09-direction-portfolio.html
 ```
 
 That same file serves two consumers:
@@ -18,11 +15,8 @@ That same file serves two consumers:
 - **Graphify:** the `.html` document itself, with a compact structured semantic block
   near the beginning of the raw file.
 
-Do not create a Markdown report copy. The folder `README.md` is only the GitHub-rendered
-link panel needed to open the Reader; it must not repeat conclusions or evidence and is
-excluded from Graphify. Do not add the canonical `report.html` to `.graphifyignore`.
-PDF is outside the default deep-research delivery workflow. Never update the repository
-root README or maintain a growing global report index for report delivery.
+Do not create a sibling Markdown file by default. Do not add the canonical report to
+`.graphifyignore`. PDF is outside the default deep-research delivery workflow.
 
 A GitHub `blob` or `raw` URL is the committed source location, not the reading URL:
 GitHub does not render committed HTML documents as web pages.
@@ -34,14 +28,11 @@ GitHub does not render committed HTML documents as web pages.
 
 Use this delivery order:
 
-1. **Companion PDF blob URL (interim default while the Actions channel is paused):**
-   commit the PDF beside the canonical HTML and hand out its GitHub blob URL. Requires
-   GitHub sign-in and repository read access; renders inline on phone; no retention
-   expiry.
+1. **Companion PDF blob URL (interim default):** commit the PDF beside the canonical
+   HTML and hand out its GitHub blob URL. Requires GitHub sign-in and repository read
+   access; renders inline on phone.
 2. **Private GitHub artifact (PAUSED):** publish the single HTML file as an
-   unarchived Actions artifact (`archive: false`). When active, this is the default
-   reading surface for a GitHub Free private repository; it requires GitHub sign-in
-   and repository read access and remains subject to artifact retention.
+   unarchived Actions artifact. It requires GitHub sign-in and repository read access.
 3. **Stable private site (only when requested):** deploy the same file to an
    identity-protected static host. Creating a project, domain, access policy, or
    deployment requires explicit authorization.
@@ -150,8 +141,8 @@ If the retry still fails, generate one derived Markdown file in a separate centr
 tree that mirrors the HTML path:
 
 ```text
-canonical:      explorations/2026-08-09-direction-portfolio/report.html
-fallback only:  graph-sources/explorations/2026-08-09-direction-portfolio/report.md
+canonical:      explorations/2026-08-09-direction-portfolio.html
+fallback only:  graph-sources/explorations/2026-08-09-direction-portfolio.md
 ```
 
 Never put fallback Markdown beside the HTML. Begin it with generated-source metadata:
@@ -160,7 +151,7 @@ Never put fallback Markdown beside the HTML. Begin it with generated-source meta
 ---
 type: graphify-fallback
 report_id: direction-portfolio-2026-08-09
-canonical_html: explorations/2026-08-09-direction-portfolio/report.html
+canonical_html: explorations/2026-08-09-direction-portfolio.html
 generated_from_commit: <immutable-commit>
 ---
 ```
@@ -170,7 +161,7 @@ root-relative** ignore rule for only the failed canonical HTML, such as:
 
 ```gitignore
 # Graphify 0.8.33 retrieval failed twice; generated fallback is indexed instead.
-/explorations/2026-08-09-direction-portfolio/report.html
+/explorations/2026-08-09-direction-portfolio.html
 ```
 
 Re-run Graphify and the same query. The fallback is accepted only if retrieval now
@@ -201,7 +192,7 @@ After the canonical HTML is committed and pushed:
 1. Open **Actions → Private HTML Report → Run workflow** on the default branch.
 2. Set `source_ref` to the immutable report commit when possible.
 3. Set `report_path` to the canonical file, for example
-   `explorations/2026-08-09-direction-portfolio/report.html`.
+   `explorations/2026-08-09-direction-portfolio.html`.
 4. Open the completed job summary and tap **Open the interactive HTML report**.
 5. Verify that URL at a phone-sized viewport and share it only with collaborators who
    already have repository read access.
@@ -212,69 +203,13 @@ Authorized agents may dispatch it with:
 gh workflow run private-html-preview.yml \
   --ref '<default-branch-containing-workflow>' \
   -f source_ref='<immutable-report-commit>' \
-  -f report_path='explorations/2026-08-09-direction-portfolio/report.html'
+  -f report_path='explorations/2026-08-09-direction-portfolio.html'
 ```
 
 `--ref` selects the workflow definition; `source_ref` selects the historical report
 content. Re-run the default-branch workflow with the same commit and path to replace an
 expired artifact link. Never claim publication until the run succeeds and the artifact
 opens in a browser.
-
-## Publish the report-folder link card after artifact success
-
-Treat the report-folder link card as part of default private-report delivery, not an
-optional follow-up. Perform it only after the workflow succeeds, the artifact opens,
-and the job summary provides the expected expiry timestamp. Do not add the report to
-the repository root README, the parent collection README, or a global report index.
-
-1. Capture the direct artifact URL, the full immutable `source_ref` commit that contains
-   the canonical HTML, the exact HTML source URL, and the expiry timestamp from the
-   successful run. Display the timestamp with an explicit timezone, preferably UTC.
-2. Create or replace the `README.md` inside this report's own folder. It is a tiny
-   GitHub-rendered navigation card, not a second report. It must contain no report
-   summary, conclusions, evidence, or decision text. Never modify the repository root
-   README as part of report delivery.
-3. Use a vertical block, never a Markdown table. Keep the artifact link first:
-
-   ```markdown
-   ### <report title>
-
-   **[📱 阅读网页（推荐）](<direct-artifact-url>)**
-
-   Source: [`<report-path>`](<exact-commit-blob-url>)
-
-   Immutable source commit: [`<full-sha>`](<commit-url>)
-
-   Expires: `YYYY-MM-DD HH:MM UTC`
-
-   Requires GitHub sign-in and read access to this private repository. If the link has
-   expired, rerun `Private HTML Report` with the same source commit and report path,
-   then replace this URL and expiry date.
-   ```
-
-4. Keep these navigation cards out of Graphify with one sustainable, parent-scoped
-   rule. Before adding it, verify that every matched immediate child is a report folder
-   and that no semantic README is captured. For an `explorations/` report collection:
-
-   ```gitignore
-   /explorations/*/README.md
-   ```
-
-   Never add the canonical report HTML to `.graphifyignore` unless the separately
-   documented two-failure Graphify fallback gate has actually fired.
-5. Review the folder-card diff, then create and push a focused handoff commit containing
-   only this report's README and any one-time `.graphifyignore` contract change.
-   Keep the displayed immutable source commit pinned to the earlier report commit; the
-   navigation commit is not a replacement source identity.
-
-GitHub `blob` and `raw` URLs always identify source bytes; they are never the reading
-surface. The `archive: false` Actions artifact is the directly viewable mobile surface
-for the default GitHub Free private-repository path.
-
-When an artifact expires, rerun the default-branch workflow with the same immutable
-`source_ref` and `report_path`. After the replacement artifact opens, update the URL and
-expiry date only in that report folder's README and commit/push that focused refresh.
-Do not change the source commit unless the report content itself changed.
 
 ## Mobile HTML acceptance contract
 
@@ -306,12 +241,8 @@ Default successful HTML indexing:
 
 ```text
 DaoBrewStrategy/
-├── README.md                                      # unchanged by report delivery
-├── .graphifyignore                                # /explorations/*/README.md
 ├── explorations/
-│   └── 2026-08-09-direction-portfolio/
-│       ├── README.md                              # link card only; ignored
-│       └── report.html                            # canonical + indexed
+│   └── 2026-08-09-direction-portfolio.html
 ├── decisions/
 │   └── DEC-2026-08-10-direction-portfolio.md   # only if explicitly confirmed
 └── .github/workflows/
@@ -323,22 +254,18 @@ Only after a proven Graphify failure:
 ```text
 DaoBrewStrategy/
 ├── explorations/
-│   └── 2026-08-09-direction-portfolio/
-│       ├── README.md
-│       └── report.html
+│   └── 2026-08-09-direction-portfolio.html
 ├── graph-sources/
 │   └── explorations/
-│       └── 2026-08-09-direction-portfolio/
-│           └── report.md
+│       └── 2026-08-09-direction-portfolio.md
 └── .graphifyignore   # targets only the failed HTML path
 ```
 
 The final delivery message is intentionally simple:
 
 ```text
-Read interactive report — private GitHub artifact link, expires YYYY-MM-DD HH:MM UTC
+Read interactive report — private GitHub artifact link, expires YYYY-MM-DD
 Committed source — exact-commit HTML link, indexed by Graphify
-Repository navigation — report-folder README link committed and pushed; root unchanged
 Graphify smoke test — PASS for <tested query>
 ```
 
