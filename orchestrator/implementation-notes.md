@@ -1,3 +1,5 @@
+Walkthrough quiz: passed 4/4 critical follow-up — 2026-08-23
+
 ## Progress
 
 - Task 1: captured green baselines, added four file-disjoint RED contract suites, audited Codex lifecycle-hook support, and computed the Task 2/3/4 ready set.
