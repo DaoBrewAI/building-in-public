@@ -435,12 +435,12 @@ check "task API fixture observed create, archive failure/retry, unarchive/rearch
   _ "$TASK_API_LOG"
 
 # Task 8 documentation is part of the release contract.
-check "Codex manifest declares the 0.4.0 feature release" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.4.0 ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest declares the same 0.4.0 feature release" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.4.0 && "$(jq -r .version "$1")" = "$(jq -r .version "$2")" ]]' \
+check "Codex manifest declares the 0.4.1 feature release" bash -c \
+  '[[ "$(jq -r .version "$1")" = 0.4.1 ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest declares the same 0.4.1 feature release" bash -c \
+  '[[ "$(jq -r .version "$1")" = 0.4.1 && "$(jq -r .version "$1")" = "$(jq -r .version "$2")" ]]' \
   _ "$CLAUDE_MANIFEST" "$CODEX_MANIFEST"
-check "README labels the Orchestrator 0.4 feature release" contains "$README" "Orchestrator 0.4"
+check "README labels the Orchestrator 0.4.1 feature release" contains "$README" "Orchestrator 0.4.1"
 check "README documents the mission-internal DAG lifecycle" contains "$README" "Mission-internal task DAG and two-level GC"
 check "README includes child and parent state diagrams" contains "$README" "stateDiagram-v2"
 check "README documents migration from the single executor" contains "$README" "Migration from the single executor"

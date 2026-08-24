@@ -48,6 +48,11 @@ contains() {
   grep -Fq -- "$literal" "$file"
 }
 
+contains_compact() {
+  local file="$1" literal="$2"
+  tr '\n' ' ' < "$file" | sed 's/[[:space:]][[:space:]]*/ /g' | grep -Fqi -- "$literal"
+}
+
 not_contains() {
   local file="$1" literal="$2"
   ! grep -Fq -- "$literal" "$file"
@@ -58,10 +63,10 @@ regex() {
   grep -Eq -- "$expression" "$file"
 }
 
-check "Codex manifest is version 0.4.0" \
-  json_field_is "$MANIFEST" version 0.4.0
-check "Claude manifest is version 0.4.0" \
-  json_field_is "$CLAUDE_MANIFEST" version 0.4.0
+check "Codex manifest is version 0.4.1" \
+  json_field_is "$MANIFEST" version 0.4.1
+check "Claude manifest is version 0.4.1" \
+  json_field_is "$CLAUDE_MANIFEST" version 0.4.1
 check "Codex manifest describes Claude Fable planning" \
   contains "$MANIFEST" "Fable-5"
 check "Codex manifest describes GPT-5.6-Sol execution" \
@@ -73,6 +78,26 @@ check "Codex skill fixes Fable-5 as brainstorm/plan/review backend" \
   regex "$SKILL" 'brainstorm.*plan.*review.*claude-fable-5|claude-fable-5.*brainstorm.*plan.*review'
 check "Codex skill fixes GPT-5.6-Sol as the only implementation backend" \
   regex "$SKILL" 'ALL code implementation.*gpt-5\.6-sol|gpt-5\.6-sol.*ALL code implementation'
+check "external planning defaults to nonblocking least-scope auto mode" \
+  contains "$SKILL" '`auto-least-scope` (default)'
+check "auto disclosure notice is explicitly not an approval gate" \
+  contains_compact "$SKILL" 'The notice is not an approval gate'
+check "auto mode forbids a confirmation question" \
+  contains_compact "$SKILL" 'do not ask a confirmation question'
+check "auto mode permits task-relevant private implementation inputs" \
+  contains_compact "$SKILL" 'task-relevant private source code, build/release configuration, and tests'
+check "external planning excludes secrets and customer data" \
+  contains_compact "$SKILL" 'OAuth values, credentials, tokens, personal or customer data'
+check "external planning excludes ignored corpora and unrelated files" \
+  contains "$SKILL" 'ignored/private corpora, and unrelated files'
+check "user can explicitly require an upfront approval pause" \
+  contains "$SKILL" '`approval-required`'
+check "user can explicitly disable external planning" \
+  contains "$SKILL" '`no-external`'
+check "broader external disclosure still needs separate authorization" \
+  contains_compact "$SKILL" 'materially broader data category, destination, or purpose requires separate authorization'
+check "allowed disclosure is never reauthorized mid-mission" \
+  contains "$SKILL" 'Never re-ask for already-authorized least-scope inputs mid-mission'
 check "Codex skill launches the shared Hybrid worker" \
   contains "$SKILL" '$PLUGIN_DIR/scripts/spawn-worker.sh'
 check "Hybrid launcher requires coordinator-owned control state" \
@@ -210,8 +235,8 @@ check "Codex coordinator queues only on a real dependency" \
 check "Claude coordinator routes write-producing acceptance tests to Codex" \
   contains "$CLAUDE_SKILL" 'verification that may write caches, snapshots, coverage, or generated artifacts'
 
-check "README declares Orchestrator 0.4" \
-  contains "$README" 'Orchestrator 0.4'
+check "README declares Orchestrator 0.4.1" \
+  contains "$README" 'Orchestrator 0.4.1'
 check "README scopes native 0.4 execution to the Codex coordinator" \
   contains "$README" 'Native 0.4 task-DAG execution is Codex-coordinator-only'
 check "README documents fail-closed Claude handoff for native 0.4" \

@@ -95,6 +95,12 @@ rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 methods = [row.get("method") for row in rows]
 raise SystemExit(0 if methods[:3] == ["initialize", "initialized", "thread/start"] else 1)
 PY
+check "App Server client identifies the 0.4.1 plugin release" python3 - "$CREATE_LOG" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+params = next(row["params"] for row in rows if row.get("method") == "initialize")
+raise SystemExit(0 if params.get("clientInfo", {}).get("version") == "0.4.1" else 1)
+PY
 check "thread start binds exact project cwd roots model and visible source" python3 - "$CREATE_LOG" "$WORKTREE" "$TASK_DIR" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]

@@ -47,6 +47,44 @@ State and handoffs live on disk so the coordinator stays free between wakes.
   default — isolation is per-worktree, not per-repo. Queue only on a real
   dependency (see Phase 2).
 
+## External planning disclosure mode
+
+Resolve this mode at Orchestrator invocation, before provisioning or the first
+Fable/Opus launch. Read the current request and any newer durable ruling in
+`$HUB/DECISIONS.md` first. A recorded standing choice remains authoritative for
+later missions until the user explicitly changes it.
+
+- **`auto-least-scope` (default):** when the user does not explicitly request a
+  pause or opt out, proceed without waiting. Before the first external planning
+  stage, give one concise nonblocking notice: `External planning: auto
+  least-scope — Fable/Opus read-only; relevant source/tests only; secrets and
+  customer/personal data excluded. Continuing now.` The notice is not an
+  approval gate. Do not ask a confirmation question, enumerate a long consent
+  checklist, or wait for a reply.
+- **`approval-required`:** use only when the user explicitly asks to approve
+  external planning first. Ask once at the beginning, before any source is
+  exposed, with one concise choice between `proceed least-scope` and `no
+  external planning`. Record the answer durably and do not ask again for the
+  same mission or standing scope.
+- **`no-external`:** use only when the user explicitly forbids Claude/Fable/Opus
+  disclosure. Explain at startup that the fixed Hybrid backend cannot run,
+  record a coordinator BLOCKED outcome before provisioning, and do not silently
+  substitute another planner or send data externally.
+
+The standing least-scope authorization covers task-relevant private source
+code, build/release configuration, and tests sent to Claude Fable/Opus only for
+read-only brainstorm, planning, and independent review. It never covers OAuth
+values, credentials, tokens, personal or customer data, generated customer
+outputs or documents, ignored/private corpora, and unrelated files. Strip or
+exclude those categories before launch. Codex remains the sole implementation
+and rework owner.
+
+Never re-ask for already-authorized least-scope inputs mid-mission. A materially
+broader data category, destination, or purpose requires separate authorization
+before transfer; ask only the shortest concrete question needed for that new
+boundary. Task-relevant Release or identity source/tests remain within
+least-scope, but live secrets and identity values do not.
+
 ## Resolve paths and hub
 
 Derive `PLUGIN_DIR` from this loaded file by moving from
