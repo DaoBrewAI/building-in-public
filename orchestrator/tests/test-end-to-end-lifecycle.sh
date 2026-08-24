@@ -47,7 +47,7 @@ detail="${3:-}"
 printf '%s\t%s\t%s\n' "$operation" "$identity" "$detail" >> "$ORC_E2E_TASK_API_LOG"
 case "$operation" in
   create)
-    [[ "$detail" = healthy ]] || exit 1
+    [[ "$detail" = list-visible ]] || exit 1
     printf 'visible\n' > "$ORC_E2E_TASK_API_STATE/$identity"
     ;;
   archive)
@@ -92,7 +92,7 @@ accept_child_thread() {
   fi
   printf '%s\n' "$thread_id" > "$task_control/accepted-thread-id"
   printf '%s\n' "$thread_id" > "$task_dir/accepted-thread-id"
-  printf 'visible\n' > "$task_control/task-window-state"
+  printf 'unarchived\n' > "$task_control/task-window-state"
 }
 
 archive_child_thread() {
@@ -226,11 +226,11 @@ check "production create rejects approved artifact bytes that differ from the fr
 
 PROBE_CONTROL="$TMP/thread-probe-control"
 PROBE_TASK="$TMP/thread-probe-task"
-accept_child_thread "$PROBE_CONTROL" "$PROBE_TASK" probe stale-provisional stale >/dev/null 2>&1
+accept_child_thread "$PROBE_CONTROL" "$PROBE_TASK" probe stale-provisional read-only >/dev/null 2>&1
 PROBE_STALE_RC=$?
-accept_child_thread "$PROBE_CONTROL" "$PROBE_TASK" probe accepted-replacement healthy >/dev/null 2>&1
+accept_child_thread "$PROBE_CONTROL" "$PROBE_TASK" probe accepted-replacement list-visible >/dev/null 2>&1
 PROBE_REPLACEMENT_RC=$?
-accept_child_thread "$PROBE_CONTROL" "$PROBE_TASK" probe duplicate-owner healthy >/dev/null 2>&1
+accept_child_thread "$PROBE_CONTROL" "$PROBE_TASK" probe duplicate-owner list-visible >/dev/null 2>&1
 PROBE_DUPLICATE_RC=$?
 check "stale provisional ID permits exactly one healthy replacement" bash -c \
   '[[ "$1" -ne 0 && "$2" -eq 0 && "$3" -ne 0 && "$(cat "$4/tasks/probe/accepted-thread-id")" = accepted-replacement ]]' \
@@ -238,9 +238,9 @@ check "stale provisional ID permits exactly one healthy replacement" bash -c \
 
 BLOCKED_CONTROL="$TMP/thread-blocked-control"
 BLOCKED_TASK="$TMP/thread-blocked-task"
-accept_child_thread "$BLOCKED_CONTROL" "$BLOCKED_TASK" blocked stale-one stale >/dev/null 2>&1
+accept_child_thread "$BLOCKED_CONTROL" "$BLOCKED_TASK" blocked stale-one read-only >/dev/null 2>&1
 BLOCKED_FIRST_RC=$?
-accept_child_thread "$BLOCKED_CONTROL" "$BLOCKED_TASK" blocked stale-two stale >/dev/null 2>&1
+accept_child_thread "$BLOCKED_CONTROL" "$BLOCKED_TASK" blocked stale-two read-only >/dev/null 2>&1
 BLOCKED_SECOND_RC=$?
 check "a second unhealthy provisional child records durable BLOCKED" bash -c \
   '[[ "$1" -ne 0 && "$2" -ne 0 && -s "$3/tasks/blocked/BLOCKED-thread-health.md" && ! -e "$3/tasks/blocked/accepted-thread-id" ]]' \
@@ -257,7 +257,7 @@ run_child_generation() {
     --control-dir "$CONTROL" --task-dir "$task_dir" \
     --mission mission --task-id "$task_id" --repo "$REPO" \
     --parent-worktree "$PARENT" --worktree "$child" >/dev/null || return 1
-  accept_child_thread "$CONTROL" "$task_dir" "$task_id" "thread-$task_id" healthy || return 1
+  accept_child_thread "$CONTROL" "$task_dir" "$task_id" "thread-$task_id" list-visible || return 1
   printf 'running\n' > "$CONTROL/tasks/$task_id/state"
   printf 'running\n' > "$task_dir/state"
   printf '%s\n' "$task_id" > "$child/$task_id.txt"
@@ -288,7 +288,7 @@ run_child_generation task-a 1
 TASK_A_FIRST_RC=$?
 TASK_A_FIRST_MERGE="$(cat "$CONTROL/tasks/task-a/integrated_sha" 2>/dev/null || true)"
 check "ready child completes, immutably integrates, and exactly collects Git resources" bash -c \
-  '[[ "$1" -eq 0 && -n "$2" && "$(git -C "$3" rev-list --parents -n 1 "$2" | awk "{print NF}")" -eq 3 && "$(cat "$4/state")" = cleanup_pending && "$(cat "$4/task-window-state")" = visible && -f "$4/task-window-archive-pending" ]]' \
+  '[[ "$1" -eq 0 && -n "$2" && "$(git -C "$3" rev-list --parents -n 1 "$2" | awk "{print NF}")" -eq 3 && "$(cat "$4/state")" = cleanup_pending && "$(cat "$4/task-window-state")" = unarchived && -f "$4/task-window-archive-pending" ]]' \
   _ "$TASK_A_FIRST_RC" "$TASK_A_FIRST_MERGE" "$REPO" "$CONTROL/tasks/task-a"
 
 # Archive API failure is a post-GC cleanup overlay and cannot resurrect or delete resources.

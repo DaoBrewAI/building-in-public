@@ -63,6 +63,7 @@ these executable shared 0.4 assets:
 - `$PLUGIN_DIR/scripts/validate-task-dag.sh`
 - `$PLUGIN_DIR/scripts/task-worktree.sh`
 - `$PLUGIN_DIR/scripts/integrate-task.sh`
+- `$PLUGIN_DIR/scripts/codex-task-client.py`
 
 The hub is the nearest ancestor of cwd already containing `.orchestrator/`, or
 cwd on first use. Create `.orchestrator/missions/`, `control/`, `archive/`,
@@ -322,15 +323,46 @@ fallback and native 0.4 authority can never take that path.
 Only after successful production worktree creation, the coordinator renders
 `templates/task-brief.md` with the exact approved task, declared files,
 verification commands, child worktree, task state directory, frozen contract
-paths, sandbox roots, and commit-broker path. Create fresh project-local Codex threads
-rather than forks, with the approved Codex model and settings. A child owns
-exactly one task and one manifest-recorded worktree.
+paths, sandbox roots, and commit-broker path.
+
+Resolve the intended Codex project context with `list_projects`. Match the exact
+canonical repository path recorded in the coordinator manifest; do not choose
+by label, title, summary, or a nearby ancestor. Desktop-local `local-*` project
+IDs are not App Server project IDs and must not be passed through blindly. Pass
+`--project-id` only when App Server `project/list` returns the exact matching
+project; otherwise omit it and require post-create `list_threads` evidence to
+bind the exact thread ID, cwd, Git identity, and intended project context. An
+ambiguous or mismatched result is a coordinator BLOCKED outcome. Native 0.4
+must never fall back to `codex exec`, because non-interactive exec sessions are
+not user-visible project task windows.
+
+Start the task-local commit broker, then launch the visible child with the App
+Server client as the last foreground process in the tracked exec session:
+
+```text
+$PLUGIN_DIR/scripts/codex-task-client.py create \
+  --cwd <exact-child-worktree> \
+  --task-dir <exact-task-state-dir> \
+  [--project-id <exact-app-server-project-id>] \
+  --title "ORC <mission> · <task-id> <task-title>" \
+  --model gpt-5.6-sol \
+  --effort high \
+  --prompt-file <exact-rendered-task-brief>
+```
+
+This client uses App Server `thread/start`, `thread/name/set`, and `turn/start`.
+Its exact runtime workspace roots: the child worktree and task state directory.
+It keeps the child worktree as `cwd`, grants workspace-write only to that
+worktree plus the task state directory, and keeps network access disabled.
+Create fresh project-local Codex threads rather than forks or hidden exec
+sessions. A child owns exactly one task and one manifest-recorded worktree.
 
 Treat every returned thread ID as provisional. Accept and record it only after
 the continuation health check proves all of the following:
 
-1. thread creation returned an ID and list or read lookup finds that exact ID
-   or exact intended title;
+1. thread creation returned an ID and `list_threads` must find that exact ID
+   with the exact intended title, cwd, and Git/project context; `read_thread`
+   is supporting health evidence and never substitutes for task-list visibility;
 2. setting the title succeeded, or a read confirms it is already correct;
 3. the first turn exists and its status is active or completed normally;
 4. recent items provide startup evidence that the child began reading its task
@@ -345,10 +377,13 @@ Publish the exact accepted thread ID as a strict one-line, fsynced scalar in
 both the coordinator task authority and its separate worker-facing authority
 copy; the coordinator copy remains authoritative, and later reprovision must
 require the two values to match before issuing a completion receipt.
-On a failed or unreadable health check, remove or mark stale any provisional
-record and allow at most one replacement from the same current durable brief.
-If that one replacement also fails, write a coordinator BLOCKED outcome; never
-loop replacements or let a child replace itself.
+On a failed, invisible, or unreadable health check, stop the tracked provisional
+turn, archive its exact ID when the task API can authoritatively identify it,
+remove or mark stale any provisional record, and allow at most one replacement
+from the same current durable brief. Never accept a thread merely because the
+App Server client or `read_thread` can read it.
+If that one replacement also fails, write a coordinator BLOCKED outcome; never loop replacements, fall back
+to `codex exec`, or let a child replace itself.
 
 ### Consume durable child outcomes
 
@@ -565,9 +600,13 @@ Read state when the tracked process exits:
   holding the shared lifecycle lock; a stale receipt never authorizes a newer epoch.
   Any partial or unrelated pre-existing resource remains a hard failure, and
   ordinary `create` never enters this recognition path.
-  Re-render its task brief and record the new generation and base SHA in the
+  Re-render its task brief, write the exact owned findings to a bounded task-local
+  rework prompt file, and record the new generation and base SHA in the
   authoritative task registry. Only after those records are durable, resume
-  the same accepted child thread with the exact findings it owns. Never resume
+  the same accepted child thread with the exact findings it owns through
+  `$PLUGIN_DIR/scripts/codex-task-client.py resume`, passing its accepted thread
+  ID, exact reprovisioned worktree, task state directory, approved model/effort,
+  and rework prompt file. Never resume
   against a collected or missing worktree, create a new child, or let one child
   edit another task's files. After all affected tasks return durable completed
   outcomes and their commits are reintegrated, resume the same Fable session
@@ -606,7 +645,10 @@ DECISIONS.md, write `running`, then inspect the last `stage:`:
 - exec: when the BLOCKED file has a task identity and the authoritative task
   registry exists, resume that task's accepted Codex child thread. Never send
   the answer to a different child or create a replacement solely to mediate a
-  decision. If no task registry or task identity exists, use the explicit
+  decision. Write the answer to a bounded task-local resume prompt and invoke
+  `$PLUGIN_DIR/scripts/codex-task-client.py resume` with the exact accepted ID,
+  worktree, task directory, approved model/effort, and prompt file. If no task
+  registry or task identity exists, use the explicit
   legacy single-executor fallback: resume the recorded `codex_thread_id`
   through `spawn-worker.sh --stage exec` in its existing mission worktree.
 

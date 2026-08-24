@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Commit broker for the codex exec stage (P0-1 of the 2026-08-08 retrospective).
+# Commit broker for Codex implementation turns (P0-1 of the 2026-08-08 retrospective).
 #
 # The codex workspace-write sandbox keeps the ACTIVE git database semantically
 # read-only (verified on codex-cli 0.147.0: renamed gitdirs, standalone
@@ -10,8 +10,9 @@
 #   $MISSION_DIR/COMMIT-DONE-<n>.json      {"hash": "...", "branch": "..."}
 #   $MISSION_DIR/COMMIT-REJECTED-<n>.json  {"reason": "..."}
 #
-# spawn-worker.sh runs this loop alongside the codex process and kills it when
-# the exec turn ends. --once processes the current backlog and exits (tests).
+# The coordinator runs this loop alongside the native App Server child client;
+# compatibility launchers run it alongside codex exec. The owner stops the loop
+# when the implementation turn ends. --once processes the backlog and exits.
 #
 #   commit-broker.sh --mission-dir <dir> --control-dir <dir> [--once] [--interval <seconds>]
 #

@@ -14,6 +14,7 @@ INSTALLER="$ROOT/scripts/install-worker-settings.sh"
 LIFECYCLE="$ROOT/scripts/task-worktree.sh"
 INTEGRATE="$ROOT/scripts/integrate-task.sh"
 VALIDATOR="$ROOT/scripts/validate-task-dag.sh"
+TASK_CLIENT="$ROOT/scripts/codex-task-client.py"
 CODEX_BRIEF="$ROOT/templates/brief-codex.md"
 
 N=0
@@ -126,6 +127,8 @@ check "native runtime requires the production integration gate" \
   contains "$SKILL" '$PLUGIN_DIR/scripts/integrate-task.sh'
 check "native runtime requires the DAG validator" \
   contains "$SKILL" '$PLUGIN_DIR/scripts/validate-task-dag.sh'
+check "native runtime requires the visible App Server task client" \
+  contains "$SKILL" '$PLUGIN_DIR/scripts/codex-task-client.py create'
 check "native child protocol invokes explicit classified create mode" \
   contains "$SKILL" '--create-mode native-0.4'
 check "native child protocol passes the exact mission authority" \
@@ -135,7 +138,8 @@ check "native child protocol requires production create before thread creation" 
 check "legacy child compatibility remains an explicit classified path" \
   contains "$SKILL" '--create-mode legacy'
 check "production native lifecycle assets are executable" bash -c \
-  '[[ -x "$1" && -x "$2" && -x "$3" ]]' _ "$LIFECYCLE" "$INTEGRATE" "$VALIDATOR"
+  '[[ -x "$1" && -x "$2" && -x "$3" && -x "$4" ]]' _ \
+  "$LIFECYCLE" "$INTEGRATE" "$VALIDATOR" "$TASK_CLIENT"
 check "shared lifecycle lock mutations require the atomic directory guard" \
   contains "$SKILL" 'serialized through the same short-lived atomic guard directory'
 
@@ -214,6 +218,14 @@ check "README documents fail-closed Claude handoff for native 0.4" \
   contains "$README" 'recognizes native 0.4 authority, makes no mission mutation'
 check "README documents the explicit Claude 0.3 recovery marker" \
   contains "$README" 'explicit `0.3.0` pipeline marker before provisioning'
+check "README documents App Server visible native child tasks" \
+  contains "$README" 'App Server-backed project task windows'
+check "README requires active task-list visibility for native children" \
+  contains "$README" '`list_threads` visibility'
+check "README forbids native hidden exec fallback" \
+  contains "$README" 'Native 0.4 never falls back to `codex exec`'
+check "README preserves codex exec only for Hybrid 0.3 compatibility" \
+  contains "$README" 'Hybrid 0.3 compatibility continues to use `codex exec`'
 check "README labels legacy Codex assets" \
   contains "$README" 'Legacy Codex 0.2 compatibility'
 

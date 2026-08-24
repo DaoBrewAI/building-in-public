@@ -5,6 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SKILL="$ROOT/skills/orchestrating/SKILL.md"
 TASK_BRIEF="$ROOT/templates/task-brief.md"
+TASK_CLIENT="$ROOT/scripts/codex-task-client.py"
 
 N=0
 OK=0
@@ -85,8 +86,23 @@ check_contains "ready set excludes an existing owner" "$SKILL" "no active or com
 check_contains "ready set excludes file and contract conflicts" "$SKILL" "file or contract conflict"
 check_contains "ready set excludes user approval blockers" "$SKILL" "user-approval blocker"
 check_contains "child execution uses fresh project-local Codex threads" "$SKILL" "fresh project-local Codex threads"
+check_contains "native child creation uses the App Server task client" \
+  "$SKILL" 'scripts/codex-task-client.py create'
+check_contains "coordinator resolves the saved project before child creation" \
+  "$SKILL" 'list_projects'
+check_contains "App Server child creation binds exact runtime workspace roots" \
+  "$SKILL" 'runtime workspace roots:'
+check_contains "App Server task client exists" "$TASK_CLIENT" 'thread/start'
 check_contains "thread IDs stay provisional until health checks pass" "$SKILL" "provisional"
-check_contains "health check verifies list or read visibility" "$SKILL" "list or read"
+check_section_contains "health check requires exact active list visibility" \
+  "$SKILL" '### Create and accept child threads' '### Consume durable child outcomes' \
+  '`list_threads` must find that exact ID'
+check_section_excludes "health check rejects read-only visibility fallback" \
+  "$SKILL" '### Create and accept child threads' '### Consume durable child outcomes' \
+  'list or read'
+check_section_contains "native 0.4 refuses hidden codex exec fallback" \
+  "$SKILL" '### Create and accept child threads' '### Consume durable child outcomes' \
+  'must never fall back to `codex exec`'
 check_contains "health check verifies first-turn startup evidence" "$SKILL" "startup evidence"
 check_contains "failed health check allows at most one replacement" "$SKILL" "one replacement"
 check_contains "child task brief persists durable task outcomes" "$TASK_BRIEF" "durable task state"
@@ -103,6 +119,9 @@ check_section_contains "rework records the new generation and base" \
 check_section_contains "rework resumes the same thread only after reprovision records" \
   "$SKILL" '- `rework`:' '- `blocked`:' \
   "only after those records are durable, resume the same accepted child thread"
+check_section_contains "rework resumes through the App Server task client" \
+  "$SKILL" '- `rework`:' '- `blocked`:' \
+  'scripts/codex-task-client.py resume'
 check_section_contains "rework never resumes against a collected or missing worktree" \
   "$SKILL" '- `rework`:' '- `blocked`:' \
   "never resume against a collected or missing worktree"

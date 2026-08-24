@@ -33,12 +33,14 @@ ownership across the Hybrid pipeline:
    merge.
 2. A headless `claude-fable-5 --effort high` session brainstorms the request,
    writes the design and plan, and pauses at the founder `go` gate.
-3. On the Codex coordinator surface, bounded `codex exec -m gpt-5.6-sol` child
-   tasks implement dependency-ready DAG nodes in separate `workspace-write`
-   worktrees and publish durable results.
+3. On the Codex coordinator surface, bounded App Server-backed project task
+   windows run GPT-5.6-Sol child turns for dependency-ready DAG nodes in
+   separate `workspace-write` worktrees and publish durable results.
 4. The original Fable session resumes for independent code review. Findings
    return to the exact owning Codex child task as `rework`; Fable re-reviews
    afterward.
+
+Native 0.4 child execution uses App Server-backed project task windows.
 
 Fable is read-only on every worktree. All implementation, test fixes, and
 review-driven patches belong to GPT-5.6-Sol. Fable receives no Bash tool; the
@@ -66,9 +68,9 @@ exact-authority cleanup are plugin invariants and are not configurable per
 mission.
 
 Requires `git`, `jq`, `uuidgen`, Python 3.9 or newer, the Claude CLI
-authenticated for Fable-5, the Codex CLI authenticated for GPT-5.6-Sol, and the
-`10x-engineer` plugin on the Claude side. Start a new Codex task after upgrading
-so the 0.4 skill text is loaded.
+authenticated for Fable-5, a Codex CLI with App Server support authenticated
+for GPT-5.6-Sol, and the `10x-engineer` plugin on the Claude side. Start a new
+Codex task after upgrading so the 0.4 skill text is loaded.
 
 ## Mission-internal task DAG and two-level GC
 
@@ -79,11 +81,15 @@ project-local Codex task, one `orc-task/<mission>/<task-id>` branch, one exact
 manifest-recorded worktree, and one writable sandbox root. Children never
 schedule or create other children.
 
-The coordinator accepts a child task ID only after list/read visibility, title,
-first-turn status, startup evidence, and available settings evidence pass a
-health check. An unreadable or stale provisional ID may be replaced once; a
-second failure becomes `BLOCKED`. Completion is durable state on disk, not an
-inference from chat text or process exit.
+Native child acceptance requires `list_threads` visibility. The coordinator
+accepts a child task ID only after the exact ID appears with the intended
+project/cwd context, expected title, first-turn status, startup evidence,
+and available settings evidence pass a health check. `read_thread` is supporting
+evidence, never a substitute for presence in the user-facing task list. An
+invisible, unreadable, or stale provisional ID may be replaced once; a second
+failure becomes `BLOCKED`. Native 0.4 never falls back to `codex exec`.
+Completion is durable state on disk, not an inference from chat text or process
+exit.
 
 ```mermaid
 stateDiagram-v2
@@ -185,10 +191,11 @@ Requires `git`, `jq`, `uuidgen`, the Codex CLI (`codex` on PATH or the
 ChatGPT.app bundled binary; `ORC_CODEX_BIN` overrides), and the `10x-engineer`
 plugin.
 
-Since v0.3 each Claude Code-coordinated mission runs as a **staged pipeline**: a
-headless `claude -p` session plans and pauses at a founder go-gate (`planned`),
-a `codex exec` worker executes and verifies inside a `workspace-write` sandbox,
-then the same claude session is resumed to code-review. Hardening from the first live
+Hybrid 0.3 compatibility continues to use `codex exec`: a headless `claude -p`
+session plans and pauses at a founder go-gate (`planned`), the recorded single
+executor runs and verifies inside a `workspace-write` sandbox, then the same
+Claude session resumes for code review. New native 0.4 task-DAG missions instead
+use visible App Server-backed child task windows. Hardening from the first live
 mission retrospective (22 BLOCKEDs, 19 eliminable):
 
 Native 0.4 task-DAG execution is Codex-coordinator-only. Before reconciling a
