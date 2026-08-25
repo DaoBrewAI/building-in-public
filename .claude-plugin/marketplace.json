@@ -96,6 +96,15 @@
       },
       "category": "development",
       "source": "./design-language-translator"
+    },
+    {
+      "name": "renhua",
+      "description": "Edits Chinese AI and technical writing into direct public prose while preserving the author's judgment, facts, technical details, and lived experience.",
+      "author": {
+        "name": "DaoBrew AI"
+      },
+      "category": "development",
+      "source": "./renhua"
     }
   ]
 }

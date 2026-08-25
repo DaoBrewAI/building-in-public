@@ -1,0 +1,21 @@
+{
+  "name": "renhua",
+  "version": "0.1.0",
+  "description": "Edits Chinese AI and technical writing into direct public prose while preserving the author's judgment, facts, technical details, and lived experience.",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "chinese-writing",
+    "editing",
+    "de-ai",
+    "technical-writing",
+    "daobrew"
+  ],
+  "skills": [
+    "./skills/"
+  ],
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  }
+}
