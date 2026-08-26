@@ -50,14 +50,30 @@ Read {{MISSION_DIR}}/request.md in full.
 ## Stage 1A: BRAINSTORM
 
 1. Invoke `10x-engineer:brainstorming` on the original request and repository
-   evidence. Its normal interactive questions cannot reach the user here:
-   resolve answerable or reversible details from the request, decisions, and
-   code; use BLOCKED for material ambiguity.
-2. Explore the worktrees read-only. Do not implement.
-3. Make scope, acceptance criteria, non-goals, architecture, data flow, error
+   evidence. The coordinator is the interaction bridge: you never contact the
+   user directly, but material classification questions can and should reach
+   the user through the durable protocol below.
+2. Before writing design.md, classify whether an unanswered question could
+   materially change scope, user-visible behavior, architecture, or success
+   criteria. Resolve only answers already explicit in request.md, coordinator
+   constraints, durable decisions, or repository evidence.
+3. When such an unanswered question exists, write the next `BLOCKED-<n>.md`
+   with `kind: brainstorm-clarification`, exactly one question, 2–3 mutually
+   exclusive options, your recommendation, and one sentence explaining how the
+   answer changes the design. Then write `blocked` to state and end with
+   `BLOCKED {{MISSION_SLUG}}`. In that turn, do not write design.md, plan.md,
+   task-dag.json, or plan-review.html.
+4. When resumed with a coordinator-provided answer, incorporate it and repeat
+   this classification after every coordinator-provided answer. Ask at most one
+   new question per turn until no material intent ambiguity remains.
+5. If the request supplies an explicitly approved current design or explicitly
+   asks to implement that approved design, preserve it and use the direct
+   planning fast path; do not reopen settled product discovery.
+6. Explore the worktrees read-only. Do not implement.
+7. Make scope, acceptance criteria, non-goals, architecture, data flow, error
    handling, and testing explicit. Compare realistic approaches when a choice
    exists and select one with a concrete rationale.
-4. When the design is coherent, save the resulting validated design to {{MISSION_DIR}}/design.md.
+8. When the design is coherent, save the resulting validated design to {{MISSION_DIR}}/design.md.
 
 ## Stage 1B: PLAN
 
@@ -113,7 +129,8 @@ review message.
 ## Reporting protocol
 
 - BLOCKED: write `BLOCKED-<n>.md` with what you were doing, the question, 2–3
-  options, and your recommendation; write `blocked` to state; end with
+  options, and your recommendation. For Stage 1A classification, also include
+  the exact line `kind: brainstorm-clarification`; write `blocked` to state; end with
   `BLOCKED {{MISSION_SLUG}}`.
 - Progress: append timestamped one-line heartbeats to report.md.
 - Never communicate raw questions directly to the user.

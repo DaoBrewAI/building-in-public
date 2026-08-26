@@ -252,10 +252,15 @@ $PLUGIN_DIR/scripts/spawn-worker.sh \
   --worktree <primary> [--worktree <other>]...
 ```
 
-The fresh Fable session invokes `10x-engineer:brainstorming`, writes design.md,
-invokes `10x-engineer:writing-plans`, writes plan.md and plan-review.html, sets
-state=planned, and exits. Update MISSION.md and board.html, tell the user it is
-running, and remain available for other work.
+The fresh Fable session invokes `10x-engineer:brainstorming`. It may return
+`blocked` with `kind: brainstorm-clarification` before any design or plan exists;
+this is the expected interaction bridge when an unanswered intent question
+could change scope, user-visible behavior, architecture, or success criteria.
+Enter Phase 5 immediately for that question. After clarification is complete,
+the same Fable session writes design.md, invokes `10x-engineer:writing-plans`,
+writes plan.md and plan-review.html, sets state=planned, and exits. Update
+MISSION.md and board.html, tell the user it is running, and remain available for
+other work.
 
 ## Phase 3g — Founder go gate
 
@@ -673,8 +678,20 @@ foreground command; detaching it loses the exit wake.
 
 ## Phase 5 — Mediate BLOCKED
 
-Use `orchestrator:orchestrator-mediation`. Answer from design, plan, decisions,
-or code first; decide reversible implementation details; escalate only scope,
+Use `orchestrator:orchestrator-mediation`. First inspect the BLOCKED kind.
+
+For `kind: brainstorm-clarification`, answer from the current request or an
+exact durable user ruling only when it already settles the question. Otherwise
+ask the user the exact single question, followed by Fable's 2–3 options and
+recommendation; omit generic blocker narration and do not decide it merely
+because an option is reversible. After the answer, write `ANSWER-<n>.md`, append
+the ruling to DECISIONS.md, write `running`, and resume the same Fable session
+with that answer using `--stage plan`. If Fable returns another material
+classification question, repeat one question per turn. This clarification
+bridge does not count as a crash, rework round, or founder go rejection.
+
+For every other BLOCKED kind, answer from design, plan, decisions, or code
+first; decide reversible implementation details; escalate only scope,
 user-visible behavior, cost, or data. Write `ANSWER-<n>.md`, append the ruling to
 DECISIONS.md, write `running`, then inspect the last `stage:`:
 

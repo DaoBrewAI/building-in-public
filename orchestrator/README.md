@@ -26,7 +26,7 @@ ask:
 Use $orchestrating to add retry logic to the cuff sync and update the endpoint schema.
 ```
 
-Orchestrator 0.4.1 extends the Codex coordinator while preserving fixed backend
+Orchestrator 0.4.2 extends the Codex coordinator while preserving fixed backend
 ownership across the Hybrid pipeline:
 
 1. The Codex app task coordinates state, worktrees, mediation, acceptance, and
@@ -50,6 +50,15 @@ personal data, generated customer outputs, ignored/private corpora, and
 unrelated files. Users can explicitly select `approval-required` for one
 upfront pause or `no-external` to block the Hybrid backend before provisioning;
 already-authorized least-scope inputs never trigger a mid-run consent prompt.
+
+Fable brainstorming is interactive through the Codex coordinator. Before
+design.md, Fable checks for unanswered questions that could change scope,
+user-visible behavior, architecture, or success criteria. When one exists, the
+coordinator asks exactly one concise classification question with options and a
+recommendation, then resumes the same Fable session. Explicitly approved
+designs keep the direct-to-plan fast path. The completed design and plan still
+pause at the existing founder go gate; downstream DAG, execution, review, and
+GC behavior is unchanged.
 
 Fable is read-only on every worktree. All implementation, test fixes, and
 review-driven patches belong to GPT-5.6-Sol. Fable receives no Bash tool; the

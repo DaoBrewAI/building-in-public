@@ -7,6 +7,16 @@ description: Triage a mission session's BLOCKED report - answer it, decide it, o
 
 Read the newest `BLOCKED-<n>.md` in the mission directory. It contains: what the mission session was doing, the question, 2–3 options with trade-offs, and the session's recommendation. Triage in this order:
 
+## (0) Brainstorm clarification — preserve user intent
+
+When the file contains `kind: brainstorm-clarification`, first check whether the
+current request or an exact durable user ruling already answers it. If yes, cite
+that answer. Otherwise relay exactly one question with Fable's 2–3 options and
+recommendation, then wait for the user. This is product-intent discovery: never
+route it through reversible implementation detail or silently choose an option
+for the user. Keep the relay concise and return the answer to the same Fable
+session through the coordinator's brainstorm-resume path.
+
 ## (a) Answerable — answer it yourself
 
 The answer already exists in: the design doc, DECISIONS.md (has this been ruled before? check first — never re-escalate a settled question), the mission's brief, or the codebase (go read the code if that settles it).
