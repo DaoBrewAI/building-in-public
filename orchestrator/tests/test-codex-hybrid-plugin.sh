@@ -63,10 +63,10 @@ regex() {
   grep -Eq -- "$expression" "$file"
 }
 
-check "Codex manifest is version 0.4.3" \
-  json_field_is "$MANIFEST" version 0.4.3
-check "Claude manifest is version 0.4.3" \
-  json_field_is "$CLAUDE_MANIFEST" version 0.4.3
+check "Codex manifest is version 0.4.4" \
+  json_field_is "$MANIFEST" version 0.4.4
+check "Claude manifest is version 0.4.4" \
+  json_field_is "$CLAUDE_MANIFEST" version 0.4.4
 check "Codex manifest describes Claude Fable planning" \
   contains "$MANIFEST" "Fable-5"
 check "Codex manifest describes GPT-5.6-Sol execution" \
@@ -122,8 +122,26 @@ check "Codex skill resumes review on the Fable stage" \
   contains "$SKILL" '--stage review'
 check "Codex skill bounces findings through rework" \
   contains "$SKILL" 'state=rework'
-check "Codex acceptance cleanup automatically deletes completed leftovers" \
-  contains "$SKILL" 'orchestrator-gc.sh --hub $HUB --clean'
+check "Phase 0 reconciliation is report-only and non-destructive" \
+  contains_compact "$SKILL" 'Phase 0 reconciliation is report-only'
+check "unrelated cleanup backlog never blocks new mission scheduling" \
+  contains_compact "$SKILL" 'cleanup candidates from unrelated missions do not block new scheduling'
+check "Phase 0 never asks for unrelated cleanup authorization" \
+  contains_compact "$SKILL" 'Do not ask the user to authorize unrelated cleanup before launching a new mission'
+check "Codex acceptance cleanup targets only the accepted mission" \
+  contains "$SKILL" 'orchestrator-gc.sh --hub $HUB --mission <mission-slug> --clean'
+check "Phase 6 publishes terminal state before scoped cleanup and archives only afterward" \
+  python3 - "$SKILL" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text()
+phase = text[text.index("## Phase 6 — Light acceptance and merge"):text.index("## Phase 6f — Preserve failure")]
+terminal = phase.index("write `accepted` to state")
+cleanup = phase.index("orchestrator-gc.sh --hub $HUB --mission <mission-slug> --clean")
+archive = phase.index("move the mission directory")
+raise SystemExit(0 if terminal < cleanup < archive else 1)
+PY
 check "Codex acceptance cleanup is limited to mission-owned origin refs" \
   contains "$SKILL" 'matching mission-owned `origin/orc/*` ref'
 check "Codex acceptance cleanup records but never deletes the target branch" \
@@ -235,8 +253,8 @@ check "Codex coordinator queues only on a real dependency" \
 check "Claude coordinator routes write-producing acceptance tests to Codex" \
   contains "$CLAUDE_SKILL" 'verification that may write caches, snapshots, coverage, or generated artifacts'
 
-check "README declares Orchestrator 0.4.3" \
-  contains "$README" 'Orchestrator 0.4.3'
+check "README declares Orchestrator 0.4.4" \
+  contains "$README" 'Orchestrator 0.4.4'
 check "README scopes native 0.4 execution to the Codex coordinator" \
   contains "$README" 'Native 0.4 task-DAG execution is Codex-coordinator-only'
 check "README documents fail-closed Claude handoff for native 0.4" \

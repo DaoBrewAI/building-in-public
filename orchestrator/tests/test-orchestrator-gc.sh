@@ -69,6 +69,13 @@ new_mission "$HUB/archive" "foreign-device" accepted \
   "/missing/worktree" "orc/foreign-device" "/missing/repository" \
   "0000000000000000000000000000000000000000"
 
+# Report-only Phase 0 discovery must surface unrelated malformed cleanup
+# authority without turning the entire hub scan into a scheduling failure.
+BROKEN_SLUG="broken-unrelated"
+mkdir -p "$HUB/missions/$BROKEN_SLUG"
+printf 'accepted\n' > "$HUB/missions/$BROKEN_SLUG/state"
+printf 'malformed\n' > "$HUB/missions/$BROKEN_SLUG/worktrees.txt"
+
 # Integrated child resources are coordinator-authoritative under control/, not
 # mission-local manifests. Exercise exact child cleanup beside legacy parent GC.
 CHILD_MISSION="child-parent"
@@ -107,7 +114,10 @@ mkdir -p "$BLOCKED_CONTROL"
 printf '%s\t%s\t%s\t%s\n' "$BLOCKED_WT" "$BLOCKED_BRANCH" "$CHILD_INTEGRATED" "$REPO" > "$BLOCKED_CONTROL/worktrees.txt"
 printf '%s\n' blocked > "$BLOCKED_CONTROL/state"
 
-REPORT="$($GC --hub "$HUB")" || fail "foreign-device manifests must not make report-only GC fail"
+REPORT="$($GC --hub "$HUB" 2>&1)" \
+  || fail "unrelated malformed authority must not make report-only Phase 0 fail"
+grep -Fq "legacy worktree manifest is malformed" <<<"$REPORT" \
+  || fail "report-only discovery did not surface the unrelated malformed authority"
 grep -Fq "stale remote branch ($DONE_SLUG): $DONE_BRANCH" <<<"$REPORT" \
   || fail "report must include the completed mission's remote branch"
 grep -Fq "stale remote branch ($UNARCHIVED_SLUG): $UNARCHIVED_BRANCH" <<<"$REPORT" \
@@ -120,6 +130,37 @@ fi
 if grep -Fq "$BLOCKED_BRANCH" <<<"$REPORT"; then
   fail "blocked child appeared in the GC report"
 fi
+rm -rf -- "$HUB/missions/$BROKEN_SLUG"
+
+SCOPED_REPORT="$($GC --hub "$HUB" --mission "$DONE_SLUG")" \
+  || fail "mission-scoped report-only GC failed"
+grep -Fq "$DONE_BRANCH" <<<"$SCOPED_REPORT" \
+  || fail "mission-scoped report omitted the selected mission"
+if grep -Fq "$UNARCHIVED_BRANCH" <<<"$SCOPED_REPORT" || grep -Fq "$CHILD_BRANCH" <<<"$SCOPED_REPORT"; then
+  fail "mission-scoped report included another mission"
+fi
+
+$GC --hub "$HUB" --mission "$DONE_SLUG" --clean >/dev/null
+
+[[ ! -e "$DONE_WT" ]] || fail "mission-scoped cleanup did not remove the selected worktree"
+! git -C "$REPO" show-ref --verify --quiet "refs/heads/$DONE_BRANCH" \
+  || fail "mission-scoped cleanup did not remove the selected local branch"
+! git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$DONE_BRANCH" \
+  || fail "mission-scoped cleanup did not remove the selected remote branch"
+[[ -d "$UNARCHIVED_WT" ]] || fail "mission-scoped cleanup removed an unselected worktree"
+git -C "$REPO" show-ref --verify --quiet "refs/heads/$UNARCHIVED_BRANCH" \
+  || fail "mission-scoped cleanup removed an unselected local branch"
+git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$UNARCHIVED_BRANCH" \
+  || fail "mission-scoped cleanup removed an unselected remote branch"
+[[ -d "$CHILD_WT" ]] || fail "mission-scoped cleanup removed another mission's child worktree"
+
+$GC --hub "$HUB" --mission "$CHILD_MISSION" --clean >/dev/null
+[[ ! -e "$CHILD_WT" ]] || fail "child mission-scoped cleanup did not remove its worktree"
+! git -C "$REPO" show-ref --verify --quiet "refs/heads/$CHILD_BRANCH" \
+  || fail "child mission-scoped cleanup did not remove its local branch"
+! git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$CHILD_BRANCH" \
+  || fail "child mission-scoped cleanup did not remove its remote branch"
+[[ -d "$UNARCHIVED_WT" ]] || fail "child mission-scoped cleanup removed another mission"
 
 $GC --hub "$HUB" --clean >/dev/null
 
@@ -134,11 +175,6 @@ $GC --hub "$HUB" --clean >/dev/null
 ! git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$UNARCHIVED_BRANCH" \
   || fail "accepted unarchived remote branch was not removed"
 
-[[ ! -e "$CHILD_WT" ]] || fail "integrated child worktree was not removed"
-! git -C "$REPO" show-ref --verify --quiet "refs/heads/$CHILD_BRANCH" \
-  || fail "integrated child local branch was not removed"
-! git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$CHILD_BRANCH" \
-  || fail "integrated child remote branch was not removed"
 [[ "$(cat "$CHILD_CONTROL/state")" == collected ]] \
   || fail "integrated child state was not advanced to collected"
 
@@ -174,4 +210,12 @@ git -C "$REPO" show-ref --verify --quiet "refs/heads/$OTHER_BRANCH" \
 git --git-dir "$REMOTE" show-ref --verify --quiet "refs/heads/$OTHER_BRANCH" \
   || fail "cross-mission legacy manifest removed another mission's remote branch"
 
-echo "  orchestrator-gc: completed parent and integrated child resources removed; unsafe resources preserved"
+INVALID_FILTER_RC=0
+$GC --hub "$HUB" --mission '../manifest-owner' --clean >/dev/null 2>&1 \
+  || INVALID_FILTER_RC=$?
+[[ "$INVALID_FILTER_RC" -ne 0 ]] || fail "unsafe mission filter was accepted"
+[[ -d "$OTHER_WT" ]] || fail "unsafe mission filter removed a worktree"
+git -C "$REPO" show-ref --verify --quiet "refs/heads/$OTHER_BRANCH" \
+  || fail "unsafe mission filter removed a local branch"
+
+echo "  orchestrator-gc: mission-scoped and hub-wide cleanup remove only exact completed resources"

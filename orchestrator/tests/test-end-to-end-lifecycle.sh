@@ -292,7 +292,7 @@ check "ready child completes, immutably integrates, and exactly collects Git res
   _ "$TASK_A_FIRST_RC" "$TASK_A_FIRST_MERGE" "$REPO" "$CONTROL/tasks/task-a"
 
 # Archive API failure is a post-GC cleanup overlay and cannot resurrect or delete resources.
-"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
 ARCHIVE_PENDING_RC=$?
 check "task-window archive failure remains retriable after child resource GC" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2/state")" = cleanup_pending && -f "$2/task-window-archive-pending" && ! -e "$3" ]]' \
@@ -389,7 +389,7 @@ printf 'report\n## Code review\nresolved\n## Verification\nverified\n' > "$MISSI
 printf 'decisions\n' > "$CONTROL/decisions.md"
 printf 'verification\n' > "$CONTROL/verification.md"
 
-"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
 UNMERGED_RC=$?
 check "unmerged parent tip is preserved even after resolved final review" bash -c \
   '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/parent-cleanup-state")" = cleanup_pending ]] && git -C "$4" show-ref --verify --quiet refs/heads/orc/mission' \
@@ -408,15 +408,15 @@ exec "$ORC_E2E_REAL_GIT" "$@"
 SH
 chmod +x "$NETWORK_BIN/git"
 PATH="$NETWORK_BIN:$PATH" ORC_E2E_REAL_GIT="$REAL_GIT" \
-  "$GC" --hub "$HUB" --clean >/dev/null 2>&1
+  "$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
 NETWORK_RC=$?
 check "parent network failure retains exact resources and cleanup authority" bash -c \
   '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/parent-cleanup-state")" = cleanup_pending ]] && git --git-dir "$4" show-ref --verify --quiet refs/heads/orc/mission' \
   _ "$NETWORK_RC" "$PARENT" "$CONTROL" "$REMOTE"
 
-"$GC" --hub "$HUB" --clean >/dev/null
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null
 PARENT_GC_RC=$?
-"$GC" --hub "$HUB" --clean >/dev/null
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null
 PARENT_REPEAT_RC=$?
 check "target merge enables exact parent GC and repeated cleanup is idempotent" bash -c \
   '[[ "$1" -eq 0 && "$2" -eq 0 && ! -e "$3" && "$(cat "$4/parent-cleanup-state")" = collected ]] && ! git -C "$5" show-ref --verify --quiet refs/heads/orc/mission && ! git --git-dir "$6" show-ref --verify --quiet refs/heads/orc/mission' \
@@ -435,12 +435,12 @@ check "task API fixture observed create, archive failure/retry, unarchive/rearch
   _ "$TASK_API_LOG"
 
 # Task 8 documentation is part of the release contract.
-check "Codex manifest declares the 0.4.3 feature release" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.4.3 ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest declares the same 0.4.3 feature release" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.4.3 && "$(jq -r .version "$1")" = "$(jq -r .version "$2")" ]]' \
+check "Codex manifest declares the 0.4.4 feature release" bash -c \
+  '[[ "$(jq -r .version "$1")" = 0.4.4 ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest declares the same 0.4.4 feature release" bash -c \
+  '[[ "$(jq -r .version "$1")" = 0.4.4 && "$(jq -r .version "$1")" = "$(jq -r .version "$2")" ]]' \
   _ "$CLAUDE_MANIFEST" "$CODEX_MANIFEST"
-check "README labels the Orchestrator 0.4.3 feature release" contains "$README" "Orchestrator 0.4.3"
+check "README labels the Orchestrator 0.4.4 feature release" contains "$README" "Orchestrator 0.4.4"
 check "README documents the mission-internal DAG lifecycle" contains "$README" "Mission-internal task DAG and two-level GC"
 check "README includes child and parent state diagrams" contains "$README" "stateDiagram-v2"
 check "README documents migration from the single executor" contains "$README" "Migration from the single executor"

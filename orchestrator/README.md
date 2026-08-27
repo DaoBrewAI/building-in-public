@@ -26,7 +26,7 @@ ask:
 Use $orchestrating to add retry logic to the cuff sync and update the endpoint schema.
 ```
 
-Orchestrator 0.4.3 extends the Codex coordinator while preserving fixed backend
+Orchestrator 0.4.4 extends the Codex coordinator while preserving fixed backend
 ownership across the Hybrid pipeline:
 
 1. The Codex app task coordinates state, worktrees, mediation, acceptance, and
@@ -147,15 +147,18 @@ stateDiagram-v2
     review --> accepted: review resolved + merged-tree verification
     accepted --> cleanup_pending: archive, network, or authority retry required
     accepted --> collected: target contains exact parent tip and parent GC succeeds
-    cleanup_pending --> collected: Phase 0 reconciliation succeeds
+    cleanup_pending --> collected: mission-scoped reconciliation succeeds
 ```
 
-Parent GC runs as compensation at every Phase 0 before new scheduling. It
-requires resolved final review, a clean exact parent worktree, every terminal
-child task window archived, and independent proof that the recorded parent tip
-is contained in the target branch. PR metadata is only additional evidence.
-Before removing the exact parent worktree and refs, it archives design, plan,
-approved DAG, decisions, report, verification, and cleanup journal.
+Phase 0 runs report-only GC discovery before new scheduling; it never performs
+hub-wide destructive cleanup, and unrelated cleanup candidates do not block a
+new mission. Exact collection runs only with `--mission <slug> --clean` for the
+mission being resumed or accepted. Collection requires resolved final review,
+a clean exact parent worktree, every terminal child task window archived, and
+independent proof that the recorded parent tip is contained in the target
+branch. PR metadata is only additional evidence. Before removing that mission's
+exact parent worktree and refs, it archives design, plan, approved DAG,
+decisions, report, verification, and cleanup journal.
 
 ### Failure and retry behavior
 
@@ -164,7 +167,7 @@ approved DAG, decisions, report, verification, and cleanup journal.
 | Dirty child or parent worktree | Preserve worktree and refs; refuse integration or GC | Clean or resolve through the owning Codex task, then retry exact authority |
 | Completed but unmerged child, or parent tip absent from target | Preserve resources; no inferred completion | Integrate or merge, refresh attestation, then reconcile |
 | Duplicate owner or stale provisional child task ID | Reject ownership; allow at most one health-checked replacement | Same frozen brief and ready-set epoch |
-| Remote/network check failure | Record `cleanup_pending`; do not partially delete | Next Phase 0 with the same manifest and SHA leases |
+| Remote/network check failure | Record `cleanup_pending`; do not partially delete | Next mission-scoped reconcile with the same manifest and SHA leases |
 | Child task-window archive failure | Retain exact accepted ID and archive-pending marker | Retry the task API, then rerun compensating GC |
 | Task-targeted rework | Unarchive the same task, reprovision generation N+1, reintegrate, recollect, rearchive | Same accepted task ID and retained sandbox authority |
 | Repeated integration or cleanup | Verified idempotent no-op | Safe to repeat after ambiguous interruption |
@@ -249,9 +252,10 @@ missions remain recognizable only from their recorded Hybrid stage history.
 - **Planner hardening** — reuse claims require `file:line` citations from real
   code, contract-changing tasks annotate their compile-impact surface, and
   every checkpoint must compile independently.
-- **`scripts/orchestrator-gc.sh`** — state-gated cleanup for completed mission
-  worktrees plus local and remote `orc/` branches; Phase 6 invokes it with
-  `--clean` automatically after a successful merge.
+- **`scripts/orchestrator-gc.sh`** — report-only hub reconciliation plus
+  state-gated, mission-scoped cleanup for completed mission worktrees and local
+  and remote `orc/` branches; Phase 6 invokes `--mission <slug> --clean` after a
+  successful merge.
 
 ## Mission lifecycle
 

@@ -151,7 +151,7 @@ setup_fixture happy
 add_archived_child_authority
 UNRELATED_BRANCH=keep-unrelated
 git -C "$REPO" branch "$UNRELATED_BRANCH" main
-$GC --hub "$HUB" --clean >"$FIXTURE/happy.out" 2>"$FIXTURE/happy.err"
+$GC --hub "$HUB" --mission mission --clean >"$FIXTURE/happy.out" 2>"$FIXTURE/happy.err"
 HAPPY_RC=$?
 if [[ "$HAPPY_RC" -ne 0 ]]; then
   sed 's/^/  happy diagnostic: /' "$FIXTURE/happy.err"
@@ -680,8 +680,12 @@ check "post-stale-marker exact reconciliation converges collection" bash -c \
   _ "$MANIFEST_RACE_RETRY_RC" "$CONTROL" "$PARENT" "$PENDING_MARKER" "$ARCHIVE" \
   "$REPO" "$BRANCH" "$REMOTE"
 
-check "Phase 0 runs compensating GC before any new scheduling" \
-  grep -Fqi -- "run compensating GC before scheduling" "$SKILL"
+check "Phase 0 runs report-only reconciliation before new scheduling" bash -c \
+  'tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g" | grep -Fqi -- "Phase 0 reconciliation is report-only"' \
+  _ "$SKILL"
+check "Phase 0 never requires hub-wide destructive cleanup" bash -c \
+  'normalized="$(tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g")"; [[ "$normalized" == *"Do not run hub-wide"*"--clean"*"during Phase 0"* ]]' \
+  _ "$SKILL"
 check "Phase 0 reconciles terminal child task-window archival" \
   grep -Fqi -- "archive every terminal integrated child task window" "$SKILL"
 check "coordinator preserves nonterminal and unresolved child windows" bash -c \

@@ -182,11 +182,17 @@ that predates the DAG/task registry.
 1. If legacy root `$HUB/MISSION.md` is incomplete, do not mix layouts. Ask
    whether to finish it with its historical version or archive it.
 2. Delete `$HUB/.carryover-notified` when beginning in a fresh context.
-3. Run compensating GC before scheduling any new mission or child work. Invoke
-   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --clean` first so durable
-   `cleanup_pending` child and parent resources are reconciled from exact
-   coordinator authority. A transient refusal remains pending and prevents new
-   scheduling for the affected mission; it never authorizes pattern cleanup.
+3. Run compensating GC discovery before scheduling any new mission or child work.
+   **Phase 0 reconciliation is report-only:** invoke
+   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB` without `--clean`. Do not
+   run hub-wide `--clean` during Phase 0. Record the exact cleanup candidates,
+   but cleanup candidates from unrelated missions do not block new scheduling.
+   They block only reuse of their exact worktree/branch or a mission that truly
+   depends on their unresolved lifecycle state. Do not ask the user to authorize
+   unrelated cleanup before launching a new mission. When resuming a specific
+   `cleanup_pending` mission, use
+   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --mission <mission-slug> --clean`
+   so the mutation is bounded to that mission's durable authority.
 4. Reconcile child task windows after Git-resource GC and before computing a
    ready set. Archive every terminal integrated child task window that is now
    durably `collected` by calling the task API for the exact accepted thread ID.
@@ -196,7 +202,8 @@ that predates the DAG/task registry.
    `cleanup_pending`, then retry at the next Phase 0. Preserve every nonterminal
    or unresolved task window, including running, blocked, review, rework, and
    any task with `unresolved-rework`. After a successful child archive, rerun
-   compensating GC so an otherwise eligible parent may be collected.
+   mission-scoped compensating GC for that exact mission only so an otherwise
+   eligible parent may be collected.
 5. For every mission, read `state`, `MISSION.md`, `session.txt`,
    `worktrees.txt`, unanswered BLOCKED files, recorded branches, and the
    coordinator-owned control manifest. Treat mission-local manifests and
@@ -762,8 +769,12 @@ impact, attempts, exact decision needed, and safe default.
    target branch is containment authority only: never delete or edit it during
    cleanup. Write `review-resolution=resolved`, snapshot fresh merged-tree
    evidence to `verification.md` plus mission-relevant rulings to `decisions.md`,
-   reconcile every child Git resource and task
-   window, then run `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --clean`.
+   reconcile every child Git resource and task window, then write `accepted` to state
+   and set MISSION.md `Phase:` to `accepted` before invoking GC. This terminal
+   transition makes the mission eligible for exact collection; it is not an
+   archival or cleanup-success claim. Then run
+   `$PLUGIN_DIR/scripts/orchestrator-gc.sh --hub $HUB --mission <mission-slug> --clean`.
+   Never use hub-wide destructive cleanup as an acceptance shortcut.
    The collector archives the required artifacts before removing the planted
    `.claude/settings.local.json` (and `.claude/` if it is then empty), exact
    manifest-recorded parent worktrees, exact mission-owned local `orc/*` refs,
@@ -775,8 +786,10 @@ impact, attempts, exact decision needed, and safe default.
    blocked, failed, nonterminal-child, or unresolved-rework missions.
 5. Report shipped changes, decisions, tests, and report follow-ups. Append one
    durable memory entry exactly once.
-6. Set state/phase accepted, archive the mission directory, regenerate the
-   board, and release already-authorized pending missions.
+6. Only after `parent-cleanup-state` is durably `collected`, move the mission directory
+   into `$HUB/archive/`, regenerate the board, and release already-authorized pending
+   missions. If cleanup remains pending, keep the accepted mission in place for the
+   next mission-scoped reconciliation and do not claim archival completion.
 
 ## Phase 6f — Preserve failure
 

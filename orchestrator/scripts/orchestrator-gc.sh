@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Garbage collector for completed orchestrator missions.
 #
-#   orchestrator-gc.sh --hub <hub dir> [--clean]
+#   orchestrator-gc.sh --hub <hub dir> [--mission <slug>] [--clean]
 #
 # Default is report-only. --clean removes exact manifest-recorded parent and
 # integrated orc-task/* child resources. Remote deletion is attempted only
@@ -14,6 +14,7 @@ GC_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 
 HUB=""
 CLEAN=0
+MISSION_FILTER=""
 FOUND=0
 ERRORS=0
 GC_LOCK_FILE=""
@@ -27,7 +28,7 @@ GC_GUARD_TOKEN=""
 GC_GUARD_OWNED=0
 
 usage() {
-  echo "usage: orchestrator-gc.sh --hub <hub dir> [--clean]" >&2
+  echo "usage: orchestrator-gc.sh --hub <hub dir> [--mission <slug>] [--clean]" >&2
 }
 
 while [[ $# -gt 0 ]]; do
@@ -40,6 +41,11 @@ while [[ $# -gt 0 ]]; do
     --clean)
       CLEAN=1
       shift
+      ;;
+    --mission)
+      [[ $# -ge 2 ]] || { usage; exit 1; }
+      MISSION_FILTER="$2"
+      shift 2
       ;;
     *)
       echo "unknown arg: $1" >&2
@@ -81,6 +87,12 @@ problem() {
 gc_valid_lock_token() {
   case "$1" in ''|.|..|*[!A-Za-z0-9._-]*) return 1 ;; *) return 0 ;; esac
 }
+
+if [[ -n "$MISSION_FILTER" ]] && ! gc_valid_lock_token "$MISSION_FILTER"; then
+  echo "invalid mission filter: $MISSION_FILTER" >&2
+  usage
+  exit 1
+fi
 
 gc_pid_is_live() {
   local pid="$1"
@@ -2235,6 +2247,7 @@ scan_root() {
   for mission in "$root"/* "$root"/.[!.]* "$root"/..?*; do
     [[ -e "$mission" || -L "$mission" ]] || continue
     slug="$(basename "$mission")"
+    [[ -z "$MISSION_FILTER" || "$slug" == "$MISSION_FILTER" ]] || continue
     if ! gc_valid_lock_token "$slug" || [[ ! -d "$mission" || -L "$mission" ]]; then
       problem "$root contains an unsafe mission entry: $slug"
       continue
@@ -2303,6 +2316,7 @@ scan_exact_parent_root() {
   for mission in "$root"/* "$root"/.[!.]* "$root"/..?*; do
     [[ -e "$mission" || -L "$mission" ]] || continue
     slug="$(basename "$mission")"
+    [[ -z "$MISSION_FILTER" || "$slug" == "$MISSION_FILTER" ]] || continue
     if ! gc_valid_lock_token "$slug" || [[ ! -d "$mission" || -L "$mission" ]]; then
       problem "$root contains an unsafe mission entry: $slug"
       continue
@@ -2342,6 +2356,7 @@ scan_child_tasks() {
   for mission_dir in "$control_root"/* "$control_root"/.[!.]* "$control_root"/..?*; do
     [[ -e "$mission_dir" || -L "$mission_dir" ]] || continue
     mission="$(basename "$mission_dir")"
+    [[ -z "$MISSION_FILTER" || "$mission" == "$MISSION_FILTER" ]] || continue
     if ! gc_valid_lock_token "$mission" || [[ ! -d "$mission_dir" || -L "$mission_dir" ]]; then
       problem "$mission coordinator control entry is unsafe"
       continue
@@ -2406,10 +2421,17 @@ scan_root "$HUB/missions"
 if [[ "$FOUND" -eq 0 && "$ERRORS" -eq 0 ]]; then
   echo "gc: nothing stale"
 elif [[ "$CLEAN" -eq 0 ]]; then
-  echo "gc: rerun with --clean to remove the above"
+  if [[ -n "$MISSION_FILTER" ]]; then
+    echo "gc: rerun with --mission $MISSION_FILTER --clean to remove the above"
+  else
+    echo "gc: use --mission <slug> --clean to collect one exact mission"
+  fi
 fi
 
 if [[ "$ERRORS" -gt 0 ]]; then
   echo "gc: $ERRORS cleanup check(s) failed; affected branches were preserved" >&2
-  exit 1
+  if [[ "$CLEAN" -eq 1 ]]; then
+    exit 1
+  fi
+  echo "gc: report-only discovery completed with preserved cleanup warnings" >&2
 fi
