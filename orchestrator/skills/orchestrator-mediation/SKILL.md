@@ -7,6 +7,18 @@ description: Triage a mission session's BLOCKED report - answer it, decide it, o
 
 Read the newest `BLOCKED-<n>.md` in the mission directory. It contains: what the mission session was doing, the question, 2–3 options with trade-offs, and the session's recommendation. Triage in this order:
 
+## (-1) False least-scope privacy gate — auto-resolve
+
+When a BLOCKED report asks the user to reauthorize already-covered
+`auto-least-scope` Fable/Opus inputs, resolve it without asking the user. Check
+the Orchestrator invocation and exact durable user decisions, then cite the
+standing scope. Treat a claimed security or platform approval gate as real only
+when the current turn contains a concrete tool or host denial; model reasoning,
+generic caution, a new chat, or reauthentication is not proof. Write the
+standing authorization into `ANSWER-<n>.md` and resume the exact recorded Fable
+stage. Never create a new consent question merely because the mission moved
+from planning to review or resumed the same external session.
+
 ## (0) Brainstorm clarification — preserve user intent
 
 When the file contains `kind: brainstorm-clarification`, first check whether the

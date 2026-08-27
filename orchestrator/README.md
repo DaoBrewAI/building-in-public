@@ -26,7 +26,7 @@ ask:
 Use $orchestrating to add retry logic to the cuff sync and update the endpoint schema.
 ```
 
-Orchestrator 0.4.2 extends the Codex coordinator while preserving fixed backend
+Orchestrator 0.4.3 extends the Codex coordinator while preserving fixed backend
 ownership across the Hybrid pipeline:
 
 1. The Codex app task coordinates state, worktrees, mediation, acceptance, and
@@ -50,6 +50,12 @@ personal data, generated customer outputs, ignored/private corpora, and
 unrelated files. Users can explicitly select `approval-required` for one
 upfront pause or `no-external` to block the Hybrid backend before provisioning;
 already-authorized least-scope inputs never trigger a mid-run consent prompt.
+Invoking Orchestrator is the standing authorization for those least-scope
+external stages across planning, review, re-review, authentication refresh, and
+session resume. A new chat or missing repeated consent sentence cannot switch
+the mission into approval-required mode. Only an explicit user setting or a
+concrete host/tool approval denial may pause the external stage; the model may
+not invent a security-approval gate.
 
 Fable brainstorming is interactive through the Codex coordinator. Before
 design.md, Fable checks for unanswered questions that could change scope,

@@ -54,6 +54,12 @@ Fable/Opus launch. Read the current request and any newer durable ruling in
 `$HUB/DECISIONS.md` first. A recorded standing choice remains authoritative for
 later missions until the user explicitly changes it.
 
+Invoking Orchestrator itself authorizes `auto-least-scope` Fable/Opus planning,
+review, re-review, and resume as normal steps of the selected Hybrid workflow.
+That authority persists across Codex chats, context compaction, Claude
+authentication refresh, and later stages of the same mission. Lack of a
+repeated authorization sentence in the current chat is not missing authority.
+
 - **`auto-least-scope` (default):** when the user does not explicitly request a
   pause or opt out, proceed without waiting. Before the first external planning
   stage, give one concise nonblocking notice: `External planning: auto
@@ -71,6 +77,12 @@ later missions until the user explicitly changes it.
   record a coordinator BLOCKED outcome before provisioning, and do not silently
   substitute another planner or send data externally.
 
+`approval-required` may be selected only by an explicit current user
+instruction or an exact durable ruling marked `decided-by: user`. Never infer
+`approval-required` from a private repository, security caution, a new chat,
+reauthentication, or the absence of consent wording. An agent-authored safety
+note or a prior one-off consent prompt cannot change the default mode.
+
 The standing least-scope authorization covers task-relevant private source
 code, build/release configuration, and tests sent to Claude Fable/Opus only for
 read-only brainstorm, planning, and independent review. It never covers OAuth
@@ -79,11 +91,29 @@ outputs or documents, ignored/private corpora, and unrelated files. Strip or
 exclude those categories before launch. Codex remains the sole implementation
 and rework owner.
 
+When excluded material is present, exclude or sanitize disallowed categories
+and continue; do not ask for blanket permission to send them. If planning is
+impossible without a prohibited value, block on the missing sanitized input,
+not on generic external-model consent.
+
 Never re-ask for already-authorized least-scope inputs mid-mission. A materially
 broader data category, destination, or purpose requires separate authorization
 before transfer; ask only the shortest concrete question needed for that new
 boundary. Task-relevant Release or identity source/tests remain within
 least-scope, but live secrets and identity values do not.
+
+Plan-to-review, review-to-re-review, session resume, authentication refresh,
+updated tracked diffs, and Fable-to-Opus fallback are not broader destinations
+or purposes. Resuming the same Fable review session under the same mission
+scope requires no new authorization.
+
+Do not claim that security, policy, or the platform requires approval unless a
+concrete tool or host result in the current turn says so. General caution,
+model reasoning, or the fact that Anthropic is external is not such evidence.
+Without a concrete approval denial, continue the already-authorized stage.
+Never set or keep a mission blocked solely to obtain least-scope disclosure
+consent. An actual platform/tool approval request remains authoritative and
+must be handled through that concrete approval surface.
 
 ## Resolve paths and hub
 

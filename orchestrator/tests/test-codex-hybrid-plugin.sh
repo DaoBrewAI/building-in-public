@@ -63,10 +63,10 @@ regex() {
   grep -Eq -- "$expression" "$file"
 }
 
-check "Codex manifest is version 0.4.2" \
-  json_field_is "$MANIFEST" version 0.4.2
-check "Claude manifest is version 0.4.2" \
-  json_field_is "$CLAUDE_MANIFEST" version 0.4.2
+check "Codex manifest is version 0.4.3" \
+  json_field_is "$MANIFEST" version 0.4.3
+check "Claude manifest is version 0.4.3" \
+  json_field_is "$CLAUDE_MANIFEST" version 0.4.3
 check "Codex manifest describes Claude Fable planning" \
   contains "$MANIFEST" "Fable-5"
 check "Codex manifest describes GPT-5.6-Sol execution" \
@@ -235,8 +235,8 @@ check "Codex coordinator queues only on a real dependency" \
 check "Claude coordinator routes write-producing acceptance tests to Codex" \
   contains "$CLAUDE_SKILL" 'verification that may write caches, snapshots, coverage, or generated artifacts'
 
-check "README declares Orchestrator 0.4.2" \
-  contains "$README" 'Orchestrator 0.4.2'
+check "README declares Orchestrator 0.4.3" \
+  contains "$README" 'Orchestrator 0.4.3'
 check "README scopes native 0.4 execution to the Codex coordinator" \
   contains "$README" 'Native 0.4 task-DAG execution is Codex-coordinator-only'
 check "README documents fail-closed Claude handoff for native 0.4" \
