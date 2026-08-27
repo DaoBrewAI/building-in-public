@@ -11,13 +11,14 @@
 - Persist one canonical self-contained HTML report, not adjacent Markdown and HTML copies.
 - The same HTML is the phone and desktop reading surface and Graphify's default indexed document.
 - Put complete key semantics in the early graphify-source template so Graphify 0.8.33 sees them before its 20,000-character per-file cap.
-- Publish the HTML as a private direct-file GitHub Actions artifact because a committed GitHub blob displays source rather than a rendered page.
+- Publish the validated HTML through OpenAI Sites and return the Sites HTTPS URL for phone and desktop reading.
+- Default Sites access to owner-only. Broader selected-user, workspace, or public access requires explicit audience approval.
 - PDF is not part of the default report workflow.
 
 # Conclusions
 ## One canonical report keeps explorations clean
 - A single HTML path is the report identity in Git history. There is no sibling Markdown file to keep synchronized.
-- The stable identity is report_id plus repository path plus commit. The artifact reading URL is replaceable and may expire.
+- The stable identity is report_id plus canonical path and source revision. The Sites HTTPS URL is the cross-device reading surface.
 
 ## Graphify can index the HTML directly
 - Graphify 0.8.33 classifies .html as a document and sends at most the first 20,000 characters of each file to semantic extraction.
@@ -30,9 +31,9 @@
 - Only if the retry fails, derive Markdown at graph-sources/deep-research/examples/mobile-html-report/example-report.md and ignore only the canonical HTML path to prevent duplicate nodes.
 - Never place fallback Markdown beside the HTML report.
 
-## Mobile delivery uses the HTML artifact, not the blob
-- The private workflow validates the restrictive CSP, self-contained assets, safe links, semantic template, and source-link placeholder.
-- It publishes one unarchived HTML artifact that authorized readers can open on phone or desktop.
+## Mobile delivery uses OpenAI Sites, not the blob
+- Validate the restrictive CSP, self-contained assets, safe links, semantic template, and source-link placeholder before deployment.
+- OpenAI Sites publishes the report at an HTTPS URL that authorized readers can open on phone or desktop.
 - The committed-source footer points back to this same HTML at the exact source commit.
 
 ## Recommendations
@@ -47,7 +48,7 @@
 
 # Sources
 - [1] GitHub documentation: Working with non-code files — https://docs.github.com/en/repositories/working-with-files/using-files/working-with-non-code-files
-- [2] GitHub changelog: Direct non-zipped Actions artifacts — https://github.blog/changelog/2026-02-26-github-actions-now-supports-uploading-and-downloading-non-zipped-artifacts/
+- [2] OpenAI Sites documentation — https://learn.chatgpt.com/docs/sites
 - [3] Installed Graphify 0.8.33 source: .html is a document and semantic extraction uses a 20,000-character per-file cap.
   </template>
   <title>Sample · One HTML for reading and retrieval</title>
@@ -201,17 +202,17 @@
       <div class="pills" aria-label="报告交付状态">
         <span class="pill">One canonical HTML</span>
         <span class="pill">Graphify indexed</span>
-        <span class="pill">Private mobile link</span>
+        <span class="pill">OpenAI Sites link</span>
       </div>
     </header>
 
     <section aria-labelledby="flow-title">
       <h2 id="flow-title">同一个文件，两种入口</h2>
       <figure>
-        <div class="flow" role="img" aria-label="One canonical HTML report is indexed by Graphify and published as a private interactive artifact for phone and desktop reading.">
+        <div class="flow" role="img" aria-label="One canonical HTML report is indexed by Graphify and published through OpenAI Sites for phone and desktop reading.">
           <div class="flow-node flow-source"><strong>Canonical HTML</strong><span>semantic block plus visual report</span></div>
           <div class="flow-arrow" aria-hidden="true">→</div>
-          <div class="flow-node"><strong>Graphify + private artifact</strong><span>retrieve later · read now</span></div>
+          <div class="flow-node"><strong>Graphify + OpenAI Sites</strong><span>retrieve later · read now</span></div>
         </div>
         <figcaption>HTML 是唯一报告。Graphify 读取文件开头的结构化语义，读者打开同一文件的渲染链接。</figcaption>
       </figure>
@@ -232,11 +233,11 @@
 
     <section aria-labelledby="evidence-title">
       <h2 id="evidence-title">为什么还需要阅读链接</h2>
-      <p>GitHub 的 HTML blob 会显示源代码；私有 direct-file Actions artifact 才是手机和电脑上的渲染阅读入口。</p>
+      <p>GitHub 的 HTML blob 会显示源代码；OpenAI Sites HTTPS URL 才是手机和电脑上的默认渲染阅读入口。</p>
       <p>
         <a href="https://docs.github.com/en/repositories/working-with-files/using-files/working-with-non-code-files" target="_blank" rel="noopener noreferrer">GitHub: Working with non-code files</a>
         ·
-        <a href="https://github.blog/changelog/2026-02-26-github-actions-now-supports-uploading-and-downloading-non-zipped-artifacts/" target="_blank" rel="noopener noreferrer">GitHub: Non-zipped Actions artifacts</a>
+        <a href="https://learn.chatgpt.com/docs/sites" target="_blank" rel="noopener noreferrer">OpenAI Sites documentation</a>
       </p>
     </section>
 

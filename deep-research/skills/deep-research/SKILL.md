@@ -1,6 +1,6 @@
 ---
 name: deep-research
-description: Advanced multi-agent research and evidence-backed report production for codebases, infrastructure, markets, and strategy. Use when users need comprehensive research across many sources or perspectives, coordinated subagents, Trust Gate verification, or a canonical mobile HTML report with Graphify indexing and private GitHub delivery.
+description: Advanced multi-agent research and evidence-backed report production for codebases, infrastructure, markets, and strategy. Use when users need comprehensive research across many sources or perspectives, coordinated subagents, Trust Gate verification, or a canonical mobile HTML report with Graphify indexing and an OpenAI Sites reading URL.
 ---
 
 # Deep Research
@@ -374,15 +374,16 @@ Your job is to produce the final research report by integrating all findings.
 - Deliver one canonical self-contained, mobile-first HTML report (inline presentation
   assets, light+dark themes). Embed the complete key semantics as structured
   Markdown-like text in the required early `graphify-source` template; Graphify indexes
-  the HTML directly. The reading URL is part of delivery. PAUSED (Linhan 2026-08-23,
-  GitHub Actions budget): do NOT dispatch the private-html-preview Actions workflow;
-  until a replacement channel ships, the phone-readable link is the committed
-  companion PDF's GitHub blob URL (GitHub renders the <10MB PDF inline on mobile).
-  Do not persist sibling Markdown unless the real retrieval smoke test fails.
-  See references/mobile_delivery.md.
+  the HTML directly. The reading URL is part of delivery: after validation, deploy the
+  report through OpenAI Sites and return its Sites HTTPS URL. Default to owner-only
+  access without interrupting the run for another confirmation. Selected users,
+  workspace, or public access requires the user's explicit approval of that audience.
+  Do not persist sibling Markdown unless the real retrieval smoke test fails. See
+  references/mobile_delivery.md.
 - Do not generate a PDF by default. Produce one only when the user explicitly asks for
-  it or the verified HTML reading route is unavailable; it is a derivative fallback,
-  never the canonical report or Graphify source. See references/reporting.md.
+  it, or when OpenAI Sites is unavailable and the user explicitly approves PDF as the
+  fallback; it is never the canonical report or Graphify source. See
+  references/reporting.md.
 - Explain with diagrams wherever possible (inline SVG: charts, block/flow diagrams,
   timelines); prose only carries what a figure cannot
 - Derivation transparency: internal estimates/assumptions/targets are tagged IN the
@@ -447,8 +448,9 @@ At synthesis time:
    closing tag must be within the first 16,000 characters. Include the report ID and
    `__REPORT_SOURCE_URL__` placeholder from references/mobile_delivery.md. Do not
    introduce claims that exist only in the HTML/SVG layer.
-8. Validate the canonical HTML and both phone viewports. Do not persist the temporary
-   Markdown draft or publish directly from `/tmp`.
+8. Run `python3 references/scripts/validate_mobile_html.py <report.html>`, then validate
+   both phone viewports. Do not persist the temporary Markdown draft or publish directly
+   from `/tmp`.
 
 **Color HARD RULE**: All status chips use blue / yellow / orange / red / gray.
 ZERO green. Adapt this rule to your accessibility needs or remove it if not applicable.
@@ -460,37 +462,33 @@ ZERO green. Adapt this rule to your accessibility needs or remove it if not appl
    report folder such as
    `explorations/2026-08-10-b2b-agent-harness-customers-market/`. Persist exactly one
    canonical report document inside it as `report.html`. Do not persist a report
-   Markdown copy. The only Markdown allowed in this folder is the tiny navigation-only
-   `README.md` created in step 6.
-2. Re-run the HTML validator and mobile checks after the final persisted content.
+   Markdown copy.
+2. Re-run `validate_mobile_html.py` and the mobile checks after the final persisted
+   content.
 3. Keep the HTML indexable and update Graphify from it. Run the report-specific
    retrieval smoke test before any push. Only after a real failure plus one corrected
    retry may you generate `graph-sources/<same-relative-path>.md` and target only the
    failed HTML path in `.graphifyignore`; never put fallback Markdown beside the report.
-4. Commit and push only when that repository mutation is authorized by the user's
-   request and current workflow. Push the exact ref containing the canonical HTML.
-5. PAUSED (Linhan 2026-08-23, GitHub Actions budget): do NOT install or dispatch the
-   private-html-preview workflow. While paused, the verified HTML reading route is
-   unavailable, so the PDF fallback applies: generate the companion PDF from the
-   canonical `report.html` (references/scripts/html_report_to_pdf.py, <10MB so GitHub
-   renders it inline on mobile) and persist it inside the same report folder.
-6. Create or replace only that report folder's navigation-only `README.md`. Put the
-   conspicuous vertical `📱 阅读网页` link first — while paused it points to the
-   committed PDF's blob URL (gated by repository read access; no expiry) — followed by
-   the immutable `report.html` source commit. Never add report links to the repository
-   root README or to a growing global report index. Configure `.graphifyignore` once
-   with a parent-scoped pattern such as `/explorations/*/README.md`, after verifying
-   that it matches only navigation cards; never ignore `report.html`. Commit and push
-   this focused folder handoff. Do not use a Markdown table.
-7. Treat GitHub `blob` and `raw` links to `report.html` only as source links. While
-   the Actions channel is paused, the PDF blob URL is the reading surface. When the
-   channel is revived (e.g. on a self-hosted runner), switch the folder README link
-   back to the workflow's `archive: false` artifact and manage retention/expiry there;
-   the canonical HTML and its Graphify identity never change.
-8. If commit, push, workflow installation, or dispatch is not authorized/available,
-   return the local HTML path and state plainly that no phone-readable URL
-   exists yet. A `/tmp` path, GitHub blob URL, or unverified Actions run is not a
-   published report.
+4. Commit and push the canonical HTML only when that repository mutation is authorized
+   by the user's request and current workflow. Repository persistence and Sites
+   publication are separate: do not withhold the Sites reading URL merely because a
+   source push was not requested.
+5. Use `sites:sites-building` to adapt the validated canonical HTML into a Sites project
+   without changing the report's claims, evidence, or Graphify source. Then use
+   `sites:sites-hosting` to deploy it. Every Sites deployment is production, so deploy
+   only after the Trust Gate and mobile acceptance checks pass.
+6. Default to an owner-only Sites deployment. This private deployment is already
+   authorized by a request for a Deep Research HTML report and should not pause for a
+   redundant confirmation. If the user asks to share with selected users, the workspace,
+   or anyone on the internet, confirm that exact audience immediately before the broader
+   deployment unless it was already explicit in the request. Never infer public access.
+7. Open the deployed Sites HTTPS URL and verify that the final report loads at desktop
+   and phone viewports. Return that URL first. State the access level and sign-in
+   requirement, then give any exact-commit canonical source link and Graphify result.
+8. If OpenAI Sites is unavailable, retry only when the failure is plausibly transient.
+   Otherwise report the blocker and keep the validated HTML canonical. Do not silently
+   substitute GitHub artifacts, a public host, or PDF. Generate PDF only when the user
+   explicitly requests it or explicitly approves it as the unavailable-Sites fallback.
 
 ### Phase 4: Cleanup
 
@@ -525,8 +523,8 @@ The full teammate prompt template (with communication protocol, peer-to-peer mes
 ## Synthesis & Reporting
 
 For the report structure, delivery flow, and resource budgets, see
-[references/reporting.md](references/reporting.md). For private GitHub HTML previews,
-direct HTML indexing, stable private hosting, and mobile acceptance checks, see
+[references/reporting.md](references/reporting.md). For OpenAI Sites publication,
+direct HTML indexing, audience control, and mobile acceptance checks, see
 [references/mobile_delivery.md](references/mobile_delivery.md).
 
 ## Complete Orchestration Example, Anti-Patterns, Worktree & Resume
@@ -541,7 +539,7 @@ This skill includes the following bundled resources:
 - `tools_guide.md` - Detailed tooling reference for teammates
 - `subagent_template.md` - Full template for teammate instructions and protocol
 - `reporting.md` - Report structure, delivery flow, resource budgets
-- `mobile_delivery.md` - Canonical HTML, direct Graphify indexing, and private delivery
+- `mobile_delivery.md` - Canonical HTML, direct Graphify indexing, and Sites-first delivery
 - `orchestration_example.md` - End-to-end example, anti-patterns, advanced features (worktree, resume)
 - `finding_schema.md` - Structured Finding JSON schema for research agents
 - `color_palette.md` - Accessibility-safe color palette for trust gate status tags
@@ -550,13 +548,9 @@ This skill includes the following bundled resources:
 - `trust_gate_verifier_prompt.md` - Verification subagent prompt
 - `claim_extractor_prompt.md` - Claim extraction subagent prompt
 
-### templates/
-- `private-html-preview.yml` - GitHub Actions workflow for a private, directly
-  viewable single-file HTML artifact
-
 ### examples/
 - `mobile-html-report/` - Valid single-file HTML fixture with embedded Graphify source,
-  CSP, responsive layout, and workflow source-link placeholder
+  CSP, responsive layout, and source-link placeholder
 
 ### references/scripts/
 - `trust_gate.sh` - Trust Gate decision engine
@@ -565,3 +559,5 @@ This skill includes the following bundled resources:
 - `symbol_patterns.sh` - Language-aware definition patterns for symbol grep
 - `finding_template.sh` - Finding JSON skeleton emitter
 - `lint_rule.sh` - Multi-rule lint dispatcher (colorblind compliance, etc.)
+- `validate_mobile_html.py` - Fail-closed CSP, self-contained HTML, link-safety, and
+  Graphify semantic-contract validator

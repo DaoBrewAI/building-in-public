@@ -7,53 +7,46 @@ descriptively named folder:
 
 ```text
 explorations/2026-08-09-direction-portfolio/
-├── README.md     # navigation card only; not report content
 └── report.html   # canonical report and Graphify source
 ```
 
 That same file serves two consumers:
 
-- **People:** a responsive interactive page opened from a private GitHub Actions
-  artifact link on phone or desktop.
+- **People:** a responsive interactive page deployed through OpenAI Sites and opened
+  from its Sites HTTPS URL on phone or desktop.
 - **Graphify:** the `.html` document itself, with a compact structured semantic block
   near the beginning of the raw file.
 
-Do not create a Markdown report copy. The folder `README.md` is only the GitHub-rendered
-link panel needed to open the Reader; it must not repeat conclusions or evidence and is
-excluded from Graphify. Do not add the canonical `report.html` to `.graphifyignore`.
-PDF is outside the default deep-research delivery workflow. Never update the repository
-root README or maintain a growing global report index for report delivery.
+Do not create a Markdown report copy. Do not add the canonical `report.html` to
+`.graphifyignore`. PDF is outside the default Deep Research delivery workflow. Never
+update the repository root README or maintain a growing global report index merely to
+deliver a report.
 
-A GitHub `blob` or `raw` URL is the committed source location, not the reading URL:
-GitHub does not render committed HTML documents as web pages.
-
-> **PAUSED (Linhan 2026-08-23):** the Actions-artifact channel is suspended to stop
-> GitHub Actions budget consumption. Do not install or dispatch
-> `private-html-preview.yml`. Interim phone-readable link: the committed companion
-> PDF's blob URL (GitHub renders <10MB PDFs inline, including in the mobile app).
+A GitHub `blob` or `raw` URL may identify committed source, but it is never the reading
+URL because GitHub does not render committed HTML documents as web pages.
 
 Use this delivery order:
 
-1. **Companion PDF blob URL (interim default while the Actions channel is paused):**
-   commit the PDF beside the canonical HTML and hand out its GitHub blob URL. Requires
-   GitHub sign-in and repository read access; renders inline on phone; no retention
-   expiry.
-2. **Private GitHub artifact (PAUSED):** publish the single HTML file as an
-   unarchived Actions artifact (`archive: false`). When active, this is the default
-   reading surface for a GitHub Free private repository; it requires GitHub sign-in
-   and repository read access and remains subject to artifact retention.
-3. **Stable private site (only when requested):** deploy the same file to an
-   identity-protected static host. Creating a project, domain, access policy, or
-   deployment requires explicit authorization.
-4. **Local-only:** return the absolute HTML path and say clearly that it is not yet a
-   phone-accessible URL.
+1. **OpenAI Sites, owner-only (default):** after the canonical HTML passes Trust Gate,
+   HTML validation, and phone viewport checks, deploy it with the available
+   `sites:sites-building` and `sites:sites-hosting` skills. Owner-only is the default
+   access level and does not require another confirmation after the user asked for a
+   Deep Research HTML report.
+2. **OpenAI Sites, shared audience (when requested):** selected users, workspace, or
+   anyone on the internet requires explicit approval of that exact audience before the
+   broader deployment. If the request says only “shareable” without naming an audience,
+   ask one concise audience question at publication time. Never infer public access.
+3. **Validated local HTML (Sites unavailable):** preserve and return the canonical
+   HTML, explain that no Sites HTTPS URL was created, and report the concrete blocker.
+   Do not silently substitute another host or a GitHub artifact.
+4. **PDF fallback (opt-in only):** generate a derivative PDF only when the user asked
+   for it, or after Sites is unavailable and the user explicitly approves PDF fallback.
+   It never replaces the canonical HTML or Graphify source.
 
 Official references:
 
+- [OpenAI Sites documentation](https://learn.chatgpt.com/docs/sites)
 - [GitHub does not directly render committed HTML documents](https://docs.github.com/en/repositories/working-with-files/using-files/working-with-non-code-files)
-- [Direct, non-zipped GitHub Actions artifacts](https://github.blog/changelog/2026-02-26-github-actions-now-supports-uploading-and-downloading-non-zipped-artifacts/)
-- [`actions/upload-artifact` direct-file mode](https://github.com/actions/upload-artifact/blob/main/README.md)
-- [GitHub artifact access and retention](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)
 
 ## Canonical HTML contract
 
@@ -113,12 +106,14 @@ Rules:
    <a href="__REPORT_SOURCE_URL__" target="_blank" rel="noopener noreferrer">Committed HTML source</a>
    ```
 
-   The workflow replaces it only in the temporary artifact copy with the exact-commit
-   GitHub `blob` URL for this same HTML file.
+   When an exact-commit source URL exists, replace the placeholder in the persisted
+   canonical HTML before Sites publication. Otherwise replace it with a stable source
+   location authorized by the current workflow, or omit the footer link without
+   inventing a URL.
 
-The stable report identity is `report_id` + repository path + Git commit. An artifact
-URL is a replaceable reading envelope and may expire without changing the report or
-Graphify source.
+The stable report identity is `report_id` + canonical path + source revision when one
+exists. The Sites HTTPS URL is the cross-device reading surface; it does not replace the
+canonical HTML or its Graphify identity.
 
 ## Graphify retrieval gate
 
@@ -181,100 +176,30 @@ Confirmed decisions remain separate project records only when repository policy
 requires them and a human explicitly confirms the decision. An exploration's
 `Decision Status` must never silently promote a scenario or recommendation to a fact.
 
-## Install the private preview once
+## Publish through OpenAI Sites
 
-Copy `templates/private-html-preview.yml` into the target repository as:
+Every Sites deployment is a production deployment. Publish only the report that passed
+the current run's Trust Gate and mobile acceptance checks.
 
-```text
-.github/workflows/private-html-preview.yml
-```
+1. Use `sites:sites-building` to create or update a Sites project from the canonical
+   HTML. Preserve the report content, citations, evidence labels, report ID, and
+   accessible semantic equivalents. Do not turn the report into an unrelated app or
+   add claims during adaptation.
+2. Validate the Sites project with its required build and diagnostic checks.
+3. Use `sites:sites-hosting` to deploy owner-only by default. Do not ask for another
+   confirmation for this private deployment; the user's request for the HTML report is
+   sufficient authorization for the default reading surface.
+4. If selected-user, workspace, or public access was explicitly requested and approved,
+   deploy at that exact access level. Otherwise remain owner-only.
+5. Open the deployed Sites HTTPS URL. Verify the visible report, citations, interactive
+   controls, and overflow at desktop plus 390 × 844 and 430 × 932 CSS-pixel viewports.
+6. Never claim publication from a local build, preview, or deployment command alone.
+   The HTTPS URL must load successfully. Return it first in the final handoff.
 
-The workflow must be present on the default branch. It accepts one repository-relative
-`.html` path and publishes it with the SHA-pinned `actions/upload-artifact` action using
-`archive: false`. This direct-file mode is why CSS, SVG, icons, and images must all be
-inline. Private reports use native HTML interactions rather than JavaScript.
-
-## Publish a report
-
-After the canonical HTML is committed and pushed:
-
-1. Open **Actions → Private HTML Report → Run workflow** on the default branch.
-2. Set `source_ref` to the immutable report commit when possible.
-3. Set `report_path` to the canonical file, for example
-   `explorations/2026-08-09-direction-portfolio/report.html`.
-4. Open the completed job summary and tap **Open the interactive HTML report**.
-5. Verify that URL at a phone-sized viewport and share it only with collaborators who
-   already have repository read access.
-
-Authorized agents may dispatch it with:
-
-```bash
-gh workflow run private-html-preview.yml \
-  --ref '<default-branch-containing-workflow>' \
-  -f source_ref='<immutable-report-commit>' \
-  -f report_path='explorations/2026-08-09-direction-portfolio/report.html'
-```
-
-`--ref` selects the workflow definition; `source_ref` selects the historical report
-content. Re-run the default-branch workflow with the same commit and path to replace an
-expired artifact link. Never claim publication until the run succeeds and the artifact
-opens in a browser.
-
-## Publish the report-folder link card after artifact success
-
-Treat the report-folder link card as part of default private-report delivery, not an
-optional follow-up. Perform it only after the workflow succeeds, the artifact opens,
-and the job summary provides the expected expiry timestamp. Do not add the report to
-the repository root README, the parent collection README, or a global report index.
-
-1. Capture the direct artifact URL, the full immutable `source_ref` commit that contains
-   the canonical HTML, the exact HTML source URL, and the expiry timestamp from the
-   successful run. Display the timestamp with an explicit timezone, preferably UTC.
-2. Create or replace the `README.md` inside this report's own folder. It is a tiny
-   GitHub-rendered navigation card, not a second report. It must contain no report
-   summary, conclusions, evidence, or decision text. Never modify the repository root
-   README as part of report delivery.
-3. Use a vertical block, never a Markdown table. Keep the artifact link first:
-
-   ```markdown
-   ### <report title>
-
-   **[📱 阅读网页（推荐）](<direct-artifact-url>)**
-
-   Source: [`<report-path>`](<exact-commit-blob-url>)
-
-   Immutable source commit: [`<full-sha>`](<commit-url>)
-
-   Expires: `YYYY-MM-DD HH:MM UTC`
-
-   Requires GitHub sign-in and read access to this private repository. If the link has
-   expired, rerun `Private HTML Report` with the same source commit and report path,
-   then replace this URL and expiry date.
-   ```
-
-4. Keep these navigation cards out of Graphify with one sustainable, parent-scoped
-   rule. Before adding it, verify that every matched immediate child is a report folder
-   and that no semantic README is captured. For an `explorations/` report collection:
-
-   ```gitignore
-   /explorations/*/README.md
-   ```
-
-   Never add the canonical report HTML to `.graphifyignore` unless the separately
-   documented two-failure Graphify fallback gate has actually fired.
-5. Review the folder-card diff, then create and push a focused handoff commit containing
-   only this report's README and any one-time `.graphifyignore` contract change.
-   Keep the displayed immutable source commit pinned to the earlier report commit; the
-   navigation commit is not a replacement source identity.
-
-GitHub `blob` and `raw` URLs always identify source bytes; they are never the reading
-surface. The `archive: false` Actions artifact is the directly viewable mobile surface
-for the default GitHub Free private-repository path.
-
-When an artifact expires, rerun the default-branch workflow with the same immutable
-`source_ref` and `report_path`. After the replacement artifact opens, update the URL and
-expiry date only in that report folder's README and commit/push that focused refresh.
-Do not change the source commit unless the report content itself changed.
+If Sites deployment fails, preserve the canonical HTML and report the actual failure.
+Retry a transient failure once when safe. Do not broaden access, switch providers,
+publish through GitHub Actions, or generate a PDF without the corresponding user
+authorization.
 
 ## Mobile HTML acceptance contract
 
@@ -307,15 +232,11 @@ Default successful HTML indexing:
 ```text
 DaoBrewStrategy/
 ├── README.md                                      # unchanged by report delivery
-├── .graphifyignore                                # /explorations/*/README.md
 ├── explorations/
 │   └── 2026-08-09-direction-portfolio/
-│       ├── README.md                              # link card only; ignored
 │       └── report.html                            # canonical + indexed
-├── decisions/
-│   └── DEC-2026-08-10-direction-portfolio.md   # only if explicitly confirmed
-└── .github/workflows/
-    └── private-html-preview.yml
+└── decisions/
+    └── DEC-2026-08-10-direction-portfolio.md      # only if explicitly confirmed
 ```
 
 Only after a proven Graphify failure:
@@ -324,7 +245,6 @@ Only after a proven Graphify failure:
 DaoBrewStrategy/
 ├── explorations/
 │   └── 2026-08-09-direction-portfolio/
-│       ├── README.md
 │       └── report.html
 ├── graph-sources/
 │   └── explorations/
@@ -336,19 +256,10 @@ DaoBrewStrategy/
 The final delivery message is intentionally simple:
 
 ```text
-Read interactive report — private GitHub artifact link, expires YYYY-MM-DD HH:MM UTC
-Committed source — exact-commit HTML link, indexed by Graphify
-Repository navigation — report-folder README link committed and pushed; root unchanged
+Read interactive report — OpenAI Sites HTTPS URL, owner-only
+Committed source — exact-commit HTML link when persistence was authorized
 Graphify smoke test — PASS for <tested query>
 ```
 
-Never present the HTML `blob` URL as the reading link.
-
-## Stable private reading URL
-
-When a bookmarkable non-expiring URL is explicitly requested, use an
-identity-protected static host such as Cloudflare Pages Direct Upload plus Cloudflare
-Access. Upload only the rendered report; do not grant a hosting service access to the
-whole private repository unless the user chooses that integration. Verify while signed
-out that authentication appears before report content. Do not assume ordinary GitHub
-Pages is private merely because its source repository is private.
+Never present the HTML `blob`, `raw`, local, or preview URL as the published reading
+link. The final cross-device handoff uses the verified Sites HTTPS URL.

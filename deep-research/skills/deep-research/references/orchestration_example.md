@@ -65,14 +65,18 @@ Here's the full flow for a depth-first query like "how does the auth system work
 
 7. Orchestrator applies the reporting contract:
    - Converts the verified draft into one canonical, self-contained mobile HTML report
-   - Persists it as `<dated-descriptive-folder>/report.html`; the folder README is only
-     a GitHub-rendered Reader link card and the repository root README stays unchanged
+   - Persists it as `<dated-descriptive-folder>/report.html`; the repository root README
+     stays unchanged
    - Adds the early `graphify-source` semantic template and indexes only the HTML
    - Runs the Graphify conclusion/rationale/decision-status retrieval gate against the HTML
-   - Runs 390 × 844 and 430 × 932 browser validation and publishes the private artifact
+   - Runs 390 × 844 and 430 × 932 browser validation, then publishes through OpenAI
+     Sites with owner-only access by default
+   - Uses a broader selected-user, workspace, or public audience only after explicit
+     approval of that access level
    - Creates centralized fallback Markdown only after a measured HTML retrieval failure plus retry
 
-8. Shutdown all teammates, TeamDelete, deliver the verified HTML reading link
+8. Shutdown all teammates, TeamDelete, open the deployed Sites HTTPS URL, and deliver it
+   as the first report link
 ```
 
 ## Anti-Patterns to Avoid

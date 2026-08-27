@@ -12,8 +12,9 @@ Deep Research coordinates a team of AI agents to investigate complex questions a
 4. **Orchestrates actively** — cross-pollinating findings, redirecting agents, creating follow-up tasks
 5. **Verifies claims** via an automated Trust Gate that catches hallucinated references
 6. **Synthesizes** findings into a structured, evidence-backed report
-7. **Delivers one canonical HTML report**: the same self-contained file is the
-   interactive reading surface and the default Graphify source
+7. **Delivers one canonical HTML report through OpenAI Sites**: the same
+   self-contained file is the interactive reading surface and the default Graphify
+   source
 
 ## Key Features
 
@@ -22,10 +23,13 @@ Deep Research coordinates a team of AI agents to investigate complex questions a
 - **Peer-to-peer communication**: Agents can cross-reference findings directly with each other.
 - **Trust Gate verification**: Every code reference is machine-verified against the current codebase. Reports only ship when >=95% of claims verify.
 - **Accessibility-safe output**: Color palette avoids green (colorblind-safe), with all status tags using distinct, universally visible hues.
-- **Graph-safe phone delivery**: A compact Markdown-like semantic block is embedded near
-  the start of the responsive HTML, so Graphify can retrieve the report without adding
-  a sibling file. The HTML is published as a private, directly viewable GitHub Actions
-  artifact instead of a source-code `blob`.
+- **Graph-safe cross-device delivery**: A compact Markdown-like semantic block is
+  embedded near the start of the responsive HTML, so Graphify can retrieve the report
+  without adding a sibling file. After validation, OpenAI Sites publishes the report
+  at an HTTPS URL that works on phone and desktop.
+- **Private by default, shareable by choice**: Sites access defaults to owner-only
+  without a redundant confirmation. Selected-user, workspace, or public access is used
+  only after that broader audience is explicitly approved.
 
 ## Structure
 
@@ -33,8 +37,6 @@ Deep Research coordinates a team of AI agents to investigate complex questions a
 deep-research/
 ├── SKILL.md                              # Main skill definition
 ├── README.md                             # This file
-├── templates/
-│   └── private-html-preview.yml          # Private GitHub mobile HTML preview
 ├── examples/
 │   └── mobile-html-report/                # Canonical single-HTML fixture
 ├── subagents/
@@ -54,7 +56,8 @@ deep-research/
         ├── symbol_in_code.py             # Code vs comment/string detection
         ├── symbol_patterns.sh            # Language-aware symbol patterns
         ├── finding_template.sh           # Finding JSON skeleton emitter
-        └── lint_rule.sh                  # Lint dispatcher (accessibility)
+        ├── lint_rule.sh                  # Lint dispatcher (accessibility)
+        └── validate_mobile_html.py       # Fail-closed report contract validator
 ```
 
 ## Adapting for Your Environment
@@ -76,8 +79,8 @@ This skill was designed to be tool-agnostic. The `references/tools_guide.md` use
 - `jq` (for Trust Gate script)
 - `ripgrep` (optional, for symbol verification — falls back to grep)
 - Python 3 (for footnote rendering and symbol detection)
-- Optional: GitHub Actions with `actions/upload-artifact@v7` for private mobile HTML
-  previews
+- OpenAI Sites (`sites:sites-building` and `sites:sites-hosting`) for the default
+  cross-device reading URL
 
 ## Usage
 
@@ -89,13 +92,13 @@ Install as a Claude Code skill, then invoke with `/deep-research` followed by yo
 /deep-research What are the security implications of the new cache layer?
 ```
 
-The completed result is one dated, descriptively named report folder containing
-canonical `report.html` plus a tiny GitHub-rendered `README.md` link card. The card
-opens a private, phone-readable interactive artifact and is excluded from Graphify;
-Graphify indexes the HTML directly. Report delivery never grows the repository root
-README or a global index. A centralized Markdown fallback under `graph-sources/` is
-created only after an actual retrieval smoke test proves that the HTML failed; it is
-never stored beside the report. PDF is not part of the default report workflow.
+The completed result is one dated, descriptively named report folder containing the
+canonical `report.html`, plus an OpenAI Sites HTTPS reading URL. Sites access defaults
+to owner-only; broader sharing is deliberate. Graphify indexes the HTML directly. A
+centralized Markdown fallback under `graph-sources/` is created only after an actual
+retrieval smoke test proves that the HTML failed; it is never stored beside the report.
+PDF is not part of the default workflow and is produced only when explicitly requested
+or explicitly approved after Sites is unavailable.
 
 ## License
 

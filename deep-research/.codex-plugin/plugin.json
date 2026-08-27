@@ -1,0 +1,40 @@
+{
+  "name": "deep-research",
+  "version": "1.1.0",
+  "description": "Advanced multi-agent research with a fail-closed Trust Gate, Graphify indexing, and one canonical mobile-first HTML report delivered through OpenAI Sites.",
+  "author": {
+    "name": "DaoBrew AI",
+    "url": "https://github.com/DaoBrewAI"
+  },
+  "homepage": "https://github.com/DaoBrewAI/building-in-public/tree/main/deep-research",
+  "repository": "https://github.com/DaoBrewAI/building-in-public",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "multi-agent",
+    "trust-gate",
+    "graphify",
+    "openai-sites",
+    "reporting",
+    "daobrew"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Deep Research",
+    "shortDescription": "Verified research published through OpenAI Sites.",
+    "longDescription": "Coordinates evidence-backed multi-agent research, enforces a fail-closed Trust Gate, indexes the canonical mobile-first HTML with Graphify, and publishes the validated report through OpenAI Sites for phone and desktop reading.",
+    "developerName": "DaoBrew AI",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/DaoBrewAI/building-in-public",
+    "defaultPrompt": [
+      "Run deep research and publish the verified HTML report through OpenAI Sites.",
+      "Compare these sources and produce a phone-readable evidence report.",
+      "Research this codebase with a Trust Gate and Graphify-indexed report."
+    ],
+    "brandColor": "#1559C7"
+  }
+}

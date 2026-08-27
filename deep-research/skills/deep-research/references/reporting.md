@@ -6,8 +6,8 @@
 - [Report Structure](#report-structure)
 - [Delivering the Report](#delivering-the-report)
   - [Step 1: Generate the canonical HTML](#step-1-generate-the-canonical-html)
-  - [Step 2: Publish a mobile reading URL](#step-2-publish-a-mobile-reading-url)
-  - [Step 3: Verify Graphify retrieval](#step-3-verify-graphify-retrieval)
+  - [Step 2: Verify Graphify retrieval](#step-2-verify-graphify-retrieval)
+  - [Step 3: Publish a mobile reading URL](#step-3-publish-a-mobile-reading-url)
   - [Step 4: Confirm delivery](#step-4-confirm-delivery)
 - [Resource Budgets](#resource-budgets)
 
@@ -21,17 +21,17 @@ After all tasks are complete (or enough data collected):
 
 ## Report Format (MANDATORY)
 
-1. **Deliver one canonical mobile-first HTML report.** The self-contained HTML (inline
-   presentation assets; light and dark themes via CSS custom properties and
-   `prefers-color-scheme`) is both the durable Git source and the human reading surface.
-   Embed the complete key semantics in a compact Markdown-like template near the start
-   so Graphify can index this same file directly. A committed GitHub `blob` or `raw` URL
-   is the source location, not the reading URL; for a private repository, publish the
-   report as a direct, unarchived Actions artifact. Do not generate a sibling Markdown
-   file unless the real Graphify retrieval gate fails. Follow
-   [mobile_delivery.md](mobile_delivery.md).
+1. **Deliver one canonical mobile-first HTML report through OpenAI Sites.** The
+   self-contained HTML (inline presentation assets; light and dark themes via CSS
+   custom properties and `prefers-color-scheme`) is both the durable source and the
+   report Sites renders for human readers. Embed the complete key semantics in a compact
+   Markdown-like template near the start so Graphify can index this same file directly.
+   A committed GitHub `blob` or `raw` URL is source, not the reading URL. Deploy through
+   OpenAI Sites and return the Sites HTTPS URL. Do not generate sibling Markdown unless
+   the real Graphify retrieval gate fails. Follow [mobile_delivery.md](mobile_delivery.md).
 2. **PDF is an explicit fallback, not a default deliverable.** Generate it only when
-   the user asks for a PDF or when the verified HTML reading route cannot be published.
+   the user asks for a PDF, or when Sites cannot publish the verified HTML and the user
+   explicitly approves PDF fallback.
    The HTML remains canonical and Graphify-indexed; the PDF is a derivative for
    offline/download use. Preserve the HTML rendering (headless-Chrome print, forced
    light theme, `<details>` opened, print CSS) and keep all external and internal links
@@ -133,40 +133,14 @@ report copy. Do not generate or persist a PDF unless Report Format rule 2 applie
 
 Do not leave unique conclusions inside SVG text or interactive controls. Preserve a
 text equivalent in accessible body content and the semantic template. Add the report
-ID, strict CSP, and `__REPORT_SOURCE_URL__` placeholder required by the workflow.
+ID, strict CSP, and `__REPORT_SOURCE_URL__` placeholder described by the delivery
+contract.
 
 Validate the file against the mobile HTML acceptance contract in
 [mobile_delivery.md](mobile_delivery.md), including real rendering at 390 × 844 and
 430 × 932 CSS pixels.
 
-### Step 2: Publish a mobile reading URL
-
-Choose the least-public delivery method that meets the user's request:
-
-- **Private GitHub repository (default):** use the workflow in
-  `templates/private-html-preview.yml` to publish a non-zipped, directly viewable HTML
-  artifact. Run the workflow definition from the default branch and pass the exact
-  pushed report commit as `source_ref`. For a GitHub Free private repository, keep the
-  workflow's `archive: false` direct artifact. Return the completed run/artifact URL,
-  not the `blob` URL; `blob` and `raw` always identify source bytes.
-- **Stable private URL:** with explicit authorization, use an identity-protected static
-  site as described in `mobile_delivery.md`.
-- **Local-only delivery:** return the absolute HTML file path and state that it is not
-  yet reachable from the user's phone.
-
-Do not upload to a paste service or public Pages site unless the user explicitly
-authorizes public disclosure.
-
-After the artifact succeeds and opens, publish the report-folder link card required by
-`mobile_delivery.md`: create only that folder's tiny `README.md`, put the vertical
-`📱 阅读网页` block first, and record the immutable `report.html` source commit and
-timezone-qualified expiry timestamp. Never modify the repository root README or append
-to a global report index. Exclude navigation cards from Graphify with the verified
-parent-scoped pattern, then commit and push the focused handoff. When the artifact
-expires, rerun it from the same immutable source commit and replace only that folder's
-URL and expiry.
-
-### Step 3: Verify Graphify retrieval
+### Step 2: Verify Graphify retrieval
 
 Keep the canonical HTML indexable, run the repository's normal Graphify update, and ask
 a report-specific question covering its main findings, recommendations, and decision
@@ -175,15 +149,28 @@ semantic-template correction/retry may you create the centralized
 `graph-sources/<same-relative-path>.md` fallback described in
 [mobile_delivery.md](mobile_delivery.md). Never put fallback Markdown beside the report.
 
+### Step 3: Publish a mobile reading URL
+
+Use `sites:sites-building` to preserve the validated report in a Sites project, then use
+`sites:sites-hosting` to deploy it. Owner-only access is the default and does not need a
+second confirmation after the user requested the report. Selected-user, workspace, or
+public access requires explicit approval of the exact audience before broader
+deployment. If “shareable” is requested without an audience, ask one concise audience
+question at publication time; never infer public access.
+
+Open the deployed Sites HTTPS URL and recheck the report on desktop plus both phone
+viewports. Do not claim publication from a build, preview, or deploy command alone. If
+Sites is unavailable, retain the validated canonical HTML and report the blocker; do
+not silently switch to GitHub Actions, another host, or PDF.
+
 ### Step 4: Confirm delivery
 
 - Inform the user that the full report has been generated
 - Put the clickable interactive HTML URL first; a local path alone is not a mobile
   handoff
 - Include the exact-commit canonical HTML source link and Graphify smoke-test result
-- State whether the link requires GitHub sign-in and when it expires
-- Confirm that the report-folder README entry and its parent-scoped navigation-only
-  `.graphifyignore` rule were committed and pushed, with the root README unchanged
+- State the Sites audience and whether sign-in is required
+- Confirm that the Sites HTTPS URL opened successfully at desktop and phone viewports
 - Provide a brief summary (2-3 sentences) in the response
 
 ## Resource Budgets

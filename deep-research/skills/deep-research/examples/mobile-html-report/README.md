@@ -18,6 +18,7 @@ failure plus one corrected retry may a derived fallback be created at the centra
 path `graph-sources/deep-research/examples/mobile-html-report/example-report.md`; in
 that exceptional mode, ignore only this exact HTML path to prevent duplicate nodes.
 
-The private GitHub workflow validates the security and semantic contract, then replaces
-`__REPORT_SOURCE_URL__` in a temporary upload copy with the exact-commit URL for this
-same HTML file.
+After the security, semantic, Graphify, and mobile contracts pass, deploy the report
+through OpenAI Sites. Owner-only is the default audience. Replace
+`__REPORT_SOURCE_URL__` with the exact-commit URL for this same HTML when source
+persistence is authorized; otherwise omit that footer link rather than inventing one.

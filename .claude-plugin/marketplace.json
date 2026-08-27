@@ -45,7 +45,7 @@
     },
     {
       "name": "deep-research",
-      "description": "Advanced multi-agent research system for large codebases and infrastructure — team-based orchestration, structured findings with a fail-closed Trust Gate (>=95% machine-verified claims), and delivery as one canonical mobile-first HTML report with a companion PDF.",
+      "description": "Advanced multi-agent research system for large codebases and infrastructure — team-based orchestration, a fail-closed Trust Gate (>=95% machine-verified claims), and one canonical mobile-first HTML report delivered through OpenAI Sites.",
       "author": {
         "name": "DaoBrew AI"
       },
