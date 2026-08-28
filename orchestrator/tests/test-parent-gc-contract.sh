@@ -6,6 +6,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GC="$ROOT/scripts/orchestrator-gc.sh"
 SKILL="$ROOT/skills/orchestrating/SKILL.md"
+CLEANUP_REF="$ROOT/skills/orchestrating/references/cleanup-and-rework.md"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -23,7 +24,7 @@ check() {
 }
 
 setup_fixture() {
-  local name="$1" merged="${2:-yes}" mission_version="${3:-v04}"
+  local name="$1" merged="${2:-yes}"
   FIXTURE="$TMP/$name"
   HUB="$FIXTURE/.orchestrator"
   MISSION="$HUB/missions/mission"
@@ -71,21 +72,14 @@ setup_fixture() {
   printf 'verification artifact\n' > "$CONTROL/verification.md"
   printf 'request\n' > "$MISSION/request.md"
   printf 'Briefs: brief.md, brief-exec.md\n' > "$MISSION/MISSION.md"
-  printf 'backend: hybrid\nstage: review\ncodex_thread_id: parent-thread\n' > "$MISSION/session.txt"
+  printf 'backend: claude-headless\nstage: review\n' > "$MISSION/session.txt"
   printf 'approved design\n' > "$CONTROL/approved-design.md"
   printf 'approved plan\n' > "$CONTROL/approved-plan.md"
   printf 'approved brief\n' > "$CONTROL/brief-exec.md"
-  if [[ "$mission_version" = v04 ]]; then
-    printf '0.4.0\n' > "$CONTROL/pipeline-version"
-    mkdir -p "$CONTROL/tasks"
-    (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
-      brief-exec.md approved-task-dag.json > approved.sha256)
-  else
-    rm -f "$CONTROL/approved-task-dag.json"
-    rm -rf "$CONTROL/tasks"
-    (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
-      brief-exec.md > approved.sha256)
-  fi
+  printf '0.4.0\n' > "$CONTROL/pipeline-version"
+  mkdir -p "$CONTROL/tasks"
+  (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
+    brief-exec.md approved-task-dag.json > approved.sha256)
 }
 
 add_archived_child_authority() {
@@ -94,6 +88,10 @@ add_archived_child_authority() {
   printf 'collected\n' > "$task/state"
   printf '01a0accepted-child\n' > "$task/accepted-thread-id"
   printf 'archived\n' > "$task/task-window-state"
+  printf '{"version":1,"mission":"mission","tasks":[{"id":"task-a","depends_on":[],"files":[],"contracts":[],"verification":["true"],"state":"ready"}]}\n' \
+    > "$CONTROL/approved-task-dag.json"
+  (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
+    brief-exec.md approved-task-dag.json > approved.sha256)
 }
 
 check_parent_preserved_after_gc() {
@@ -267,24 +265,6 @@ fi
 check "cleanup_pending parent retry finishes from retained exact authority" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2/parent-cleanup-state")" = collected && ! -e "$3" ]] && ! git -C "$4" show-ref --verify --quiet "refs/heads/$5"' \
   _ "$RETRY_RC" "$CONTROL" "$PARENT" "$REPO" "$BRANCH"
-
-setup_fixture hybrid-03-parent yes v03
-"$GC" --hub "$HUB" --clean >"$FIXTURE/v03.out" 2>"$FIXTURE/v03.err"
-V03_GC_RC=$?
-if [[ "$V03_GC_RC" -ne 0 ]]; then
-  sed 's/^/  v03 diagnostic: /' "$FIXTURE/v03.err"
-fi
-check "classified Hybrid 0.3 target-contained parent cleanup succeeds without a DAG" bash -c \
-  '[[ "$1" -eq 0 && ! -e "$2" && "$(cat "$3/parent-cleanup-state")" = collected && -s "$4/approved-design.md" && -s "$4/approved-plan.md" && -s "$4/brief-exec.md" && ! -e "$4/approved-task-dag.json" ]]' \
-  _ "$V03_GC_RC" "$PARENT" "$CONTROL" "$ARCHIVE"
-
-setup_fixture hybrid-03-partial yes v03
-printf '{"version":1,"mission":"mission","tasks":[]}\n' > "$CONTROL/approved-task-dag.json"
-"$GC" --hub "$HUB" --clean >/dev/null 2>&1
-V03_PARTIAL_RC=$?
-check "contradictory unversioned 0.3 DAG authority fails closed without parent mutation" bash -c \
-  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/parent-cleanup-state")" = cleanup_pending ]] && git -C "$4" show-ref --verify --quiet refs/heads/orc/mission' \
-  _ "$V03_PARTIAL_RC" "$PARENT" "$CONTROL" "$REPO"
 
 setup_fixture parent-ref-as-target
 printf '%s\t%s\t%s\t%s\t%s\n' \
@@ -681,19 +661,19 @@ check "post-stale-marker exact reconciliation converges collection" bash -c \
   "$REPO" "$BRANCH" "$REMOTE"
 
 check "Phase 0 runs report-only reconciliation before new scheduling" bash -c \
-  'tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g" | grep -Fqi -- "Phase 0 reconciliation is report-only"' \
+  'tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g" | grep -Fqi -- "Run report-only discovery"' \
   _ "$SKILL"
 check "Phase 0 never requires hub-wide destructive cleanup" bash -c \
-  'normalized="$(tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g")"; [[ "$normalized" == *"Do not run hub-wide"*"--clean"*"during Phase 0"* ]]' \
+  'tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g" | grep -Fqi -- "Never use hub-wide destructive cleanup here"' \
   _ "$SKILL"
 check "Phase 0 reconciles terminal child task-window archival" \
-  grep -Fqi -- "archive every terminal integrated child task window" "$SKILL"
+  grep -Fqi -- "archive the exact accepted child" "$CLEANUP_REF"
 check "coordinator preserves nonterminal and unresolved child windows" bash -c \
-  'tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g" | grep -Fqi -- "preserve every nonterminal or unresolved task window"' \
-  _ "$SKILL"
+  'tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g" | grep -Fqi -- "Never archive running, blocked, review, or unresolved-rework tasks"' \
+  _ "$CLEANUP_REF"
 check "parent collection requires target containment independent of PR metadata" bash -c \
-  'normalized="$(tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g")"; [[ "$normalized" == *"recorded parent tip is contained in the target branch"* && "$normalized" == *"PR metadata is additional evidence only"* ]]' \
-  _ "$SKILL"
+  'normalized="$(tr "\n" " " < "$1" | sed "s/[[:space:]][[:space:]]*/ /g")"; [[ "$normalized" == *"exact parent tip contained in the target"* && "$normalized" == *"PR metadata may corroborate but never replace ancestry"* ]]' \
+  _ "$CLEANUP_REF"
 
 echo "  parent-gc-contract: $OK/$N"
 [[ "$OK" -eq "$N" ]]

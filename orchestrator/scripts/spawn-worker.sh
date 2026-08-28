@@ -4,18 +4,12 @@
 #   spawn-worker.sh --mission-dir <dir> --control-dir <dir>
 #       --worktree <primary> [--worktree <other>]...
 #       fresh PLAN stage: claude (Fable-5) reads brief.md, plans, exits state=planned
-#   spawn-worker.sh --mission-dir <dir> --control-dir <dir>
-#       --worktree <primary> [...] --stage exec
-#       fresh EXEC stage: codex (gpt-5.6-sol) reads brief-exec.md, implements plan.md,
-#       exits state=executed
-#   spawn-worker.sh ... --resume "<message>" [--stage review|exec]
-#       resume: default backend is the claude session (mediation answers, the
-#       executed->review trigger [--stage review labels it], crash salvage);
-#       --stage exec resumes the codex thread instead
+#   spawn-worker.sh ... --resume "<message>" [--stage plan|review]
+#       resumes the same Fable session for clarification, plan revision,
+#       independent review, re-review, or crash salvage.
 #
-# The FIRST --worktree is the primary: it is the session cwd; for claude stages it
-# holds the guard/gate hooks in its .claude/settings.local.json; for the exec stage it is
-# the codex workspace-write sandbox root (other worktrees + mission dir via --add-dir).
+# The FIRST --worktree is the primary session cwd and holds the guard/gate hooks
+# in `.claude/settings.local.json`.
 # The orchestrator launches this via Bash with run_in_background:true and is woken
 # when the process exits. On exit (any state) a macOS notification fires as the
 # user-facing backup. Stdout ALWAYS carries either the stage summary or a
@@ -36,12 +30,12 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 if [[ -z "$MISSION_DIR" || -z "$CONTROL_DIR" || "${#WORKTREES[@]}" -eq 0 ]]; then
-  echo "usage: --mission-dir <dir> --control-dir <dir> --worktree <primary> [--worktree <other>]... [--stage plan|exec|review] [--resume <msg>]" >&2
+  echo "usage: --mission-dir <dir> --control-dir <dir> --worktree <primary> [--worktree <other>]... [--stage plan|review] [--resume <msg>]" >&2
   exit 1
 fi
 case "$STAGE" in
-  ''|plan|exec|review) ;;
-  *) echo "invalid --stage: $STAGE (plan|exec|review)" >&2; exit 1 ;;
+  ''|plan|review) ;;
+  *) echo "invalid --stage: $STAGE (plan|review)" >&2; exit 1 ;;
 esac
 PRIMARY="${WORKTREES[0]}"
 for WT in "${WORKTREES[@]}"; do
@@ -82,8 +76,8 @@ for I in "${!WORKTREES[@]}"; do
   esac
 done
 
-# Stage model specs are fixed by the plugin (founder directives 2026-07-22 + 2026-08-07):
-# plan/review = Fable-5 high on claude; exec = gpt-5.6-sol reasoning-high on codex.
+# Plan and review always use Fable-5 high on Claude; native task execution is
+# launched separately through codex-task-client.py.
 FABLE_TOOLS=(Read Glob Grep Write Edit Skill)
 FABLE_TOOL_LIST="$(IFS=,; echo "${FABLE_TOOLS[*]}")"
 WORKER_FLAGS=(--model "${ORC_PLAN_MODEL:-claude-fable-5}" --effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
@@ -137,8 +131,6 @@ next_output() {
 
 SESSION_FILE="$MISSION_DIR/session.txt"
 RC=0
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-
 verify_approved_contract() {
   local APPROVED
   for APPROVED in approved-design.md approved-plan.md brief-exec.md; do
@@ -187,113 +179,6 @@ detect_quota() { # <files...> — returns 0 and prints the hint line if matched
   fi
   return 1
 }
-
-# ---------------------------------------------------------------- exec (codex)
-if [[ "$STAGE" == "exec" ]]; then
-  verify_approved_contract || exit 1
-  CODEX_BIN="${ORC_CODEX_BIN:-}"
-  if [[ -z "$CODEX_BIN" ]]; then
-    if command -v codex >/dev/null 2>&1; then
-      CODEX_BIN="$(command -v codex)"
-    elif [[ -x "/Applications/ChatGPT.app/Contents/Resources/codex" ]]; then
-      CODEX_BIN="/Applications/ChatGPT.app/Contents/Resources/codex"
-    else
-      echo "codex CLI not found (PATH, ChatGPT.app bundle, or ORC_CODEX_BIN)" >&2
-      exit 1
-    fi
-  fi
-  # `codex exec resume` accepts no -s/--add-dir, so the sandbox is expressed as
-  # -c config overrides, which BOTH forms accept identically: workspace-write
-  # rooted at the cwd (primary worktree) plus the other worktrees and the
-  # mission dir as extra writable roots. Network stays off unless ORC_CODEX_NETWORK.
-  ROOTS=""
-  # Index loop, not "${WORKTREES[@]:1}" — an empty slice trips set -u on bash 3.2.
-  for ((i = 1; i < ${#WORKTREES[@]}; i++)); do
-    ROOTS="${ROOTS}\"${WORKTREES[$i]}\", "
-  done
-  ROOTS="${ROOTS}\"$MISSION_DIR\""
-  EXEC_FLAGS=(
-    -m gpt-5.6-sol
-    -c 'model_reasoning_effort="high"'
-    -c 'sandbox_mode="workspace-write"'
-    -c "sandbox_workspace_write.writable_roots=[$ROOTS]"
-    -c 'sandbox_workspace_write.exclude_slash_tmp=true'
-    -c 'sandbox_workspace_write.exclude_tmpdir_env_var=true'
-    --json
-  )
-  if [[ -n "${ORC_CODEX_NETWORK:-}" ]]; then
-    EXEC_FLAGS+=(-c sandbox_workspace_write.network_access=true)
-  fi
-
-  if [[ ! -f "$SESSION_FILE" ]]; then
-    echo "no session.txt in $MISSION_DIR — the plan stage must run before exec" >&2
-    exit 1
-  fi
-  OUT="$(next_output)"
-  LAST_MSG="${OUT%.json}.last.txt"
-  {
-    echo "stage: exec"
-    echo "spawn_pid: $$"
-  } >> "$SESSION_FILE"
-
-  # P0-1: the codex sandbox cannot commit (git DB is read-only there) — run the
-  # commit broker alongside the executor and drain any backlog after it exits.
-  "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" --control-dir "$CONTROL_DIR" \
-    >> "$MISSION_DIR/broker.log" 2>&1 &
-  BROKER_PID=$!
-  stop_broker() {
-    kill "$BROKER_PID" 2>/dev/null || true
-    wait "$BROKER_PID" 2>/dev/null || true
-    "$SCRIPT_DIR/commit-broker.sh" --mission-dir "$MISSION_DIR" --control-dir "$CONTROL_DIR" --once \
-      >> "$MISSION_DIR/broker.log" 2>&1 || true
-  }
-
-  if [[ -z "$RESUME_MSG" ]]; then
-    if [[ ! -f "$CONTROL_DIR/brief-exec.md" ]]; then
-      stop_broker
-      echo "no approved brief-exec.md in $CONTROL_DIR" >&2
-      exit 1
-    fi
-    echo "exec_spawned: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
-    cd "$PRIMARY"
-    ORC_WORKER=1 "$CODEX_BIN" exec "${EXEC_FLAGS[@]}" --output-last-message "$LAST_MSG" - \
-      < "$CONTROL_DIR/brief-exec.md" \
-      > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
-    THREAD_ID="$(jq -r 'select(.type == "thread.started") | .thread_id' "$OUT" 2>/dev/null | head -1 || true)"
-    if [[ -n "$THREAD_ID" ]]; then
-      echo "codex_thread_id: $THREAD_ID" >> "$SESSION_FILE"
-    fi
-  else
-    THREAD_ID="$(awk -F': ' '/^codex_thread_id:/ {id=$2} END {print id}' "$SESSION_FILE")"
-    if [[ -z "$THREAD_ID" ]]; then
-      stop_broker
-      echo "no codex_thread_id in $SESSION_FILE — cannot resume exec stage" >&2
-      exit 1
-    fi
-    echo "exec_resumed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$SESSION_FILE"
-    cd "$PRIMARY"
-    ORC_WORKER=1 "$CODEX_BIN" exec resume "$THREAD_ID" "${EXEC_FLAGS[@]}" \
-      --output-last-message "$LAST_MSG" "$RESUME_MSG" \
-      > "$OUT" 2>> "$MISSION_DIR/worker-stderr.log" || RC=$?
-  fi
-  stop_broker
-
-  if [[ "$RC" -ne 0 ]] && detect_quota "$OUT" "$LAST_MSG" "$MISSION_DIR/worker-stderr.log"; then
-    exit 75
-  fi
-  if [[ -s "$LAST_MSG" ]]; then
-    echo "mission exec turn ended · backend=codex · rc=$RC"
-    echo "---"
-    cat "$LAST_MSG"
-    exit "$RC"
-  fi
-  echo "codex exec produced no final message (exit=$RC) — last stderr lines:"
-  tail -n 20 "$MISSION_DIR/worker-stderr.log" 2>/dev/null || true
-  if [[ "$RC" -eq 0 ]]; then
-    RC=1
-  fi
-  exit "$RC"
-fi
 
 # ------------------------------------------------------- plan/review (claude)
 verify_worker_settings || exit 1

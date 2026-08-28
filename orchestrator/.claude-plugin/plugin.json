@@ -1,36 +1,24 @@
 {
   "name": "orchestrator",
-  "version": "0.4.4",
-  "description": "Hybrid mission-control orchestration for Claude Code — the coordinator records the ask and provisions guarded worktrees; Fable-5 brainstorms, plans, pauses for your go, and independently reviews; Codex gpt-5.6-sol executes, verifies, and performs every rework change. All state lives on disk in a .orchestrator/ hub so any fresh session can resume.",
+  "version": "0.5.0",
+  "description": "Native Hybrid mission control for Claude Code and Codex: Fable plans and reviews while visible Codex GPT-5.6-Sol tasks implement an approved DAG.",
   "repository": "https://github.com/DaoBrewAI/building-in-public",
   "license": "MIT",
   "keywords": [
     "orchestrator",
+    "codex",
     "multi-session",
-    "worker-sessions",
     "worktrees",
     "mission-control",
-    "mediation",
     "daobrew"
   ],
   "skills": [
-    "./claude-skills/"
+    "./skills/"
   ],
   "commands": [
     "./commands/"
   ],
   "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/self-update.sh"
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [

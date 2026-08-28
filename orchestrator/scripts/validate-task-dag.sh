@@ -278,7 +278,7 @@ prepare_freeze_lock_file() {
 
   if [[ -d "$REQUESTED_LOCK" && ! -L "$REQUESTED_LOCK" ]]; then
     rmdir "$REQUESTED_LOCK" 2>/dev/null || {
-      echo "legacy task DAG freeze lock directory is not empty" >&2
+      echo "unexpected task DAG freeze lock directory is not empty" >&2
       return 1
     }
   fi

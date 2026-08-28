@@ -27,7 +27,7 @@
     },
     {
       "name": "orchestrator",
-      "description": "Mission-control orchestration for Claude Code — one coordinator session brainstorms each ask, then runs each mission as a staged pipeline in guarded git worktrees: Fable-5 plans, pauses for your go, Codex gpt-5.6-sol executes and verifies, and the same Fable-5 session is resumed to code-review; the coordinator stays free for other work, mediates blocked questions, and does light acceptance + merge. All state lives on disk in a .orchestrator/ hub so any fresh session can resume.",
+      "description": "Native Hybrid mission control for Claude Code and Codex — Fable plans and reviews while visible Codex tasks implement a guarded approved DAG.",
       "author": {
         "name": "DaoBrew AI"
       },

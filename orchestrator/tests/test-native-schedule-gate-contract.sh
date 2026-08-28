@@ -5,7 +5,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LIFECYCLE="$ROOT/scripts/task-worktree.sh"
 VALIDATOR="$ROOT/scripts/validate-task-dag.sh"
-SKILL="$ROOT/skills/orchestrating/SKILL.md"
+SKILL="$ROOT/skills/orchestrating/references/task-execution.md"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/orc-native-gate.XXXXXX")"
 TMP="$(cd -P "$TMP" && pwd -P)"
 trap 'rm -rf -- "$TMP"' EXIT
@@ -57,16 +57,9 @@ JSON
 
 create_task() {
   local task_id="$1" mode="${2:-}" root="$3"
-  if [[ -n "$mode" ]]; then
-    "$LIFECYCLE" create --create-mode "$mode" --mission-dir "$MISSION_DIR" \
-      --control-dir "$CONTROL" --task-dir "$root/tasks/$task_id" \
-      --mission mission --task-id "$task_id" --repo "$REPO" \
-      --parent-worktree "$PARENT" --worktree "$root/worktrees/$task_id"
-  else
-    "$LIFECYCLE" create --control-dir "$CONTROL" \
-      --task-dir "$root/tasks/$task_id" --mission mission --task-id "$task_id" \
-      --repo "$REPO" --parent-worktree "$PARENT" --worktree "$root/worktrees/$task_id"
-  fi
+  "$LIFECYCLE" create --mission-dir "$MISSION_DIR" --control-dir "$CONTROL" \
+    --task-dir "$root/tasks/$task_id" --mission mission --task-id "$task_id" \
+    --repo "$REPO" --parent-worktree "$PARENT" --worktree "$root/worktrees/$task_id"
 }
 
 BYPASS="$TMP/bypass"
@@ -118,26 +111,25 @@ check "native gate creates the dependent task only after exact readiness" bash -
   '[[ "$1" -eq 0 && -d "$2/worktrees/task-b" && "$(cat "$2/.orchestrator/control/mission/tasks/task-b/state")" = ready ]]' \
   _ "$TASK_B_RC" "$NATIVE"
 
-LEGACY="$TMP/legacy"
-setup_repo "$LEGACY"
-create_task legacy-task legacy "$LEGACY" >/dev/null 2>&1
-LEGACY_RC=$?
-check "explicit legacy mode preserves classified Hybrid 0.3 create" bash -c \
-  '[[ "$1" -eq 0 && -d "$2/worktrees/legacy-task" ]]' _ "$LEGACY_RC" "$LEGACY"
+UNVERSIONED="$TMP/unversioned"
+setup_repo "$UNVERSIONED"
+create_task task-a native-0.4 "$UNVERSIONED" >/dev/null 2>&1
+check "unversioned mission cannot enter native task creation" test "$?" -ne 0
 
-NATIVE_LEGACY="$TMP/native-legacy"
-setup_repo "$NATIVE_LEGACY"
-make_native_authority
-create_task task-a legacy "$NATIVE_LEGACY" >/dev/null 2>&1
-check "legacy mode cannot bypass a native 0.4 classification" test "$?" -ne 0
+FIXTURE_ESCAPE="$TMP/fixture-escape"
+setup_repo "$FIXTURE_ESCAPE"
+ORC_TASK_WORKTREE_TESTING=1 ORC_TASK_WORKTREE_TEST_FIXTURE_ROOT=/ \
+  "$LIFECYCLE" create --create-mode test-fixture --mission-dir "$MISSION_DIR" \
+    --control-dir "$CONTROL" --task-dir "$FIXTURE_ESCAPE/tasks/task-a" \
+    --mission mission --task-id task-a --repo "$REPO" \
+    --parent-worktree "$PARENT" --worktree "$FIXTURE_ESCAPE/worktrees/task-a" \
+    >/dev/null 2>&1
+check "test fixture mode rejects root scope and cannot bypass native authority" test "$?" -ne 0
 
 check "orchestrating skill wires child scheduling through the production native gate" bash -c \
   'grep -Fq -- "$1" "$2" && grep -Fq -- "$3" "$2" && grep -Fq -- "$4" "$2"' \
-  _ '$PLUGIN_DIR/scripts/task-worktree.sh create' "$SKILL" \
-  '--create-mode native-0.4' 'must succeed before rendering or creating the Codex child thread'
-check "orchestrating skill preserves only an explicit classified legacy create path" bash -c \
-  'grep -Fq -- "$1" "$2" && grep -Fq -- "$3" "$2"' \
-  _ '--create-mode legacy' "$SKILL" 'omission of the mode is never a legacy'
+  _ 'scripts/task-worktree.sh create' "$SKILL" \
+  '--mission-dir <mission-dir>' 'The gate validates native authority'
 
 echo "  native-schedule-gate-contract: $OK/$N"
 [[ "$OK" -eq "$N" ]]

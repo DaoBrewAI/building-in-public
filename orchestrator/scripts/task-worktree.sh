@@ -16,7 +16,7 @@ NEW_AUTHORITY_DESTS=()
 NEW_AUTHORITY_TEMPS=()
 
 usage() {
-  echo "usage: task-worktree.sh create --create-mode <native-0.4|legacy> --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir>" >&2
+  echo "usage: task-worktree.sh create --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir>" >&2
   echo "       task-worktree.sh reprovision --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir> --expected-generation <n>" >&2
 }
 
@@ -840,26 +840,13 @@ PY
     fi
     fail "mission authority cannot be classified"
   fi
-  if [[ "$classification" != hybrid-0.4 ]]; then
+  if [[ "$classification" != native-0.4 ]]; then
     if [[ "$tasks_initialized" -eq 1 ]]; then
       rmdir "$CONTROL_PHYS/tasks" 2>/dev/null || true
       durable_fsync_paths "$CONTROL_PHYS" >/dev/null 2>&1 || true
     fi
-    fail "native-0.4 create requires classified Hybrid 0.4 authority"
+    fail "create requires validated native 0.4 authority"
   fi
-}
-
-verify_legacy_create_classification() {
-  local classifier classification
-  classifier="$(cd "$(dirname "$0")" && pwd -P)/classify-mission-version.sh"
-  [[ -x "$classifier" ]] || fail "mission classifier is unavailable"
-  classification="$($classifier --mission-dir "$MISSION_DIR_PHYS" --control-dir "$CONTROL_PHYS")" || \
-    fail "mission authority cannot be classified"
-  case "$classification" in
-    hybrid-0.3|legacy-0.2) ;;
-    hybrid-0.4) fail "legacy create cannot bypass native Hybrid 0.4 scheduling" ;;
-    *) fail "legacy create requires a supported classified mission" ;;
-  esac
 }
 
 acquire_lock() {
@@ -936,8 +923,8 @@ REPO=""
 PARENT_WORKTREE=""
 WORKTREE=""
 EXPECTED_GENERATION=""
-CREATE_MODE=""
 MISSION_DIR=""
+CREATE_MODE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -949,22 +936,18 @@ while [[ $# -gt 0 ]]; do
     --parent-worktree) [[ $# -ge 2 ]] || { usage; exit 1; }; PARENT_WORKTREE="$2"; shift 2 ;;
     --worktree) [[ $# -ge 2 ]] || { usage; exit 1; }; WORKTREE="$2"; shift 2 ;;
     --expected-generation) [[ $# -ge 2 ]] || { usage; exit 1; }; EXPECTED_GENERATION="$2"; shift 2 ;;
-    --create-mode) [[ $# -ge 2 ]] || { usage; exit 1; }; CREATE_MODE="$2"; shift 2 ;;
     --mission-dir) [[ $# -ge 2 ]] || { usage; exit 1; }; MISSION_DIR="$2"; shift 2 ;;
+    --create-mode) [[ $# -ge 2 ]] || { usage; exit 1; }; CREATE_MODE="$2"; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
 if [[ "$MODE" == create ]]; then
   [[ -z "$EXPECTED_GENERATION" ]] || fail "create does not accept an expected generation"
-  case "$CREATE_MODE" in
-    native-0.4|legacy) ;;
-    '') fail "create requires an explicit create mode" ;;
-    *) fail "unsupported create mode: $CREATE_MODE" ;;
-  esac
   [[ -n "$MISSION_DIR" ]] || fail "create requires a mission directory"
+  case "$CREATE_MODE" in ''|test-fixture) ;; *) fail "unsupported create mode: $CREATE_MODE" ;; esac
 else
-  [[ -z "$CREATE_MODE" && -z "$MISSION_DIR" ]] || fail "reprovision does not accept create classification arguments"
+  [[ -z "$MISSION_DIR" && -z "$CREATE_MODE" ]] || fail "reprovision does not accept create classification arguments"
   case "$EXPECTED_GENERATION" in
     ''|*[!0-9]*|0) fail "reprovision requires a positive expected generation" ;;
   esac
@@ -1039,10 +1022,21 @@ trap 'exit 1' HUP INT TERM
 acquire_lock
 
 if [[ "$MODE" == create ]]; then
-  case "$CREATE_MODE" in
-    native-0.4) verify_native_create_ready ;;
-    legacy) verify_legacy_create_classification ;;
-  esac
+  if [[ "$CREATE_MODE" == test-fixture ]]; then
+    [[ "${ORC_TASK_WORKTREE_TESTING:-}" == 1 ]] || fail "test fixture mode is disabled"
+    TEST_ROOT="${ORC_TASK_WORKTREE_TEST_FIXTURE_ROOT:-}"
+    [[ -n "$TEST_ROOT" && -d "$TEST_ROOT" && ! -L "$TEST_ROOT" ]] || fail "test fixture root is unavailable"
+    TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
+    case "$TEST_ROOT" in
+      /private/tmp/*|/tmp/*|/private/var/folders/*) ;;
+      *) fail "test fixture root must be inside a system temporary directory" ;;
+    esac
+    for TEST_PATH in "$CONTROL_PHYS" "$TASK_PHYS" "$REPO_PHYS" "$PARENT_PHYS" "$WORKTREE_PHYS" "$MISSION_DIR_PHYS"; do
+      case "$TEST_PATH" in "$TEST_ROOT"|"$TEST_ROOT"/*) ;; *) fail "test fixture path escapes its root" ;; esac
+    done
+  else
+    verify_native_create_ready
+  fi
 fi
 
 CONTROL_TASKS_DIR="$CONTROL_PHYS/tasks"

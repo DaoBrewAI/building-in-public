@@ -1,38 +1,15 @@
 #!/usr/bin/env bash
-# Behavioral contract for verified child integration and immediate child GC.
+# Behavioral contract for verified child integration and post-batch child GC.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INTEGRATE="$ROOT/scripts/integrate-task.sh"
 GC="$ROOT/scripts/orchestrator-gc.sh"
-LIFECYCLE_REAL="$ROOT/scripts/task-worktree.sh"
-export ORC_TEST_LIFECYCLE_REAL="$LIFECYCLE_REAL"
-SKILL="$ROOT/skills/orchestrating/SKILL.md"
+LIFECYCLE="$ROOT/scripts/task-worktree.sh"
+VALIDATOR="$ROOT/scripts/validate-task-dag.sh"
+SKILL="$ROOT/skills/orchestrating/references/cleanup-and-rework.md"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-LIFECYCLE="$TMP/task-worktree-legacy-wrapper.sh"
-cat > "$LIFECYCLE" <<'SH'
-#!/usr/bin/env bash
-if [[ "${1:-}" == create ]]; then
-  shift
-  control=""
-  previous=""
-  for argument in "$@"; do
-    if [[ "$previous" == --control-dir ]]; then control="$argument"; break; fi
-    previous="$argument"
-  done
-  hub="${control%/control/mission}"
-  mission_dir="$hub/missions/mission"
-  mkdir -p "$mission_dir"
-  printf 'request\n' > "$mission_dir/request.md"
-  printf 'Briefs: brief.md, brief-exec.md\n' > "$mission_dir/MISSION.md"
-  printf 'planned\n' > "$mission_dir/state"
-  printf 'backend: hybrid\nstage: plan\n' > "$mission_dir/session.txt"
-  exec "$ORC_TEST_LIFECYCLE_REAL" create --create-mode legacy --mission-dir "$mission_dir" "$@"
-fi
-exec "$ORC_TEST_LIFECYCLE_REAL" "$@"
-SH
-chmod +x "$LIFECYCLE"
 
 N=0
 OK=0
@@ -59,6 +36,18 @@ setup_fixture() {
   CHILD="$FIXTURE/child"
   BRANCH="orc-task/mission/task-a"
   mkdir -p "$CONTROL" "$TASK_DIR" "$HUB/missions"
+  MISSION_DIR="$HUB/missions/mission"
+  mkdir -p "$MISSION_DIR"
+  printf 'request\n' > "$MISSION_DIR/request.md"
+  printf 'Briefs: brief.md, brief-exec.md\n' > "$MISSION_DIR/MISSION.md"
+  printf 'planned\n' > "$MISSION_DIR/state"
+  printf 'backend: hybrid\nstage: plan\n' > "$MISSION_DIR/session.txt"
+  printf '0.4.0\n' > "$CONTROL/pipeline-version"
+  printf 'design\n' > "$CONTROL/approved-design.md"
+  printf 'plan\n' > "$CONTROL/approved-plan.md"
+  printf 'brief\n' > "$CONTROL/brief-exec.md"
+  printf '{"version":1,"mission":"mission","tasks":[{"id":"task-a","depends_on":[],"files":["child.txt"],"contracts":[],"verification":["true"],"state":"ready"}]}\n' > "$CONTROL/approved-task-dag.json"
+  (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md brief-exec.md approved-task-dag.json > approved.sha256)
   git init -q --bare "$REMOTE"
   git init -q "$REPO"
   git -C "$REPO" config user.email t@t
@@ -72,7 +61,8 @@ setup_fixture() {
   git -C "$REPO" push -q -u origin main
   git -C "$REPO" worktree add -qb orc/mission "$PARENT" main >/dev/null
   PARENT_BASE="$(git -C "$PARENT" rev-parse HEAD)"
-  "$LIFECYCLE" create --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+  "$LIFECYCLE" create --mission-dir "$MISSION_DIR" \
+    --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
     --mission mission --task-id task-a --repo "$REPO" \
     --parent-worktree "$PARENT" --worktree "$CHILD" >/dev/null
   printf 'child\n' > "$CHILD/child.txt"
@@ -86,9 +76,17 @@ setup_fixture() {
 }
 
 integrate_fixture() {
+  local rc
   "$INTEGRATE" --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
     --mission mission --task-id task-a --parent-worktree "$PARENT" \
     --expected-parent-tip "$1"
+  rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    # This fixture has exactly one approved task. A successful integration
+    # therefore completes the approved batch and authorizes batch GC.
+    printf 'executed\n' > "$MISSION_DIR/state"
+  fi
+  return "$rc"
 }
 
 unchanged_parent() {

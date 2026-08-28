@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only classifier for legacy 0.2, in-flight Hybrid 0.3, and native 0.4 missions.
+# Read-only validator for native Hybrid 0.4 mission authority.
 set -uo pipefail
 
 MISSION_DIR=""
@@ -274,58 +274,23 @@ def classify(mission_path, control_path):
         has_tasks = not tasks["missing"]
         if has_dag != has_tasks:
             reject("partial DAG/task registry authority")
-
-        if version is not None:
-            if version not in ("0.3.0\n", "0.4.0\n"):
-                reject("unsupported pipeline-version")
-            valid_versioned_states = {
-                "pending", "running", "planned", "executed", "rework",
-                "blocked", "review", "accepted", "failed", "cleanup_pending",
-                "collected", "complete", "completed", "done",
-            }
-            if not has_request or mission is None or state is None:
-                reject("versioned Hybrid mission authority is incomplete")
-            if "Briefs:" not in mission:
-                reject("versioned MISSION.md lacks the Hybrid marker")
-            if (not state.endswith("\n") or state.count("\n") != 1 or
-                    state[:-1] not in valid_versioned_states):
-                reject("versioned mission state is malformed or unsupported")
-            if session is not None and (
-                    re.search(r"(?m)^(?:backend: codex-exec$|worker_pid:)", session) is not None or
-                    re.search(r"(?m)^stage:", session) is None):
-                reject("versioned session authority contradicts the Hybrid pipeline")
-            if version == "0.3.0\n":
-                if has_dag or has_tasks:
-                    reject("0.3 mission cannot have native DAG/task authority")
-                return "hybrid-0.3"
-            return "hybrid-0.4"
-
-        if has_dag or has_tasks:
-            reject("DAG/task authority exists without pipeline-version")
-
-        legacy_session = (
-            session is not None and
-            re.search(r"(?m)^(?:backend: codex-exec$|worker_pid:)", session) is not None and
-            re.search(r"(?m)^stage:", session) is None
-        )
-        legacy_pending = (
-            mission is not None and state is not None and
-            state.rstrip("\n") == "pending" and
-            re.search(r"(?m)^Brief:|gpt-5\.6 \(overrideable\)|\.worktrees", mission) is not None and
-            not (has_request and "Briefs:" in mission)
-        )
-        hybrid = (
-            has_request and mission is not None and session is not None and
-            "Briefs:" in mission and re.search(r"(?m)^stage:", session) is not None
-        )
-        candidates = set()
-        if legacy_session or legacy_pending:
-            candidates.add("legacy-0.2")
-        if hybrid:
-            candidates.add("hybrid-0.3")
-        if len(candidates) != 1:
-            reject("mission authority is partial or contradictory")
-        return candidates.pop()
+        if version != "0.4.0\n":
+            reject("native pipeline-version must be exactly 0.4.0")
+        valid_states = {
+            "pending", "running", "planned", "executed", "rework",
+            "blocked", "review", "accepted", "failed", "cleanup_pending",
+            "collected", "complete", "completed", "done",
+        }
+        if not has_request or mission is None or state is None:
+            reject("native mission authority is incomplete")
+        if "Briefs:" not in mission:
+            reject("native MISSION.md lacks the Briefs marker")
+        if (not state.endswith("\n") or state.count("\n") != 1 or
+                state[:-1] not in valid_states):
+            reject("native mission state is malformed or unsupported")
+        if session is not None and re.search(r"(?m)^stage:", session) is None:
+            reject("session authority contradicts the native pipeline")
+        return "native-0.4"
     finally:
         for descriptor in reversed(descriptors):
             try:

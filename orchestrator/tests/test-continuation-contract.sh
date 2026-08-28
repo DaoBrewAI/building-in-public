@@ -8,6 +8,7 @@ ADAPTER="$ROOT/hooks/codex-continuation.sh"
 BINDING_HELPER="$ROOT/hooks/codex-continuation-binding.py"
 TEMPLATE="$ROOT/templates/continuation.md"
 SKILL="$ROOT/skills/orchestrating/SKILL.md"
+CONTINUATION_REF="$ROOT/skills/orchestrating/references/continuation.md"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/orc-continuation-test.XXXXXX")"
 TMP="$(cd -P "$TMP" && pwd -P)"
 trap 'rm -rf -- "$TMP"' EXIT
@@ -232,17 +233,17 @@ check "template documents inactive staging and the atomic promotion commit" cont
 check "Codex continuation files do not claim an exact 65 percent threshold" \
   sh -c '! grep -Eiq "(^|[^0-9])65%|sixty-five" "$1" "$2" "$3"' sh "$HOOKS_JSON" "$ADAPTER" "$TEMPLATE"
 check "adapter does not parse unstable transcript contents" not_contains "$ADAPTER" 'transcript_path" | jq'
-check "coordinator skill documents the Codex continuation boundary" contains "$SKILL" '## Codex continuation boundary'
-check "coordinator skill requires durable state before a request" contains "$SKILL" 'before recording a continuation request'
-check "coordinator skill binds continuation to mission generation and state" contains "$SKILL" 'exact mission, task generation, and durable state snapshot'
-check "coordinator skill keeps active child execution untouched" contains "$SKILL" 'Never restart, replace, resume, or duplicate active child execution'
-check "coordinator skill permits at most one replacement" contains "$SKILL" 'at most one replacement'
-check "coordinator skill accepts only a health-checked continuation" contains "$SKILL" 'accepted continuation receipt'
-check "coordinator skill requires explicit accepted-thread promotion" contains "$SKILL" '--promote-coordinator'
-check "coordinator skill makes staged promotion authority inactive" contains "$SKILL" 'staged authority is inactive'
-check "coordinator skill declares Python 3.9 minimum" contains "$SKILL" 'Python 3.9'
-check "coordinator skill documents the manual fallback boundary" contains "$SKILL" 'manual coordinator boundary'
-check "coordinator skill denies an exact Codex context percentage" contains "$SKILL" 'exact Codex context percentage is unavailable'
+check "coordinator skill documents the Codex continuation boundary" contains "$CONTINUATION_REF" '# Durable coordinator continuation'
+check "coordinator skill requires durable state before a request" contains "$CONTINUATION_REF" 'before recording'
+check "coordinator skill binds continuation to mission generation and state" contains "$CONTINUATION_REF" 'mission/task paths'
+check "coordinator skill keeps active child execution untouched" contains "$CONTINUATION_REF" 'Never restart, replace'
+check "coordinator skill permits at most one replacement" contains "$CONTINUATION_REF" 'at most one'
+check "coordinator skill accepts only a health-checked continuation" contains "$CONTINUATION_REF" 'accepted continuation receipt'
+check "coordinator skill requires explicit accepted-thread promotion" contains "$CONTINUATION_REF" '--promote-coordinator'
+check "coordinator skill makes staged promotion authority inactive" contains "$CONTINUATION_REF" 'staged authority is inactive'
+check "coordinator skill declares Python 3.9 minimum" contains "$CONTINUATION_REF" 'Python 3.9'
+check "coordinator skill documents the manual fallback boundary" contains "$CONTINUATION_REF" 'manual coordinator boundary'
+check "coordinator skill denies an exact Codex context percentage" contains "$CONTINUATION_REF" 'exact Codex context percentage is unavailable'
 
 if [[ -x "$ADAPTER" ]]; then
   REPO="$TMP/repo"

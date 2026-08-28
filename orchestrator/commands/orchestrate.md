@@ -1,10 +1,10 @@
 ---
-description: "Start or resume orchestrated missions: brainstorm the ask into a design, run it as a staged pipeline (Fable-5 plans → your go → codex gpt-5.6-sol executes+verifies → Fable-5 reviews), stay free to coordinate; mediate its questions and accept+merge its work. Bare /orchestrate resumes in-flight missions from the hub."
+description: "Start or resume a native Hybrid mission: Fable brainstorms/plans/reviews and visible Codex tasks implement the approved DAG."
 disable-model-invocation: true
 ---
 
-Invoke the orchestrator:orchestrating skill and follow it exactly as presented to you.
+Invoke the `orchestrator:orchestrating` skill and follow its native workflow.
 
 The user's ask: $ARGUMENTS
 
-If no ask was provided, run the skill's Phase 0 resume path.
+If no ask was provided, run Phase 0 reconciliation and resume eligible missions.

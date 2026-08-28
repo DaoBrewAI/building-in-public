@@ -96,27 +96,23 @@ check_section_order "clarification classification precedes design publication" \
   'before writing design.md' 'save the resulting validated design'
 
 check_section_contains "phase 3 permits clarification before plan artifacts" \
-  "$SKILL" '## Phase 3 — Launch Fable brainstorm + plan' '## Phase 3g — Founder go gate' \
-  'may return `blocked` with `kind: brainstorm-clarification` before any design or plan exists'
-check_section_contains "coordinator relays unresolved brainstorm intent to user" \
-  "$SKILL" '## Phase 5 — Mediate BLOCKED' '## Phase 6 — Light acceptance and merge' \
-  'ask the user the exact single question'
-check_section_contains "coordinator does not self-decide brainstorm intent" \
-  "$SKILL" '## Phase 5 — Mediate BLOCKED' '## Phase 6 — Light acceptance and merge' \
-  'do not decide it merely because an option is reversible'
-check_section_contains "coordinator reuses exact Fable session after answer" \
-  "$SKILL" '## Phase 5 — Mediate BLOCKED' '## Phase 6 — Light acceptance and merge' \
-  'resume the same Fable session with that answer'
-check_section_contains "brainstorm clarification is not counted as failure" \
-  "$SKILL" '## Phase 5 — Mediate BLOCKED' '## Phase 6 — Light acceptance and merge' \
-  'does not count as a crash, rework round, or founder go rejection'
+  "$SKILL" '## Phase 3 — Fable brainstorm and plan' '## Founder go gate' \
+  'may return `blocked` with `kind: brainstorm-clarification`'
+check_contains "coordinator relays unresolved brainstorm intent to user" \
+  "$MEDIATION" 'relay exactly one question'
+check_compact "coordinator does not self-decide brainstorm intent" \
+  "$MEDIATION" 'never route it through reversible implementation detail or silently choose an option'
+check_compact "coordinator reuses exact Fable session after answer" \
+  "$MEDIATION" 'return the answer to the same Fable session'
+check_compact "brainstorm clarification is not counted as ordinary implementation mediation" \
+  "$MEDIATION" 'This is product-intent discovery'
 check_contains "mediation recognizes brainstorm clarification before ordinary triage" \
   "$MEDIATION" '## (0) Brainstorm clarification — preserve user intent'
 check_contains "mediation relays one unresolved intent question" \
   "$MEDIATION" 'relay exactly one question'
 check_compact "mediation cannot consume brainstorm clarification as reversible detail" \
   "$MEDIATION" 'never route it through reversible implementation detail'
-check_contains "founder go remains after completed design and plan" "$SKILL" '`state=planned` is the only planned human pause'
+check_contains "founder go remains after completed design and plan" "$SKILL" '`planned` is the only planned human pause'
 
 echo "  brainstorm-clarification-contract: $OK/$N"
 [[ "$OK" -eq "$N" ]]

@@ -194,7 +194,7 @@ freeze_initializes_classifiable_empty_registry() {
   "$VALIDATOR" --freeze "$TMP/valid.json" "$control" || return 1
   [[ -d "$control/tasks" && ! -L "$control/tasks" ]] || return 1
   [[ -z "$(find "$control/tasks" -mindepth 1 -print -quit)" ]] || return 1
-  [[ "$($CLASSIFIER --mission-dir "$mission" --control-dir "$control")" == hybrid-0.4 ]]
+  [[ "$($CLASSIFIER --mission-dir "$mission" --control-dir "$control")" == native-0.4 ]]
 }
 completed_freeze_retry_initializes_registry() {
   local root="$TMP/completed-registry-retry"
@@ -211,7 +211,7 @@ completed_freeze_retry_initializes_registry() {
   [[ -d "$control/tasks" && ! -L "$control/tasks" ]] || return 1
   [[ -z "$(find "$control/tasks" -mindepth 1 -print -quit)" ]] || return 1
   (cd "$control" && shasum -a 256 -c approved.sha256 >/dev/null) || return 1
-  [[ "$($CLASSIFIER --mission-dir "$mission" --control-dir "$control")" == hybrid-0.4 ]]
+  [[ "$($CLASSIFIER --mission-dir "$mission" --control-dir "$control")" == native-0.4 ]]
 }
 existing_task_registry_is_preserved() {
   local root="$TMP/existing-registry"

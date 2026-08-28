@@ -8,6 +8,8 @@ LIFECYCLE="$ROOT/scripts/task-worktree.sh"
 INTEGRATE="$ROOT/scripts/integrate-task.sh"
 GC="$ROOT/scripts/orchestrator-gc.sh"
 SKILL="$ROOT/skills/orchestrating/SKILL.md"
+TASK_REF="$ROOT/skills/orchestrating/references/task-execution.md"
+CLEANUP_REF="$ROOT/skills/orchestrating/references/cleanup-and-rework.md"
 README="$ROOT/README.md"
 CODEX_MANIFEST="$ROOT/.codex-plugin/plugin.json"
 CLAUDE_MANIFEST="$ROOT/.claude-plugin/plugin.json"
@@ -169,14 +171,6 @@ cat > "$MISSION/task-dag.json" <<'JSON'
       "contracts": ["task-b-contract"],
       "verification": ["test -f task-b.txt"],
       "state": "pending"
-    },
-    {
-      "id": "dirty",
-      "depends_on": ["task-b"],
-      "files": ["dirty.txt"],
-      "contracts": ["dirty-fixture"],
-      "verification": ["test -f dirty.txt"],
-      "state": "pending"
     }
   ]
 }
@@ -197,7 +191,7 @@ check "initial ready set contains only the dependency root" bash -c \
 
 chmod u+w "$CONTROL/approved.sha256" "$CONTROL/approved-design.md"
 printf '%064d  unexpected\n' 0 >> "$CONTROL/approved.sha256"
-"$LIFECYCLE" create --create-mode native-0.4 --mission-dir "$MISSION" \
+"$LIFECYCLE" create --mission-dir "$MISSION" \
   --control-dir "$CONTROL" --task-dir "$TMP/noncanonical-authority-task" \
   --mission mission --task-id task-a --repo "$REPO" \
   --parent-worktree "$PARENT" --worktree "$TMP/noncanonical-authority-worktree" \
@@ -210,7 +204,7 @@ check "production create rejects any noncanonical fifth approved-manifest entry"
   _ "$NONCANONICAL_AUTHORITY_RC" "$TMP/noncanonical-authority-worktree" "$CONTROL" "$REPO"
 
 printf 'tampered design\n' > "$CONTROL/approved-design.md"
-"$LIFECYCLE" create --create-mode native-0.4 --mission-dir "$MISSION" \
+"$LIFECYCLE" create --mission-dir "$MISSION" \
   --control-dir "$CONTROL" --task-dir "$TMP/hash-mismatch-task" \
   --mission mission --task-id task-a --repo "$REPO" \
   --parent-worktree "$PARENT" --worktree "$TMP/hash-mismatch-worktree" \
@@ -248,12 +242,11 @@ check "a second unhealthy provisional child records durable BLOCKED" bash -c \
 
 run_child_generation() {
   local task_id="$1"
-  local archive_fail="${2:-0}"
   local task_dir="$TMP/$task_id"
   local child="$TMP/$task_id-worktree"
   local parent_tip child_tip
   parent_tip="$(git -C "$PARENT" rev-parse HEAD)"
-  "$LIFECYCLE" create --create-mode native-0.4 --mission-dir "$MISSION" \
+  "$LIFECYCLE" create --mission-dir "$MISSION" \
     --control-dir "$CONTROL" --task-dir "$task_dir" \
     --mission mission --task-id "$task_id" --repo "$REPO" \
     --parent-worktree "$PARENT" --worktree "$child" >/dev/null || return 1
@@ -271,11 +264,7 @@ run_child_generation() {
   "$INTEGRATE" --control-dir "$CONTROL" --task-dir "$task_dir" \
     --mission mission --task-id "$task_id" --parent-worktree "$PARENT" \
     --expected-parent-tip "$parent_tip" >/dev/null || return 1
-  "$GC" --hub "$HUB" --clean >/dev/null || return 1
-  [[ "$(cat "$CONTROL/tasks/$task_id/state")" = collected && ! -e "$child" ]] || return 1
-  if ! archive_child_thread "$CONTROL/tasks/$task_id" "thread-$task_id" "$archive_fail"; then
-    [[ "$archive_fail" = 1 ]] || return 1
-  fi
+  [[ "$(cat "$CONTROL/tasks/$task_id/state")" = integrated && -d "$child" ]] || return 1
 }
 
 run_child_generation task-b >/dev/null 2>&1
@@ -284,28 +273,51 @@ check "dependent child is refused before its predecessor is integrated" bash -c 
   '[[ "$1" -ne 0 && ! -e "$2" && ! -e "$3/tasks/task-b" ]] && ! git -C "$4" show-ref --verify --quiet refs/heads/orc-task/mission/task-b' \
   _ "$PREMATURE_TASK_B_RC" "$TMP/task-b-worktree" "$CONTROL" "$REPO"
 
-run_child_generation task-a 1
+run_child_generation task-a
 TASK_A_FIRST_RC=$?
 TASK_A_FIRST_MERGE="$(cat "$CONTROL/tasks/task-a/integrated_sha" 2>/dev/null || true)"
-check "ready child completes, immutably integrates, and exactly collects Git resources" bash -c \
-  '[[ "$1" -eq 0 && -n "$2" && "$(git -C "$3" rev-list --parents -n 1 "$2" | awk "{print NF}")" -eq 3 && "$(cat "$4/state")" = cleanup_pending && "$(cat "$4/task-window-state")" = unarchived && -f "$4/task-window-archive-pending" ]]' \
-  _ "$TASK_A_FIRST_RC" "$TASK_A_FIRST_MERGE" "$REPO" "$CONTROL/tasks/task-a"
+check "ready child integrates while its window worktree and branch remain visible" bash -c \
+  '[[ "$1" -eq 0 && -n "$2" && "$(git -C "$3" rev-list --parents -n 1 "$2" | awk "{print NF}")" -eq 3 && "$(cat "$4/state")" = integrated && "$(cat "$4/task-window-state")" = unarchived && -d "$5" ]] && git -C "$3" show-ref --verify --quiet refs/heads/orc-task/mission/task-a' \
+  _ "$TASK_A_FIRST_RC" "$TASK_A_FIRST_MERGE" "$REPO" "$CONTROL/tasks/task-a" "$TMP/task-a-worktree"
 
-# Archive API failure is a post-GC cleanup overlay and cannot resurrect or delete resources.
 "$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
-ARCHIVE_PENDING_RC=$?
-check "task-window archive failure remains retriable after child resource GC" bash -c \
-  '[[ "$1" -eq 0 && "$(cat "$2/state")" = cleanup_pending && -f "$2/task-window-archive-pending" && ! -e "$3" ]]' \
-  _ "$ARCHIVE_PENDING_RC" "$CONTROL/tasks/task-a" "$TMP/task-a-worktree"
-run_child_generation task-b >/dev/null 2>&1
-CLEANUP_PENDING_TASK_B_RC=$?
-check "cleanup_pending predecessor is not dependency-ready" bash -c \
-  '[[ "$1" -ne 0 && ! -e "$2" && ! -e "$3/tasks/task-b" ]] && ! git -C "$4" show-ref --verify --quiet refs/heads/orc-task/mission/task-b' \
-  _ "$CLEANUP_PENDING_TASK_B_RC" "$TMP/task-b-worktree" "$CONTROL" "$REPO"
+EARLY_GC_RC=$?
+check "batch GC refuses early collection while any approved task is unfinished" bash -c \
+  '[[ "$1" -ne 0 && "$(cat "$2/state")" = integrated && -d "$3" ]] && git -C "$4" show-ref --verify --quiet refs/heads/orc-task/mission/task-a' \
+  _ "$EARLY_GC_RC" "$CONTROL/tasks/task-a" "$TMP/task-a-worktree" "$REPO"
+
+run_child_generation task-b
+TASK_B_RC=$?
+check "dependent child runs after predecessor integration without predecessor GC" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/state")" = integrated && "$(cat "$3/state")" = integrated && -d "$4" && -d "$5" ]]' \
+  _ "$TASK_B_RC" "$CONTROL/tasks/task-a" "$CONTROL/tasks/task-b" "$TMP/task-a-worktree" "$TMP/task-b-worktree"
+
+printf 'executed\n' > "$MISSION/state"
+mkdir "$CONTROL/tasks/not-approved"
+printf 'integrated\n' > "$CONTROL/tasks/not-approved/state"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+UNAPPROVED_GC_RC=$?
+check "batch GC refuses a task registry that differs from the approved DAG" bash -c \
+  '[[ "$1" -ne 0 && "$(cat "$2/state")" = integrated && "$(cat "$3/state")" = integrated && -d "$4" && -d "$5" ]]' \
+  _ "$UNAPPROVED_GC_RC" "$CONTROL/tasks/task-a" "$CONTROL/tasks/task-b" "$TMP/task-a-worktree" "$TMP/task-b-worktree"
+rm -f "$CONTROL/tasks/not-approved/state"
+rmdir "$CONTROL/tasks/not-approved"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null
+BATCH_GC_RC=$?
+check "one batch GC collects every child only after all tasks integrate" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/state")" = collected && "$(cat "$3/state")" = collected && ! -e "$4" && ! -e "$5" ]]' \
+  _ "$BATCH_GC_RC" "$CONTROL/tasks/task-a" "$CONTROL/tasks/task-b" "$TMP/task-a-worktree" "$TMP/task-b-worktree"
+
+archive_child_thread "$CONTROL/tasks/task-a" thread-task-a 1 >/dev/null 2>&1
+ARCHIVE_FAIL_RC=$?
+archive_child_thread "$CONTROL/tasks/task-b" thread-task-b 0
+check "batch archive failure is retriable without restoring collected resources" bash -c \
+  '[[ "$1" -ne 0 && "$(cat "$2/state")" = cleanup_pending && -f "$2/task-window-archive-pending" && "$(cat "$3/task-window-state")" = archived ]]' \
+  _ "$ARCHIVE_FAIL_RC" "$CONTROL/tasks/task-a" "$CONTROL/tasks/task-b"
 archive_child_thread "$CONTROL/tasks/task-a" thread-task-a 0
-check "task-window archive retry records the exact accepted task as archived" bash -c \
-  '[[ "$(cat "$1/state")" = collected && "$(cat "$1/task-window-state")" = archived && ! -e "$1/task-window-archive-pending" ]]' \
-  _ "$CONTROL/tasks/task-a"
+check "batch archive retry converges every exact accepted window" bash -c \
+  '[[ "$(cat "$1/task-window-state")" = archived && "$(cat "$2/task-window-state")" = archived ]]' \
+  _ "$CONTROL/tasks/task-a" "$CONTROL/tasks/task-b"
 
 # A task-scoped review finding reuses the exact accepted thread and advances generation.
 unarchive_child_thread "$CONTROL/tasks/task-a" thread-task-a
@@ -334,17 +346,12 @@ check "child-targeted rework unarchives, reprovisions, reintegrates, and rearchi
   '[[ "$(cat "$1/generation")" = 2 && "$(cat "$1/state")" = collected && "$(cat "$1/accepted-thread-id")" = thread-task-a && "$(cat "$1/task-window-state")" = archived && ! -e "$2" ]]' \
   _ "$CONTROL/tasks/task-a" "$TMP/task-a-worktree"
 
-run_child_generation task-b
-TASK_B_RC=$?
-check "dependent child becomes runnable only after predecessor integration" bash -c \
-  '[[ "$1" -eq 0 && "$(cat "$2/state")" = collected && "$(cat "$3/state")" = collected ]]' \
-  _ "$TASK_B_RC" "$CONTROL/tasks/task-a" "$CONTROL/tasks/task-b"
-
 # Dirty child work is never integrated. This fixture is removed before parent-GC eligibility.
 DIRTY_DIR="$TMP/dirty-task"
 DIRTY_CHILD="$TMP/dirty-worktree"
 DIRTY_PARENT_TIP="$(git -C "$PARENT" rev-parse HEAD)"
-"$LIFECYCLE" create --create-mode native-0.4 --mission-dir "$MISSION" \
+ORC_TASK_WORKTREE_TESTING=1 ORC_TASK_WORKTREE_TEST_FIXTURE_ROOT="$TMP" \
+"$LIFECYCLE" create --create-mode test-fixture --mission-dir "$MISSION" \
   --control-dir "$CONTROL" --task-dir "$DIRTY_DIR" \
   --mission mission --task-id dirty --repo "$REPO" \
   --parent-worktree "$PARENT" --worktree "$DIRTY_CHILD" >/dev/null
@@ -426,25 +433,25 @@ check "parent GC archives final review and verification evidence" bash -c \
   _ "$HUB/archive/mission"
 
 # API-only thread transitions stay contractually fail-closed at the coordinator boundary.
-check "duplicate child owners are excluded from the ready set" contains "$SKILL" "no active or completed owner"
-check "stale provisional IDs are removed or marked stale before one replacement" contains "$SKILL" "remove or mark stale any provisional"
-check "a second unhealthy provisional thread becomes BLOCKED" contains "$SKILL" "If that one replacement also fails"
-check "archive failures are retriable and preserve exact task identity" contains "$SKILL" "task-window archive failure"
+check "duplicate child owners are excluded from the ready set" contains "$TASK_REF" "accepted owner or approval blocker"
+check "stale provisional IDs are stopped before one replacement" contains "$TASK_REF" "exact provisional task"
+check "a second unhealthy provisional thread becomes BLOCKED" contains "$TASK_REF" "second failure is"
+check "archive failures are retriable and preserve exact task identity" contains "$CLEANUP_REF" "task-window archive failure"
 check "task API fixture observed create, archive failure/retry, unarchive/rearchive, and final review" bash -c \
   '[[ "$(awk -F '\''\t'\'' '\''$1 == "create" {c++} $1 == "archive" {a++} $1 == "unarchive" {u++} $1 == "review" {r++} END {print c ":" a ":" u ":" r}'\'' "$1")" = 6:4:1:2 ]]' \
   _ "$TASK_API_LOG"
 
 # Task 8 documentation is part of the release contract.
-check "Codex manifest declares the 0.4.4 feature release" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.4.4 ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest declares the same 0.4.4 feature release" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.4.4 && "$(jq -r .version "$1")" = "$(jq -r .version "$2")" ]]' \
+check "Codex manifest declares the 0.5.0 native-only release" bash -c \
+  '[[ "$(jq -r .version "$1")" = 0.5.0 ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest declares the same 0.5.0 release" bash -c \
+  '[[ "$(jq -r .version "$1")" = 0.5.0 && "$(jq -r .version "$1")" = "$(jq -r .version "$2")" ]]' \
   _ "$CLAUDE_MANIFEST" "$CODEX_MANIFEST"
-check "README labels the Orchestrator 0.4.4 feature release" contains "$README" "Orchestrator 0.4.4"
-check "README documents the mission-internal DAG lifecycle" contains "$README" "Mission-internal task DAG and two-level GC"
-check "README includes child and parent state diagrams" contains "$README" "stateDiagram-v2"
-check "README documents migration from the single executor" contains "$README" "Migration from the single executor"
-check "README documents failure-safe compatibility behavior" contains "$README" "Failure and retry behavior"
+check "README labels the Orchestrator 0.5 release" contains "$README" "Orchestrator 0.5"
+check "README documents the native DAG lifecycle" contains "$README" "Visible Codex DAG execution"
+check "README documents progressive disclosure" contains "$README" "Progressive disclosure"
+check "README documents native-only authority" contains "$README" "supports only native pipeline authority"
+check "README documents mission-scoped GC" contains "$README" "--mission <mission> --clean"
 
 echo "  end-to-end-lifecycle: $OK/$N"
 [[ "$OK" -eq "$N" ]]

@@ -10,9 +10,8 @@
 #   $MISSION_DIR/COMMIT-DONE-<n>.json      {"hash": "...", "branch": "..."}
 #   $MISSION_DIR/COMMIT-REJECTED-<n>.json  {"reason": "..."}
 #
-# The coordinator runs this loop alongside the native App Server child client;
-# compatibility launchers run it alongside codex exec. The owner stops the loop
-# when the implementation turn ends. --once processes the backlog and exits.
+# The coordinator runs this loop alongside the native App Server child client
+# and stops it when the implementation turn ends. --once processes the backlog.
 #
 #   commit-broker.sh --mission-dir <dir> --control-dir <dir> [--once] [--interval <seconds>]
 #

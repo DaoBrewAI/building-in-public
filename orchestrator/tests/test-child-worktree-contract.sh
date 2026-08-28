@@ -7,7 +7,9 @@ LIFECYCLE_REAL="$ROOT/scripts/task-worktree.sh"
 export ORC_TEST_LIFECYCLE_REAL="$LIFECYCLE_REAL"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-LIFECYCLE="$TMP/task-worktree-legacy-wrapper.sh"
+export ORC_TASK_WORKTREE_TESTING=1
+export ORC_TASK_WORKTREE_TEST_FIXTURE_ROOT="$TMP"
+LIFECYCLE="$TMP/task-worktree-fixture-wrapper.sh"
 cat > "$LIFECYCLE" <<'SH'
 #!/usr/bin/env bash
 if [[ "${1:-}" == create ]]; then
@@ -25,7 +27,7 @@ if [[ "${1:-}" == create ]]; then
   printf 'Briefs: brief.md, brief-exec.md\n' > "$mission_dir/MISSION.md"
   printf 'planned\n' > "$mission_dir/state"
   printf 'backend: hybrid\nstage: plan\n' > "$mission_dir/session.txt"
-  exec "$ORC_TEST_LIFECYCLE_REAL" create --create-mode legacy --mission-dir "$mission_dir" "$@"
+  exec "$ORC_TEST_LIFECYCLE_REAL" create --create-mode test-fixture --mission-dir "$mission_dir" "$@"
 fi
 exec "$ORC_TEST_LIFECYCLE_REAL" "$@"
 SH

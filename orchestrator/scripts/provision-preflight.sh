@@ -4,7 +4,7 @@
 #
 #   provision-preflight.sh --mission-dir <dir> --worktree <primary> [--worktree <other>]...
 #
-# The codex exec sandbox has no network and a read-only HOME, so everything the
+# The native Codex child sandbox has no network and a read-only HOME, so everything the
 # executor needs must exist in the worktrees beforehand; and the ONLY trustworthy
 # baseline is one taken OUTSIDE the sandbox. Per worktree:
 #   1. deps        — package-lock.json -> npm ci; Package.swift -> swift package resolve

@@ -2,6 +2,7 @@
 """Launch or resume a visible Orchestrator child through Codex App Server."""
 
 import argparse
+import hashlib
 import json
 import os
 import shlex
@@ -11,6 +12,12 @@ import sys
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+LIFECYCLE_METHODS = {
+    "archive": "thread/archive",
+    "unarchive": "thread/unarchive",
+}
 
 
 class ProtocolError(RuntimeError):
@@ -152,7 +159,10 @@ class AppServer:
                 }
             )
             return
-        emit({"type": "app_server.event", "method": method, "params": params})
+        # Child MCP/tool/token/item notifications stay inside the child thread.
+        # Replaying them on stdout duplicates the child transcript into the
+        # coordinator tool result and defeats context isolation.
+        return
 
     def wait_for_terminal(self) -> str:
         while self._terminal_status is None:
@@ -195,10 +205,17 @@ def build_parser() -> argparse.ArgumentParser:
         subparser.add_argument("--prompt-file", required=True, type=Path)
         subparser.add_argument("--service-tier")
     create = subparsers.choices["create"]
-    create.add_argument("--project-id")
+    create.add_argument("--project-id", required=True)
+    create.add_argument("--project-root", required=True, type=absolute_directory)
     create.add_argument("--title", required=True)
     resume = subparsers.choices["resume"]
     resume.add_argument("--thread-id", required=True)
+    for operation in ("inspect", "archive", "unarchive", "stop"):
+        lifecycle = subparsers.add_parser(operation)
+        lifecycle.add_argument("--thread-id", required=True)
+    subparsers.choices["stop"].add_argument("--turn-id", required=True)
+    bind = subparsers.add_parser("bind-project")
+    bind.add_argument("--project-root", required=True, type=absolute_directory)
     return parser
 
 
@@ -216,27 +233,154 @@ def turn_id_from(result: Dict[str, Any]) -> str:
     return turn["id"]
 
 
+def project_id_for(server: AppServer, project_root: str, requested_id: Optional[str]) -> str:
+    root = str(Path(project_root).resolve())
+    cursor: Optional[str] = None
+    seen_cursors = set()
+    matches: List[str] = []
+    while True:
+        params: Dict[str, Any] = {"limit": 100}
+        if cursor is not None:
+            params["cursor"] = cursor
+        result = server.request("project/list", params)
+        data = result.get("data")
+        if not isinstance(data, list):
+            raise ProtocolError("project/list returned malformed data")
+        for project in data:
+            if not isinstance(project, dict) or not isinstance(project.get("id"), str):
+                continue
+            roots = project.get("roots")
+            if isinstance(roots, list) and any(
+                isinstance(item, dict) and item.get("path") == root for item in roots
+            ):
+                matches.append(project["id"])
+        next_cursor = result.get("nextCursor")
+        if next_cursor is None:
+            break
+        if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+            raise ProtocolError("project/list returned an invalid pagination cursor")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    matches = sorted(set(matches))
+    if requested_id:
+        if matches != [requested_id]:
+            raise ProtocolError("requested project id is not bound to the exact project root")
+        return requested_id
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ProtocolError("multiple App Server projects match the exact project root")
+    key = hashlib.sha256(root.encode("utf-8")).hexdigest()
+    created = server.request(
+        "project/create",
+        {
+            "idempotencyKey": f"orchestrator-{key}",
+            "name": Path(root).name,
+            "roots": [{"path": root}],
+            "metadata": {"createdBy": "orchestrator"},
+        },
+    )
+    project = created.get("project")
+    if not isinstance(project, dict) or not isinstance(project.get("id"), str):
+        raise ProtocolError("project/create returned no project id")
+    roots = project.get("roots")
+    if not isinstance(roots, list) or not any(
+        isinstance(item, dict) and item.get("path") == root for item in roots
+    ):
+        raise ProtocolError("project/create did not bind the exact project root")
+    return project["id"]
+
+
 def main() -> int:
     args = build_parser().parse_args()
-    if not args.prompt_file.is_file():
-        raise ProtocolError(f"prompt file is missing: {args.prompt_file}")
-    prompt = args.prompt_file.read_text(encoding="utf-8")
-    if not prompt:
-        raise ProtocolError("prompt file is empty")
-
-    roots = [args.cwd, args.task_dir]
+    prompt = ""
+    roots: List[str] = []
+    if args.operation in ("create", "resume"):
+        if not args.prompt_file.is_file():
+            raise ProtocolError(f"prompt file is missing: {args.prompt_file}")
+        prompt = args.prompt_file.read_text(encoding="utf-8")
+        if not prompt:
+            raise ProtocolError("prompt file is empty")
+        roots = [args.cwd, args.task_dir]
     server = AppServer(resolve_command())
     try:
         server.request(
             "initialize",
             {
-                "clientInfo": {"name": "orchestrator", "title": "Orchestrator", "version": "0.4.4"},
+                "clientInfo": {"name": "orchestrator", "title": "Orchestrator", "version": "0.5.0"},
                 "capabilities": {"experimentalApi": True},
             },
         )
         server.notify("initialized")
 
+        if args.operation == "bind-project":
+            project_id = project_id_for(server, args.project_root, None)
+            emit({"type": "project.bound", "project_id": project_id, "project_root": args.project_root})
+            return 0
+
+        if args.operation == "inspect":
+            cursor: Optional[str] = None
+            seen_cursors = set()
+            found = False
+            while True:
+                params: Dict[str, Any] = {
+                    "limit": 100,
+                    "archived": None,
+                    "sourceKinds": [],
+                }
+                if cursor is not None:
+                    params["cursor"] = cursor
+                listed = server.request("thread/list", params)
+                data = listed.get("data")
+                if not isinstance(data, list):
+                    raise ProtocolError("thread/list returned malformed data")
+                if any(
+                    isinstance(item, dict) and item.get("id") == args.thread_id
+                    for item in data
+                ):
+                    found = True
+                    break
+                next_cursor = listed.get("nextCursor")
+                if next_cursor is None:
+                    break
+                if not isinstance(next_cursor, str) or not next_cursor or next_cursor in seen_cursors:
+                    raise ProtocolError("thread/list returned an invalid pagination cursor")
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+            if not found:
+                raise ProtocolError("thread/list did not contain the exact thread id")
+            read = server.request(
+                "thread/read", {"threadId": args.thread_id, "includeTurns": True}
+            )
+            emit({"type": "thread.inspected", "thread_id": args.thread_id, "result": read})
+            return 0
+        if args.operation in ("archive", "unarchive"):
+            method = LIFECYCLE_METHODS[args.operation]
+            result = server.request(method, {"threadId": args.thread_id})
+            emit(
+                {
+                    "type": f"thread.{args.operation}d",
+                    "thread_id": args.thread_id,
+                    "result": result,
+                }
+            )
+            return 0
+        if args.operation == "stop":
+            result = server.request(
+                "turn/interrupt", {"threadId": args.thread_id, "turnId": args.turn_id}
+            )
+            emit(
+                {
+                    "type": "turn.interrupted",
+                    "thread_id": args.thread_id,
+                    "turn_id": args.turn_id,
+                    "result": result,
+                }
+            )
+            return 0
+
         if args.operation == "create":
+            project_id = project_id_for(server, args.project_root, args.project_id)
             start_params: Dict[str, Any] = {
                 "model": args.model,
                 "cwd": args.cwd,
@@ -247,8 +391,7 @@ def main() -> int:
                 "historyMode": "paginated",
                 "serviceName": "orchestrator",
             }
-            if args.project_id:
-                start_params["projectId"] = args.project_id
+            start_params["projectId"] = project_id
             result = server.request("thread/start", start_params)
             thread_id = thread_id_from(result, "thread/start")
             server.set_thread(thread_id)

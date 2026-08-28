@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # PreToolUse guard for orchestrator CLAUDE mission sessions (plan/review stages;
-# the codex exec stage never loads claude hooks — its fence is the OS sandbox).
+# native Codex child tasks never load Claude hooks; their fence is the OS sandbox).
 # Env (set by the hook command written into the PRIMARY worktree's settings):
 #   ORC_WORKTREES   colon-separated absolute worktree roots (read-only context)
 #   ORC_MISSION_DIR the mission's hub directory (the ONLY writable location)
