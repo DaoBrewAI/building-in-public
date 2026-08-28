@@ -19,8 +19,8 @@ done
 
 [[ "$(jq -r .version 10x-engineer/.codex-plugin/plugin.json)" == 1.1.0 ]] ||
   fail "10x-engineer Codex version must be 1.1.0"
-[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" == 0.5.0 ]] ||
-  fail "orchestrator Codex version must be 0.5.0"
+[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" =~ ^0\.5\.0\+codex\.[A-Za-z0-9._-]+$ ]] ||
+  fail "orchestrator Codex version must be a cache-busted 0.5.0 release"
 [[ "$(jq -r .version orchestrator/.claude-plugin/plugin.json)" == 0.5.0 ]] ||
   fail "orchestrator Claude version must be 0.5.0"
 [[ "$(jq -r .skills orchestrator/.codex-plugin/plugin.json)" == ./skills/ ]] ||

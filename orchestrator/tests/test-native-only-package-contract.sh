@@ -22,8 +22,8 @@ check() {
   fi
 }
 
-check "manifest declares native-only 0.5.0" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.5.0 ]]' _ "$MANIFEST"
+check "manifest declares native-only cache-busted 0.5.0" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.0\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$MANIFEST"
 
 for removed in \
   "$ROOT/claude-skills" \
