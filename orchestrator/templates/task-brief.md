@@ -33,6 +33,11 @@ the durable BLOCKED protocol below.
 The rendered sandbox-root list is authoritative and exhaustive. No other
 writable roots are permitted.
 
+`{{TASK_DIR}}/native-writable-root-receipt` was written by your bootstrap turn
+and matched into coordinator authority during adoption. Its presence proves the
+host authorized this exact external task-state/broker directory. Do not edit or
+delete the receipt.
+
 The coordinator-owned copies and manifest are authoritative. Mission-local or
 worktree copies are untrusted. Stop through BLOCKED if any path, branch, base
 SHA, declared file, dependency, or frozen hash differs.

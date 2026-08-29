@@ -442,12 +442,12 @@ check "task API fixture observed create, archive failure/retry, unarchive/rearch
   _ "$TASK_API_LOG"
 
 # Task 8 documentation is part of the release contract.
-check "Codex manifest declares the 0.5.0 native-only release" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.0\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest declares the same 0.5.0 release" bash -c \
-  'codex="$(jq -r .version "$2")"; [[ "$(jq -r .version "$1")" = 0.5.0 && "${codex%%+*}" = 0.5.0 ]]' \
+check "Codex manifest declares the 0.5.1 native-only release" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.1\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest declares the same 0.5.1 release" bash -c \
+  'codex="$(jq -r .version "$2")"; [[ "$(jq -r .version "$1")" = 0.5.1 && "${codex%%+*}" = 0.5.1 ]]' \
   _ "$CLAUDE_MANIFEST" "$CODEX_MANIFEST"
-check "README labels the Orchestrator 0.5 release" contains "$README" "Orchestrator 0.5"
+check "README labels the Orchestrator 0.5.1 release" contains "$README" "Orchestrator 0.5.1"
 check "README documents the native DAG lifecycle" contains "$README" "Visible Codex DAG execution"
 check "README documents progressive disclosure" contains "$README" "Progressive disclosure"
 check "README documents native-only authority" contains "$README" "supports only native pipeline authority"

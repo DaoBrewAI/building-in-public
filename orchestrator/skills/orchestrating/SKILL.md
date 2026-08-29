@@ -15,8 +15,10 @@ integration, mediation, cleanup, and continuation.
   has a quota wall, automatically retry that stage once with Opus-5 high and
   record `quota-fallback: <date> <stage> fable→opus`.
 - GPT-5.6-Sol high owns every implementation, test-producing fix, and rework.
-  Native execution always uses visible project-local Codex tasks created by
-  `scripts/codex-task-client.py`; never use hidden `codex exec` sessions.
+  The coordinator creates and messages each visible project-local Codex task
+  with app-native task APIs, then adopts that task's native worktree through
+  `scripts/task-worktree.sh`. Never use hidden `codex exec` sessions or App
+  Server execution.
 - Fable is read-only on worktrees. Codex children write only their declared
   task files and task-state directory. Commits pass through
   `scripts/commit-broker.sh`.

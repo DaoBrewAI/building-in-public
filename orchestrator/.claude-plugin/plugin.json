@@ -1,6 +1,6 @@
 {
   "name": "orchestrator",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Native Hybrid mission control for Claude Code and Codex: Fable plans and reviews while visible Codex GPT-5.6-Sol tasks implement an approved DAG.",
   "repository": "https://github.com/DaoBrewAI/building-in-public",
   "license": "MIT",

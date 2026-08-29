@@ -1,4 +1,4 @@
-# Orchestrator 0.5
+# Orchestrator 0.5.1
 
 Native Codex mission control with fixed backend ownership:
 
@@ -39,9 +39,11 @@ adapter; it does not carry a second coordinator implementation.
    guarded mission worktrees, and attest the baseline.
 3. **Fable brainstorm and plan** — ask material clarification questions, write
    design/plan/review companion/task DAG, then pause once at founder **go**.
-4. **Visible Codex DAG execution** — create every child under the coordinator's
-   project with its own window/context, consume only compact lifecycle output,
-   broker commits, and integrate each verified tip while retaining its resources.
+4. **Visible Codex DAG execution** — use the app-native task API to create every
+   child and native worktree under the coordinator's saved Git project, adopt
+   that exact worktree into guarded Orchestrator authority, use native follow-up
+   messaging, consume only compact lifecycle output, broker commits, and
+   integrate each verified tip while retaining its resources.
 5. **Batch child cleanup, then Fable review** — after every task is integrated,
    collect all child resources and archive their windows in one batch; then reuse the same Fable session and the
    exact accepted Codex task thread for every finding.
@@ -98,12 +100,17 @@ Mission-local copies are worker context; coordinator control is authority.
 
 - Work happens only in isolated `orc/<mission>` and
   `orc-task/<mission>/<task>` worktrees.
-- Native task creation passes through `task-worktree.sh` inside a shared
-  lifecycle lock.
-- Child sandbox roots are the exact child worktree and task-state directory;
-  network is off.
-- Every child reuses the coordinator's exact `projectId`; `projectId=null` or a
-  different project is rejected before ownership acceptance.
+- App-native task creation produces one independent context and worktree;
+  `task-worktree.sh adopt` validates and registers that same worktree inside a
+  shared lifecycle lock.
+- A one-line bootstrap receipt proves the exact external task-state/broker
+  directory is writable before adoption. Adoption atomically binds that proof,
+  the native thread ID, window state, worktree, branch, and task authority.
+- Every child creation request targets the coordinator's exact saved project.
+  That request is authority; a null task-list `projectId` projection is not a
+  mismatch, while an explicit different saved-project ID is rejected.
+- App Server is lifecycle inspection only; it never creates, resumes, or
+  executes a Desktop-owned task.
 - Child MCP/tool/token/item events remain in the child thread and are not
   replayed into the coordinator context.
 - The commit broker validates exact paths and never accepts planted settings.

@@ -27,7 +27,7 @@ import os
 import sys
 
 log_path = os.environ["ORC_FAKE_APP_SERVER_LOG"]
-failure = os.environ.get("ORC_FAKE_APP_SERVER_FAIL", "")
+missing = os.environ.get("ORC_FAKE_THREAD_MISSING") == "1"
 
 def emit(payload):
     sys.stdout.write(json.dumps(payload, separators=(",", ":")) + "\n")
@@ -44,180 +44,66 @@ with open(log_path, "a", encoding="utf-8") as log:
             emit({"id": request_id, "result": {"userAgent": "fake"}})
         elif method == "initialized":
             continue
-        elif method == "thread/start":
-            if failure == "thread-start":
-                emit({"id": request_id, "error": {"code": -32000, "message": "injected thread failure"}})
-                break
-            emit({"id": request_id, "result": {"thread": {"id": "thr_visible", "sessionId": "thr_visible", "ephemeral": False}}})
-            emit({"method": "thread/started", "params": {"thread": {"id": "thr_visible"}}})
-        elif method == "project/list":
-            data = [] if os.environ.get("ORC_FAKE_PROJECT_MISSING") == "1" else [{"id": "project-visible", "name": "Visible", "roots": [{"path": os.environ.get("ORC_EXPECTED_PROJECT_ROOT", "")}]}]
-            emit({"id": request_id, "result": {"data": data, "nextCursor": None}})
-        elif method == "project/create":
-            emit({"id": request_id, "result": {"project": {"id": "project-created", "name": message["params"]["name"], "roots": message["params"]["roots"]}}})
-        elif method == "thread/resume":
-            emit({"id": request_id, "result": {"thread": {"id": message["params"]["threadId"], "ephemeral": False}}})
-        elif method == "thread/name/set":
-            emit({"id": request_id, "result": {}})
         elif method == "thread/list":
             if message["params"].get("cursor") is None:
                 emit({"id": request_id, "result": {"data": [{"id": "thr_other"}], "nextCursor": "page-2"}})
             else:
-                emit({"id": request_id, "result": {"data": [{"id": "thr_visible", "title": "ORC Visible Task", "cwd": os.environ.get("ORC_EXPECTED_CWD", "")}], "nextCursor": None}})
+                data = [] if missing else [{"id": "thr_visible", "title": "ORC Visible Task"}]
+                emit({"id": request_id, "result": {"data": data, "nextCursor": None}})
         elif method == "thread/read":
-            emit({"id": request_id, "result": {"thread": {"id": message["params"]["threadId"], "title": "ORC Visible Task", "cwd": os.environ.get("ORC_EXPECTED_CWD", ""), "status": {"type": "idle"}, "turns": []}}})
+            emit({"id": request_id, "result": {"thread": {"id": message["params"]["threadId"], "title": "ORC Visible Task", "cwd": "/native/worktree", "projectId": None, "status": {"type": "idle"}, "turns": [{"items": [{"text": "secret-child-transcript"}]}]}}})
         elif method in ("thread/archive", "thread/unarchive"):
             emit({"id": request_id, "result": {"thread": {"id": message["params"]["threadId"]}}})
         elif method == "turn/interrupt":
             emit({"id": request_id, "result": {}})
-        elif method == "turn/start":
-            emit({"id": request_id, "result": {"turn": {"id": "turn_1", "status": "inProgress"}}})
-            emit({"method": "turn/started", "params": {"threadId": message["params"]["threadId"], "turn": {"id": "turn_1", "status": "inProgress"}}})
-            emit({"method": "item/agentMessage/delta", "params": {"threadId": message["params"]["threadId"], "turnId": "turn_1", "delta": "started"}})
-            emit({"method": "turn/completed", "params": {"threadId": message["params"]["threadId"], "turn": {"id": "turn_1", "status": "completed"}}})
-            break
 PY
 chmod +x "$FAKE"
 
-WORKTREE="$TMP/worktree"
-TASK_DIR="$TMP/task-state"
-mkdir -p "$WORKTREE" "$TASK_DIR"
-WORKTREE="$(cd "$WORKTREE" && pwd -P)"
-TASK_DIR="$(cd "$TASK_DIR" && pwd -P)"
-printf 'Read the frozen task brief and do no broader work.\n' > "$TMP/prompt.md"
-
-CREATE_LOG="$TMP/create.log"
-CREATE_OUT="$TMP/create.out"
-ORC_CODEX_APP_SERVER_COMMAND="$FAKE" \
-ORC_FAKE_APP_SERVER_LOG="$CREATE_LOG" \
-ORC_EXPECTED_PROJECT_ROOT="$WORKTREE" \
-  python3 "$CLIENT" create \
-    --cwd "$WORKTREE" \
-    --task-dir "$TASK_DIR" \
-    --project-id project-visible \
-    --project-root "$WORKTREE" \
-    --title 'ORC Visible Task' \
-    --model gpt-5.6-sol \
-    --effort high \
-    --prompt-file "$TMP/prompt.md" > "$CREATE_OUT" 2> "$TMP/create.err"
-CREATE_RC=$?
-
-check "create client exits successfully" test "$CREATE_RC" -eq 0
-check "create emits the durable visible thread id" \
-  grep -Fq '"type":"thread.started","thread_id":"thr_visible"' "$CREATE_OUT"
-check "create emits normal turn completion" \
-  grep -Fq '"type":"turn.completed","thread_id":"thr_visible","turn_id":"turn_1","status":"completed"' "$CREATE_OUT"
-check "child event stream is not replayed into coordinator context" bash -c \
-  '! grep -Fq '\''app_server.event'\'' "$1"' \
-  _ "$CREATE_OUT"
-check "create performs initialize before thread start" python3 - "$CREATE_LOG" <<'PY'
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-methods = [row.get("method") for row in rows]
-raise SystemExit(0 if methods[:4] == ["initialize", "initialized", "project/list", "thread/start"] else 1)
-PY
-check "App Server client identifies the 0.5.0 plugin release" python3 - "$CREATE_LOG" <<'PY'
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-params = next(row["params"] for row in rows if row.get("method") == "initialize")
-raise SystemExit(0 if params.get("clientInfo", {}).get("version") == "0.5.0" else 1)
-PY
-check "thread start binds exact project cwd roots model and visible source" python3 - "$CREATE_LOG" "$WORKTREE" "$TASK_DIR" <<'PY'
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-params = next(row["params"] for row in rows if row.get("method") == "thread/start")
-expected = {
-    "cwd": sys.argv[2],
-    "projectId": "project-visible",
-    "runtimeWorkspaceRoots": [sys.argv[2], sys.argv[3]],
-    "model": "gpt-5.6-sol",
-    "sandbox": "workspace-write",
-    "threadSource": "orchestrator-child",
-    "historyMode": "paginated",
-}
-raise SystemExit(0 if all(params.get(key) == value for key, value in expected.items()) else 1)
-PY
-
-ORC_CODEX_APP_SERVER_COMMAND="$FAKE" ORC_EXPECTED_PROJECT_ROOT="$WORKTREE" \
-ORC_FAKE_APP_SERVER_LOG="$TMP/wrong-project.log" \
-  python3 "$CLIENT" create --cwd "$WORKTREE" --task-dir "$TASK_DIR" \
-    --project-id wrong-project --project-root "$WORKTREE" \
-    --title 'Wrong Project' --model gpt-5.6-sol --effort high \
-    --prompt-file "$TMP/prompt.md" >/dev/null 2> "$TMP/wrong-project.err"
-WRONG_PROJECT_RC=$?
-check "child creation rejects a project id different from the exact parent project" \
-  test "$WRONG_PROJECT_RC" -ne 0
-check "thread title is set before the implementation turn" python3 - "$CREATE_LOG" <<'PY'
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-methods = [row.get("method") for row in rows]
-name = next(row["params"] for row in rows if row.get("method") == "thread/name/set")
-ok = name == {"threadId": "thr_visible", "name": "ORC Visible Task"}
-ok = ok and methods.index("thread/name/set") < methods.index("turn/start")
-raise SystemExit(0 if ok else 1)
-PY
-check "turn start carries high effort prompt and exact workspace-write policy" python3 - "$CREATE_LOG" "$WORKTREE" "$TASK_DIR" <<'PY'
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-params = next(row["params"] for row in rows if row.get("method") == "turn/start")
-policy = params.get("sandboxPolicy", {})
-ok = params.get("threadId") == "thr_visible"
-ok = ok and params.get("cwd") == sys.argv[2]
-ok = ok and params.get("runtimeWorkspaceRoots") == [sys.argv[2], sys.argv[3]]
-ok = ok and params.get("model") == "gpt-5.6-sol" and params.get("effort") == "high"
-ok = ok and params.get("input") == [{"type": "text", "text": "Read the frozen task brief and do no broader work.\n"}]
-ok = ok and policy == {
-    "type": "workspaceWrite",
-    "writableRoots": [sys.argv[3]],
-    "networkAccess": False,
-    "excludeSlashTmp": True,
-    "excludeTmpdirEnvVar": True,
-}
-raise SystemExit(0 if ok else 1)
-PY
-
-python3 "$CLIENT" create --cwd "$WORKTREE" --task-dir "$TASK_DIR" \
-  --project-root "$WORKTREE" --title 'Missing Parent Project' \
-  --model gpt-5.6-sol --effort high --prompt-file "$TMP/prompt.md" \
-  >/dev/null 2> "$TMP/no-project.err"
-NO_PROJECT_RC=$?
-check "normal child creation requires recorded parent project id" test "$NO_PROJECT_RC" -ne 0
-
-BIND_LOG="$TMP/bind.log"
-ORC_CODEX_APP_SERVER_COMMAND="$FAKE" ORC_EXPECTED_PROJECT_ROOT="$WORKTREE" \
-ORC_FAKE_APP_SERVER_LOG="$BIND_LOG" \
-  python3 "$CLIENT" bind-project --project-root "$WORKTREE" \
-    > "$TMP/bind.out" 2> "$TMP/bind.err"
-check "Claude bootstrap resolves one exact existing parent project" \
-  grep -Fq '"type":"project.bound","project_id":"project-visible"' "$TMP/bind.out"
-
-CREATE_PROJECT_LOG="$TMP/create-project.log"
-ORC_CODEX_APP_SERVER_COMMAND="$FAKE" ORC_FAKE_PROJECT_MISSING=1 \
-ORC_EXPECTED_PROJECT_ROOT="$WORKTREE" ORC_FAKE_APP_SERVER_LOG="$CREATE_PROJECT_LOG" \
-  python3 "$CLIENT" bind-project --project-root "$WORKTREE" \
-    > "$TMP/create-project.out" 2> "$TMP/create-project.err"
-check "missing parent project is created only by explicit bootstrap" python3 - "$CREATE_PROJECT_LOG" <<'PY'
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-methods = [row.get("method") for row in rows]
-raise SystemExit(0 if "project/create" in methods and "thread/start" not in methods else 1)
-PY
+for removed in create bind-project resume; do
+  python3 "$CLIENT" "$removed" >/dev/null 2> "$TMP/$removed.err"
+  check "$removed execution operation is absent" test "$?" -ne 0
+done
 
 for operation in inspect archive unarchive; do
-  ORC_CODEX_APP_SERVER_COMMAND="$FAKE" ORC_EXPECTED_CWD="$WORKTREE" \
+  ORC_CODEX_APP_SERVER_COMMAND="$FAKE" \
   ORC_FAKE_APP_SERVER_LOG="$TMP/$operation.log" \
     python3 "$CLIENT" "$operation" --thread-id thr_visible \
       > "$TMP/$operation.out" 2> "$TMP/$operation.err"
-  check "$operation bridge succeeds for Claude-host coordination" \
-    test "$?" -eq 0
+  check "$operation lifecycle bridge succeeds" test "$?" -eq 0
 done
-check "inspect verifies list visibility and reads the exact thread" python3 - "$TMP/inspect.log" <<'PY'
+
+check "inspect initializes the 0.5.1 lifecycle bridge" python3 - "$TMP/inspect.log" <<'PY'
+import json, sys
+rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+methods = [row.get("method") for row in rows]
+params = next(row["params"] for row in rows if row.get("method") == "initialize")
+ok = methods[:4] == ["initialize", "initialized", "thread/list", "thread/list"]
+ok = ok and params.get("clientInfo", {}).get("version") == "0.5.1"
+raise SystemExit(0 if ok else 1)
+PY
+check "inspect verifies list visibility before exact read" python3 - "$TMP/inspect.log" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 methods = [row.get("method") for row in rows]
 lists = [row for row in rows if row.get("method") == "thread/list"]
+read = next(row["params"] for row in rows if row.get("method") == "thread/read")
 ok = len(lists) == 2 and lists[1]["params"].get("cursor") == "page-2"
-raise SystemExit(0 if ok and "thread/read" in methods else 1)
+ok = ok and methods.index("thread/list") < methods.index("thread/read")
+ok = ok and read == {"threadId": "thr_visible", "includeTurns": False}
+raise SystemExit(0 if ok else 1)
+PY
+check "inspect emits only bounded metadata without child turns" python3 - "$TMP/inspect.out" <<'PY'
+import json, sys
+data = json.loads(open(sys.argv[1], encoding="utf-8").read())
+expected = {
+    "type": "thread.inspected",
+    "thread_id": "thr_visible",
+    "title": "ORC Visible Task",
+    "cwd": "/native/worktree",
+    "status": {"type": "idle"},
+    "project_id": None,
+}
+raise SystemExit(0 if data == expected and "secret-child-transcript" not in repr(data) else 1)
 PY
 check "archive bridge calls thread/archive" grep -Fq '"method": "thread/archive"' "$TMP/archive.log"
 check "unarchive bridge calls thread/unarchive" grep -Fq '"method": "thread/unarchive"' "$TMP/unarchive.log"
@@ -227,45 +113,20 @@ ORC_CODEX_APP_SERVER_COMMAND="$FAKE" ORC_FAKE_APP_SERVER_LOG="$TMP/stop.log" \
     > "$TMP/stop.out" 2> "$TMP/stop.err"
 check "stop bridge interrupts the exact turn" grep -Fq '"method": "turn/interrupt"' "$TMP/stop.log"
 
-RESUME_LOG="$TMP/resume.log"
-RESUME_OUT="$TMP/resume.out"
-ORC_CODEX_APP_SERVER_COMMAND="$FAKE" \
-ORC_FAKE_APP_SERVER_LOG="$RESUME_LOG" \
-  python3 "$CLIENT" resume \
-    --thread-id thr_visible \
-    --cwd "$WORKTREE" \
-    --task-dir "$TASK_DIR" \
-    --model gpt-5.6-sol \
-    --effort high \
-    --prompt-file "$TMP/prompt.md" > "$RESUME_OUT" 2> "$TMP/resume.err"
-RESUME_RC=$?
-check "resume client exits successfully" test "$RESUME_RC" -eq 0
-check "resume uses the exact accepted thread and never starts a replacement" python3 - "$RESUME_LOG" <<'PY'
-import json, sys
-rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
-methods = [row.get("method") for row in rows]
-resume = next(row["params"] for row in rows if row.get("method") == "thread/resume")
-ok = resume.get("threadId") == "thr_visible"
-ok = ok and "thread/start" not in methods
-raise SystemExit(0 if ok else 1)
-PY
+ORC_CODEX_APP_SERVER_COMMAND="$FAKE" ORC_FAKE_THREAD_MISSING=1 \
+ORC_FAKE_APP_SERVER_LOG="$TMP/missing.log" \
+  python3 "$CLIENT" inspect --thread-id thr_visible >/dev/null 2> "$TMP/missing.err"
+check "inspect fails closed when task is not list-visible" test "$?" -ne 0
 
-FAIL_LOG="$TMP/fail.log"
-ORC_CODEX_APP_SERVER_COMMAND="$FAKE" \
-ORC_FAKE_APP_SERVER_LOG="$FAIL_LOG" \
-ORC_FAKE_APP_SERVER_FAIL=thread-start \
-  python3 "$CLIENT" create \
-    --cwd "$WORKTREE" \
-    --task-dir "$TASK_DIR" \
-    --project-id project-visible \
-    --title 'ORC Failed Task' \
-    --model gpt-5.6-sol \
-    --effort high \
-    --prompt-file "$TMP/prompt.md" > "$TMP/fail.out" 2> "$TMP/fail.err"
-FAIL_RC=$?
-check "JSON-RPC thread creation failure fails closed" test "$FAIL_RC" -ne 0
-check "failed creation never emits an accepted thread id" \
-  bash -c '! grep -Fq '"'"'"type":"thread.started"'"'"' "$1"' _ "$TMP/fail.out"
+check "lifecycle bridge never starts resumes or executes a thread" python3 - "$TMP" <<'PY'
+import json, pathlib, sys
+forbidden = {"thread/start", "thread/resume", "turn/start", "project/list", "project/create"}
+methods = set()
+for path in pathlib.Path(sys.argv[1]).glob("*.log"):
+    for line in path.read_text(encoding="utf-8").splitlines():
+        methods.add(json.loads(line).get("method"))
+raise SystemExit(0 if forbidden.isdisjoint(methods) else 1)
+PY
 
 printf 'codex task client: %s/%s passed\n' "$OK" "$N"
 [[ "$OK" -eq "$N" ]]

@@ -22,9 +22,9 @@ check() {
 contains() { grep -Fq -- "$2" "$1"; }
 compact() { tr '\n' ' ' < "$1" | sed 's/[[:space:]][[:space:]]*/ /g' | grep -Fqi -- "$2"; }
 
-check "Codex manifest is the 0.5.0 cache-busted release" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.0\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest is 0.5.0" bash -c '[[ "$(jq -r .version "$1")" = 0.5.0 ]]' _ "$CLAUDE_MANIFEST"
+check "Codex manifest is the 0.5.1 cache-busted release" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.1\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest is 0.5.1" bash -c '[[ "$(jq -r .version "$1")" = 0.5.1 ]]' _ "$CLAUDE_MANIFEST"
 check "both hosts share one skill tree" bash -c \
   '[[ "$(jq -r .skills "$1")" = ./skills/ && "$(jq -r '\''.skills | join(" ")'\'' "$2")" = ./skills/ ]]' \
   _ "$CODEX_MANIFEST" "$CLAUDE_MANIFEST"
@@ -32,8 +32,8 @@ check "Claude command routes to shared skill" contains "$ROOT/commands/orchestra
 
 check "Fable owns brainstorm plan and review" compact "$SKILL" 'Fable-5 high owns brainstorm, design, plan, review, and re-review'
 check "Codex owns implementation" compact "$SKILL" 'GPT-5.6-Sol high owns every implementation'
-check "native child tasks are visible" contains "$SKILL" 'visible project-local Codex tasks'
-check "hidden codex exec is forbidden" contains "$SKILL" 'never use hidden `codex exec` sessions'
+check "native child tasks are visible" compact "$SKILL" 'coordinator creates and messages each visible project-local Codex task'
+check "hidden codex exec is forbidden" compact "$SKILL" 'Never use hidden `codex exec` sessions'
 check "external planning is nonblocking" contains "$SKILL" 'auto-least-scope'
 check "secrets and customer data are excluded" compact "$SKILL" 'credentials, tokens, OAuth values, personal/customer data'
 check "native authority is exact 0.4.0" compact "$SKILL" 'pipeline-version` containing exactly `0.4.0'
@@ -46,11 +46,17 @@ check "blocked work uses mediation" contains "$SKILL" 'orchestrator:orchestrator
 check "acceptance marks terminal before GC" compact "$SKILL" 'Write mission state/phase `accepted`, then read the cleanup reference'
 
 check "task reference defines ready-set integration" compact "$TASK_REF" 'every predecessor is durably `integrated` or `collected`'
-check "task reference uses production lifecycle gate" contains "$TASK_REF" 'scripts/task-worktree.sh create'
-check "task reference creates App Server child" contains "$TASK_REF" 'scripts/codex-task-client.py create'
-check "task health requires list visibility" compact "$TASK_REF" 'requires App Server `thread/list` visibility and `thread/read` evidence'
+check "task reference uses production lifecycle gate" contains "$TASK_REF" 'scripts/task-worktree.sh adopt'
+check "task reference creates a native project child" compact "$TASK_REF" '`create_thread` with target type `project`'
+check "task health uses native task APIs" compact "$TASK_REF" '`wait_threads`, `list_threads`, and `read_thread`'
 check "Claude host has lifecycle bridge operations" compact "$TASK_REF" '`codex-task-client.py stop` plus `archive`'
-check "all child windows inherit the parent project" compact "$TASK_REF" 'Every child must use the same `projectId` as its coordinator/parent session'
+check "all child windows target the parent saved project" compact "$TASK_REF" 'exact saved-project ID supplied to the native create request'
+check "nullable project projection is tolerated" compact "$TASK_REF" 'A null or absent `projectId` projection is unobservable, not a mismatch'
+check "accepted native task worktree is adopted" compact "$TASK_REF" 'scripts/task-worktree.sh adopt'
+check "adoption atomically binds native owner" compact "$TASK_REF" '--thread-id <accepted-formal-thread-id>'
+check "native writable root is proven" compact "$TASK_REF" 'native-writable-root-receipt'
+check "native follow-up starts implementation" compact "$TASK_REF" '`send_message_to_thread` with the rendered task brief'
+check "App Server cannot own execution" compact "$TASK_REF" 'App Server is lifecycle inspection only'
 check "task outcomes remain durable" contains "$TASK_REF" 'Chat text is advisory'
 check "integration preserves immutable histories" contains "$TASK_REF" 'never rebase, squash, amend, reset, or force'
 check "individual integration retains visible child resources" compact "$TASK_REF" 'Do not run GC or archive a child after individual integration'
@@ -70,7 +76,7 @@ PY
 
 check "cleanup reference preserves exact child GC" contains "$CLEANUP_REF" 'exact-tip verification with a lease'
 check "cleanup reference preserves task-window archival" contains "$CLEANUP_REF" 'archive the exact accepted child'
-check "cleanup reference preserves same-thread rework" contains "$CLEANUP_REF" 'resume the same ID'
+check "cleanup reference preserves same-thread rework" compact "$CLEANUP_REF" 'send_message_to_thread` to the same ID'
 check "cleanup reference uses mission scope" contains "$CLEANUP_REF" '--mission <mission> --clean'
 check "cleanup reference never deletes target" contains "$CLEANUP_REF" 'Never delete or edit the target branch'
 

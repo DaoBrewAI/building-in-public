@@ -56,7 +56,7 @@ JSON
 }
 
 create_task() {
-  local task_id="$1" mode="${2:-}" root="$3"
+  local task_id="$1" root="$3"
   "$LIFECYCLE" create --mission-dir "$MISSION_DIR" --control-dir "$CONTROL" \
     --task-dir "$root/tasks/$task_id" --mission mission --task-id "$task_id" \
     --repo "$REPO" --parent-worktree "$PARENT" --worktree "$root/worktrees/$task_id"
@@ -126,10 +126,27 @@ ORC_TASK_WORKTREE_TESTING=1 ORC_TASK_WORKTREE_TEST_FIXTURE_ROOT=/ \
     >/dev/null 2>&1
 check "test fixture mode rejects root scope and cannot bypass native authority" test "$?" -ne 0
 
-check "orchestrating skill wires child scheduling through the production native gate" bash -c \
+ADOPT_NATIVE="$TMP/adopt-native"
+setup_repo "$ADOPT_NATIVE"
+make_native_authority
+ADOPT_CHILD="$ADOPT_NATIVE/native-worktree"
+git -C "$REPO" worktree add -q --detach "$ADOPT_CHILD" "$(git -C "$PARENT" rev-parse HEAD)"
+mkdir -p "$ADOPT_NATIVE/tasks/task-a"
+printf 'native-root-proof\n' > "$ADOPT_NATIVE/tasks/task-a/native-writable-root-receipt"
+"$LIFECYCLE" adopt --mission-dir "$MISSION_DIR" --control-dir "$CONTROL" \
+  --task-dir "$ADOPT_NATIVE/tasks/task-a" --mission mission --task-id task-a \
+  --repo "$REPO" --parent-worktree "$PARENT" --worktree "$ADOPT_CHILD" \
+  --thread-id thread-task-a --writable-root-token native-root-proof \
+  >/dev/null 2>&1
+ADOPT_RC=$?
+check "production gate adopts an exact app-native root task worktree" bash -c \
+  '[[ "$1" -eq 0 && "$(git -C "$2" branch --show-current)" = orc-task/mission/task-a && "$(cat "$3/tasks/task-a/state")" = ready && "$(cat "$3/tasks/task-a/accepted-thread-id")" = thread-task-a ]]' \
+  _ "$ADOPT_RC" "$ADOPT_CHILD" "$CONTROL"
+
+check "orchestrating skill wires child scheduling through native adoption" bash -c \
   'grep -Fq -- "$1" "$2" && grep -Fq -- "$3" "$2" && grep -Fq -- "$4" "$2"' \
-  _ 'scripts/task-worktree.sh create' "$SKILL" \
-  '--mission-dir <mission-dir>' 'The gate validates native authority'
+  _ 'scripts/task-worktree.sh adopt' "$SKILL" \
+  '--mission-dir <mission-dir>' 'The gate holds the lifecycle lock'
 
 echo "  native-schedule-gate-contract: $OK/$N"
 [[ "$OK" -eq "$N" ]]

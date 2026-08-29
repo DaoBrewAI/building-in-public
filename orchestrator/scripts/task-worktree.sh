@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create or exactly reprovision one coordinator-owned child task worktree.
+# Create, adopt, or exactly reprovision one coordinator-owned child task worktree.
 
 set -euo pipefail
 
@@ -17,6 +17,7 @@ NEW_AUTHORITY_TEMPS=()
 
 usage() {
   echo "usage: task-worktree.sh create --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir>" >&2
+  echo "       task-worktree.sh adopt --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <native-worktree> --thread-id <id> --writable-root-token <token>" >&2
   echo "       task-worktree.sh reprovision --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir> --expected-generation <n>" >&2
 }
 
@@ -456,12 +457,20 @@ cleanup_new_authority() {
 }
 
 finalize_new_authority() {
-  local temporary
+  if [[ "${ORC_TASK_WORKTREE_TEST_FAIL_FINALIZE:-}" == 1 ]]; then
+    return 1
+  fi
+  durable_fsync_paths "$@" "${NEW_AUTHORITY_DESTS[@]}"
+}
+
+discard_new_authority_temps() {
+  local temporary ok=1
   for temporary in "${NEW_AUTHORITY_TEMPS[@]}"; do
-    rm -f -- "$temporary" || return 1
+    rm -f -- "$temporary" || ok=0
   done
   NEW_AUTHORITY_DESTS=()
   NEW_AUTHORITY_TEMPS=()
+  [[ "$ok" -eq 1 ]]
 }
 
 lifecycle_guard_operation() {
@@ -910,7 +919,7 @@ lock_exit() {
 
 MODE="${1:-}"
 case "$MODE" in
-  create|reprovision) ;;
+  create|adopt|reprovision) ;;
   *) usage; exit 1 ;;
 esac
 shift
@@ -925,6 +934,8 @@ WORKTREE=""
 EXPECTED_GENERATION=""
 MISSION_DIR=""
 CREATE_MODE=""
+THREAD_ID=""
+WRITABLE_ROOT_TOKEN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -938,16 +949,24 @@ while [[ $# -gt 0 ]]; do
     --expected-generation) [[ $# -ge 2 ]] || { usage; exit 1; }; EXPECTED_GENERATION="$2"; shift 2 ;;
     --mission-dir) [[ $# -ge 2 ]] || { usage; exit 1; }; MISSION_DIR="$2"; shift 2 ;;
     --create-mode) [[ $# -ge 2 ]] || { usage; exit 1; }; CREATE_MODE="$2"; shift 2 ;;
+    --thread-id) [[ $# -ge 2 ]] || { usage; exit 1; }; THREAD_ID="$2"; shift 2 ;;
+    --writable-root-token) [[ $# -ge 2 ]] || { usage; exit 1; }; WRITABLE_ROOT_TOKEN="$2"; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
-if [[ "$MODE" == create ]]; then
-  [[ -z "$EXPECTED_GENERATION" ]] || fail "create does not accept an expected generation"
-  [[ -n "$MISSION_DIR" ]] || fail "create requires a mission directory"
+if [[ "$MODE" == create || "$MODE" == adopt ]]; then
+  [[ -z "$EXPECTED_GENERATION" ]] || fail "$MODE does not accept an expected generation"
+  [[ -n "$MISSION_DIR" ]] || fail "$MODE requires a mission directory"
   case "$CREATE_MODE" in ''|test-fixture) ;; *) fail "unsupported create mode: $CREATE_MODE" ;; esac
+  if [[ "$MODE" == adopt ]]; then
+    valid_identity "$THREAD_ID" || fail "adopt requires a valid native thread id"
+    valid_identity "$WRITABLE_ROOT_TOKEN" || fail "adopt requires a valid writable-root token"
+  else
+    [[ -z "$THREAD_ID" && -z "$WRITABLE_ROOT_TOKEN" ]] || fail "create does not accept native adoption authority"
+  fi
 else
-  [[ -z "$MISSION_DIR" && -z "$CREATE_MODE" ]] || fail "reprovision does not accept create classification arguments"
+  [[ -z "$MISSION_DIR" && -z "$CREATE_MODE" && -z "$THREAD_ID" && -z "$WRITABLE_ROOT_TOKEN" ]] || fail "reprovision does not accept create or adoption arguments"
   case "$EXPECTED_GENERATION" in
     ''|*[!0-9]*|0) fail "reprovision requires a positive expected generation" ;;
   esac
@@ -968,7 +987,7 @@ for PATH_VALUE in "$CONTROL_DIR" "$TASK_DIR" "$REPO" "$PARENT_WORKTREE" "$WORKTR
 done
 
 [[ -d "$CONTROL_DIR" && ! -L "$CONTROL_DIR" ]] || fail "control directory missing or symlinked: $CONTROL_DIR"
-if [[ "$MODE" == create ]]; then
+if [[ "$MODE" == create || "$MODE" == adopt ]]; then
   [[ -d "$MISSION_DIR" && ! -L "$MISSION_DIR" ]] || fail "mission directory missing or symlinked: $MISSION_DIR"
   MISSION_DIR_PHYS="$(cd "$MISSION_DIR" && pwd -P)"
 fi
@@ -984,7 +1003,7 @@ if [[ "$MODE" == reprovision && "$REPROVISION_RECOVERY" -eq 0 && -d "$WORKTREE" 
   REPROVISION_COMPLETION_CANDIDATE=1
 fi
 if [[ -e "$WORKTREE" || -L "$WORKTREE" ]]; then
-  [[ ( "$REPROVISION_RECOVERY" -eq 1 || "$REPROVISION_COMPLETION_CANDIDATE" -eq 1 ) && \
+  [[ ( "$MODE" == adopt || "$REPROVISION_RECOVERY" -eq 1 || "$REPROVISION_COMPLETION_CANDIDATE" -eq 1 ) && \
     -d "$WORKTREE" && ! -L "$WORKTREE" ]] || fail "child worktree already exists: $WORKTREE"
 fi
 [[ -d "$(dirname "$WORKTREE")" ]] || fail "child worktree parent directory missing: $(dirname "$WORKTREE")"
@@ -1021,7 +1040,7 @@ trap 'lock_exit "$?"' EXIT
 trap 'exit 1' HUP INT TERM
 acquire_lock
 
-if [[ "$MODE" == create ]]; then
+if [[ "$MODE" == create || "$MODE" == adopt ]]; then
   if [[ "$CREATE_MODE" == test-fixture ]]; then
     [[ "${ORC_TASK_WORKTREE_TESTING:-}" == 1 ]] || fail "test fixture mode is disabled"
     TEST_ROOT="${ORC_TASK_WORKTREE_TEST_FIXTURE_ROOT:-}"
@@ -1051,6 +1070,11 @@ CONTROL_SANDBOX="$CONTROL_TASK_DIR/sandbox-root"
 WORKER_SANDBOX="$TASK_PHYS/sandbox-root"
 CONTROL_STATE="$CONTROL_TASK_DIR/state"
 WORKER_STATE="$TASK_PHYS/state"
+CONTROL_THREAD="$CONTROL_TASK_DIR/accepted-thread-id"
+WORKER_THREAD="$TASK_PHYS/accepted-thread-id"
+TASK_WINDOW_STATE="$CONTROL_TASK_DIR/task-window-state"
+CONTROL_ROOT_RECEIPT="$CONTROL_TASK_DIR/native-writable-root-receipt"
+WORKER_ROOT_RECEIPT="$TASK_PHYS/native-writable-root-receipt"
 
 [[ ! -L "$CONTROL_TASKS_DIR" ]] || fail "coordinator tasks directory is symlinked"
 [[ ! -e "$CONTROL_TASKS_DIR" || -d "$CONTROL_TASKS_DIR" ]] || fail "coordinator tasks path is not a directory"
@@ -1079,7 +1103,7 @@ while IFS= read -r GIT_WORKTREE; do
   [[ -n "$GIT_WORKTREE" ]] || continue
   GIT_WORKTREE_PHYS="$(physical_path "$GIT_WORKTREE")" || fail "cannot canonicalize registered Git worktree: $GIT_WORKTREE"
   if paths_overlap "$WORKTREE_PHYS" "$GIT_WORKTREE_PHYS"; then
-    [[ ( "$REPROVISION_RECOVERY" -eq 1 || "$REPROVISION_COMPLETION_CANDIDATE" -eq 1 ) && \
+    [[ ( "$MODE" == adopt || "$REPROVISION_RECOVERY" -eq 1 || "$REPROVISION_COMPLETION_CANDIDATE" -eq 1 ) && \
       "$WORKTREE_PHYS" == "$GIT_WORKTREE_PHYS" ]] || fail "child worktree overlaps a registered Git worktree"
   fi
   paths_overlap "$TASK_PHYS" "$GIT_WORKTREE_PHYS" && fail "task directory overlaps a registered Git worktree"
@@ -1388,12 +1412,41 @@ if [[ "$MODE" == reprovision ]]; then
   exit 0
 fi
 
+if [[ "$MODE" == adopt ]]; then
+  ADOPT_REGISTRATIONS="$(git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxc "worktree $WORKTREE_PHYS" || true)"
+  [[ "$ADOPT_REGISTRATIONS" == 1 ]] || fail "native child worktree is not registered exactly once"
+  ADOPT_COMMON="$(cd "$WORKTREE_PHYS" && cd "$(git rev-parse --git-common-dir)" && pwd -P)" || fail "native child worktree is not Git"
+  [[ "$ADOPT_COMMON" == "$REPO_COMMON" ]] || fail "native child worktree belongs to another repository"
+  [[ -z "$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" ]] || fail "native child worktree must be detached before adoption"
+  [[ "$(git -C "$WORKTREE_PHYS" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)" == "$PARENT_TIP" ]] || fail "native child worktree is not at the exact parent tip"
+  [[ -z "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all)" ]] || fail "native child worktree is dirty before adoption"
+  python3 - "$WORKER_ROOT_RECEIPT" "$WRITABLE_ROOT_TOKEN" <<'PY' || fail "native task did not prove the exact writable task-state root"
+import os
+import stat
+import sys
+
+path, token = sys.argv[1:]
+metadata = os.lstat(path)
+if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+    raise SystemExit(1)
+with open(path, "rb") as handle:
+    data = handle.read()
+if data != (token + "\n").encode("utf-8"):
+    raise SystemExit(1)
+PY
+fi
+
 [[ ! -e "$CONTROL_MANIFEST" ]] || fail "task already has a coordinator manifest: $TASK_ID"
 [[ ! -e "$WORKER_MANIFEST" && ! -L "$WORKER_MANIFEST" ]] || fail "task already has a worker manifest: $TASK_ID"
 for NEW_AUTHORITY_PATH in "$CONTROL_GENERATION" "$WORKER_GENERATION" "$CONTROL_SANDBOX" \
   "$WORKER_SANDBOX" "$CONTROL_STATE" "$WORKER_STATE"; do
   [[ ! -e "$NEW_AUTHORITY_PATH" && ! -L "$NEW_AUTHORITY_PATH" ]] || fail "task already has retained authority: $NEW_AUTHORITY_PATH"
 done
+if [[ "$MODE" == adopt ]]; then
+  for NEW_ADOPTION_AUTHORITY in "$CONTROL_THREAD" "$WORKER_THREAD" "$TASK_WINDOW_STATE" "$CONTROL_ROOT_RECEIPT"; do
+    [[ ! -e "$NEW_ADOPTION_AUTHORITY" && ! -L "$NEW_ADOPTION_AUTHORITY" ]] || fail "task already has retained adoption authority: $NEW_ADOPTION_AUTHORITY"
+  done
+fi
 git -C "$REPO" show-ref --verify --quiet "refs/heads/$BRANCH" && fail "child branch already exists: $BRANCH"
 
 for MANIFEST in "$CONTROL_PHYS"/tasks/*/worktrees.txt; do
@@ -1431,49 +1484,82 @@ rollback() {
   local manifest_cleanup_ok=1
   local branch_tip=""
   local child_common=""
+  local child_branch=""
   local registered_child=0
   trap - EXIT
   trap '' HUP INT TERM
 
   if [[ "$WORKTREE_CREATE_INTENT" -eq 1 ]]; then
-    if git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxq "worktree $WORKTREE_PHYS"; then
-      registered_child=1
-    fi
-    branch_tip="$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)"
-    if [[ -d "$WORKTREE_PHYS" ]]; then
-      child_common="$(cd "$WORKTREE_PHYS" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P 2>/dev/null || true)"
+    if [[ "$MODE" == adopt ]]; then
+      if git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxq "worktree $WORKTREE_PHYS"; then
+        registered_child=1
+      fi
+      branch_tip="$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)"
+      child_common="$(cd "$WORKTREE_PHYS" 2>/dev/null && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P 2>/dev/null || true)"
+      child_branch="$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
       if [[ "$registered_child" -ne 1 || "$child_common" != "$REPO_COMMON" ]] || \
-        [[ "$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" != "$BRANCH" ]] || \
         [[ "$(git -C "$WORKTREE_PHYS" rev-parse --verify HEAD 2>/dev/null || true)" != "$PARENT_TIP" ]] || \
-        [[ "$branch_tip" != "$PARENT_TIP" ]] || \
         [[ -n "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all 2>/dev/null || true)" ]]; then
-        echo "task-worktree: rollback refused because the created child resource changed" >&2
+        echo "task-worktree: rollback refused because the adopted child resource changed" >&2
         git_cleanup_ok=0
-      elif ! git -C "$REPO_PHYS" worktree remove --force "$WORKTREE_PHYS" >/dev/null 2>&1; then
-        echo "task-worktree: rollback could not remove child worktree: $WORKTREE_PHYS" >&2
-        git_cleanup_ok=0
-      else
-        branch_tip="$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)"
+      elif [[ -z "$child_branch" ]]; then
         if [[ -n "$branch_tip" && "$branch_tip" != "$PARENT_TIP" ]]; then
-          echo "task-worktree: rollback preserved changed child branch: $BRANCH" >&2
+          echo "task-worktree: rollback preserved changed adopted child branch: $BRANCH" >&2
           git_cleanup_ok=0
-        elif [[ -n "$branch_tip" ]] && ! git -C "$REPO_PHYS" branch -D "$BRANCH" >/dev/null 2>&1; then
-          echo "task-worktree: rollback could not remove child branch: $BRANCH" >&2
+        elif [[ "$branch_tip" == "$PARENT_TIP" ]] && ! git -C "$REPO_PHYS" branch -D "$BRANCH" >/dev/null 2>&1; then
+          echo "task-worktree: rollback could not remove detached adopted child branch: $BRANCH" >&2
           git_cleanup_ok=0
         fi
+      elif [[ "$child_branch" != "$BRANCH" || "$branch_tip" != "$PARENT_TIP" ]]; then
+        echo "task-worktree: rollback preserved changed adopted child branch: $BRANCH" >&2
+        git_cleanup_ok=0
+      elif ! git -C "$WORKTREE_PHYS" switch -q --detach "$PARENT_TIP"; then
+          echo "task-worktree: rollback could not detach adopted child worktree" >&2
+          git_cleanup_ok=0
+      elif ! git -C "$REPO_PHYS" branch -D "$BRANCH" >/dev/null 2>&1; then
+          echo "task-worktree: rollback could not remove adopted child branch: $BRANCH" >&2
+          git_cleanup_ok=0
       fi
-    elif [[ "$registered_child" -eq 1 ]]; then
-      echo "task-worktree: rollback preserved registered child with a missing worktree path" >&2
-      git_cleanup_ok=0
-    elif [[ -n "$branch_tip" && "$branch_tip" != "$PARENT_TIP" ]]; then
-      echo "task-worktree: rollback preserved changed child branch: $BRANCH" >&2
-      git_cleanup_ok=0
-    elif [[ -n "$branch_tip" ]] && ! git -C "$REPO_PHYS" branch -D "$BRANCH" >/dev/null 2>&1; then
-      echo "task-worktree: rollback could not remove child branch: $BRANCH" >&2
-      git_cleanup_ok=0
-    elif [[ -e "$WORKTREE_PHYS" || -L "$WORKTREE_PHYS" ]]; then
-      echo "task-worktree: rollback preserved unverified child path: $WORKTREE_PHYS" >&2
-      git_cleanup_ok=0
+    else
+      if git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxq "worktree $WORKTREE_PHYS"; then
+        registered_child=1
+      fi
+      branch_tip="$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)"
+      if [[ -d "$WORKTREE_PHYS" ]]; then
+        child_common="$(cd "$WORKTREE_PHYS" && cd "$(git rev-parse --git-common-dir 2>/dev/null)" && pwd -P 2>/dev/null || true)"
+        if [[ "$registered_child" -ne 1 || "$child_common" != "$REPO_COMMON" ]] || \
+          [[ "$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" != "$BRANCH" ]] || \
+          [[ "$(git -C "$WORKTREE_PHYS" rev-parse --verify HEAD 2>/dev/null || true)" != "$PARENT_TIP" ]] || \
+          [[ "$branch_tip" != "$PARENT_TIP" ]] || \
+          [[ -n "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all 2>/dev/null || true)" ]]; then
+          echo "task-worktree: rollback refused because the created child resource changed" >&2
+          git_cleanup_ok=0
+        elif ! git -C "$REPO_PHYS" worktree remove --force "$WORKTREE_PHYS" >/dev/null 2>&1; then
+          echo "task-worktree: rollback could not remove child worktree: $WORKTREE_PHYS" >&2
+          git_cleanup_ok=0
+        else
+          branch_tip="$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)"
+          if [[ -n "$branch_tip" && "$branch_tip" != "$PARENT_TIP" ]]; then
+            echo "task-worktree: rollback preserved changed child branch: $BRANCH" >&2
+            git_cleanup_ok=0
+          elif [[ -n "$branch_tip" ]] && ! git -C "$REPO_PHYS" branch -D "$BRANCH" >/dev/null 2>&1; then
+            echo "task-worktree: rollback could not remove child branch: $BRANCH" >&2
+            git_cleanup_ok=0
+          fi
+        fi
+      elif [[ "$registered_child" -eq 1 ]]; then
+        echo "task-worktree: rollback preserved registered child with a missing worktree path" >&2
+        git_cleanup_ok=0
+      elif [[ -n "$branch_tip" && "$branch_tip" != "$PARENT_TIP" ]]; then
+        echo "task-worktree: rollback preserved changed child branch: $BRANCH" >&2
+        git_cleanup_ok=0
+      elif [[ -n "$branch_tip" ]] && ! git -C "$REPO_PHYS" branch -D "$BRANCH" >/dev/null 2>&1; then
+        echo "task-worktree: rollback could not remove child branch: $BRANCH" >&2
+        git_cleanup_ok=0
+      elif [[ -e "$WORKTREE_PHYS" || -L "$WORKTREE_PHYS" ]]; then
+        echo "task-worktree: rollback preserved unverified child path: $WORKTREE_PHYS" >&2
+        git_cleanup_ok=0
+      fi
     fi
   elif [[ "$WORKTREE_ADDED" -eq 1 ]]; then
     echo "task-worktree: rollback state is inconsistent for the created child resource" >&2
@@ -1542,11 +1628,31 @@ publish_new_authority "$CONTROL_SANDBOX" "$WORKTREE_PHYS" || fail "could not pub
 publish_new_authority "$WORKER_SANDBOX" "$WORKTREE_PHYS" || fail "could not publish worker sandbox authority"
 publish_new_authority "$CONTROL_STATE" ready || fail "could not publish coordinator task state"
 publish_new_authority "$WORKER_STATE" ready || fail "could not publish worker task state"
+if [[ "$MODE" == adopt ]]; then
+  publish_new_authority "$CONTROL_THREAD" "$THREAD_ID" || fail "could not publish coordinator native thread authority"
+  publish_new_authority "$WORKER_THREAD" "$THREAD_ID" || fail "could not publish worker native thread authority"
+  publish_new_authority "$TASK_WINDOW_STATE" unarchived || fail "could not publish native task window authority"
+  publish_new_authority "$CONTROL_ROOT_RECEIPT" "$WRITABLE_ROOT_TOKEN" || fail "could not publish native writable-root authority"
+fi
 WORKTREE_CREATE_INTENT=1
-git -C "$REPO" worktree add -q -b "$BRANCH" "$WORKTREE_PHYS" "$PARENT_TIP"
+if [[ "$MODE" == adopt && "${ORC_TASK_WORKTREE_TEST_FAIL_BEFORE_ADOPT:-}" == "1" ]]; then
+  fail "injected failure before native child adoption"
+fi
+if [[ "$MODE" == adopt ]]; then
+  git -C "$WORKTREE_PHYS" switch -q -c "$BRANCH" "$PARENT_TIP"
+  [[ "$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" == "$BRANCH" && \
+    "$(git -C "$WORKTREE_PHYS" rev-parse --verify HEAD 2>/dev/null || true)" == "$PARENT_TIP" && \
+    -z "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all 2>/dev/null || true)" ]] || \
+    fail "native child worktree changed during adoption"
+else
+  git -C "$REPO" worktree add -q -b "$BRANCH" "$WORKTREE_PHYS" "$PARENT_TIP"
+fi
 WORKTREE_ADDED=1
 
-if [[ "${ORC_TASK_WORKTREE_TEST_FAIL_AFTER_ADD:-}" == "1" ]]; then
+if [[ "$MODE" == adopt && "${ORC_TASK_WORKTREE_TEST_FAIL_AFTER_ADOPT:-}" == "1" ]]; then
+  fail "injected failure after native child adoption"
+fi
+if [[ "$MODE" == create && "${ORC_TASK_WORKTREE_TEST_FAIL_AFTER_ADD:-}" == "1" ]]; then
   fail "injected failure after child worktree creation"
 fi
 
@@ -1568,12 +1674,23 @@ fi
 [[ "$WORKER_MANIFEST" -ef "$WORKER_MANIFEST_TMP" ]] || fail "worker manifest ownership could not be verified"
 [[ ! "$CONTROL_MANIFEST" -ef "$WORKER_MANIFEST" ]] || fail "worker manifest must be a copy, not a hard link"
 
+finalize_new_authority "$CONTROL_MANIFEST" "$WORKER_MANIFEST" || fail "could not durably finalize retained task authority"
 trap 'lock_exit "$?"' EXIT
-rm -f -- "$WORKER_MANIFEST_TMP"
+trap 'exit 0' HUP INT TERM
+if ! rm -f -- "$WORKER_MANIFEST_TMP"; then
+  echo "task-worktree: warning: committed worker manifest temporary link remains" >&2
+fi
 WORKER_MANIFEST_TMP_OWNED=0
-rm -f -- "$MANIFEST_TMP"
+if ! rm -f -- "$MANIFEST_TMP"; then
+  echo "task-worktree: warning: committed coordinator manifest temporary link remains" >&2
+fi
 MANIFEST_TMP_OWNED=0
-finalize_new_authority || fail "could not finalize retained task authority"
-release_lock || fail "could not release coordinator mutation lock"
-trap - EXIT HUP INT TERM
-echo "created $BRANCH at $PARENT_TIP in $WORKTREE_PHYS"
+if ! discard_new_authority_temps; then
+  echo "task-worktree: warning: committed authority temporary link remains" >&2
+fi
+if [[ "$MODE" == adopt ]]; then
+  echo "adopted $BRANCH at $PARENT_TIP in $WORKTREE_PHYS"
+else
+  echo "created $BRANCH at $PARENT_TIP in $WORKTREE_PHYS"
+fi
+exit 0

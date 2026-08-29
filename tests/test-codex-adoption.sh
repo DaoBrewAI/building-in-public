@@ -19,10 +19,10 @@ done
 
 [[ "$(jq -r .version 10x-engineer/.codex-plugin/plugin.json)" == 1.1.0 ]] ||
   fail "10x-engineer Codex version must be 1.1.0"
-[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" =~ ^0\.5\.0\+codex\.[A-Za-z0-9._-]+$ ]] ||
-  fail "orchestrator Codex version must be a cache-busted 0.5.0 release"
-[[ "$(jq -r .version orchestrator/.claude-plugin/plugin.json)" == 0.5.0 ]] ||
-  fail "orchestrator Claude version must be 0.5.0"
+[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" =~ ^0\.5\.1\+codex\.[A-Za-z0-9._-]+$ ]] ||
+  fail "orchestrator Codex version must be a cache-busted 0.5.1 release"
+[[ "$(jq -r .version orchestrator/.claude-plugin/plugin.json)" == 0.5.1 ]] ||
+  fail "orchestrator Claude version must be 0.5.1"
 [[ "$(jq -r .skills orchestrator/.codex-plugin/plugin.json)" == ./skills/ ]] ||
   fail "orchestrator Codex manifest must use the shared native skill tree"
 [[ "$(jq -r '.skills | join(" ")' orchestrator/.claude-plugin/plugin.json)" == ./skills/ ]] ||
@@ -52,12 +52,13 @@ rg -q 'GPT-5.6-Sol' orchestrator/skills/orchestrating/SKILL.md ||
   fail "hidden single-executor path remains in Fable launcher"
 rg -q 'thread/list' orchestrator/scripts/codex-task-client.py &&
   rg -q 'thread/read' orchestrator/scripts/codex-task-client.py &&
-  rg -q 'project/list' orchestrator/scripts/codex-task-client.py &&
-  rg -q 'project/create' orchestrator/scripts/codex-task-client.py &&
   rg -q 'thread/archive' orchestrator/scripts/codex-task-client.py &&
   rg -q 'thread/unarchive' orchestrator/scripts/codex-task-client.py &&
   rg -q 'turn/interrupt' orchestrator/scripts/codex-task-client.py ||
   fail "Claude-host App Server lifecycle bridge is incomplete"
+! rg -q 'project/list|project/create|"thread/start"|thread/resume|turn/start|bind-project' \
+  orchestrator/scripts/codex-task-client.py ||
+  fail "App Server bridge must not create projects or visible child tasks"
 
 for marketplace in .agents/plugins/marketplace.json .claude-plugin/marketplace.json; do
   jq -e '.plugins[] | select(.name == "orchestrator")' "$marketplace" >/dev/null ||

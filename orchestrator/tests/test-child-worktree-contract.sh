@@ -506,9 +506,10 @@ ORC_STALE_LOCK_TEST_FINAL_REPLACEMENT="$RELEASE_SOURCE" \
   --mission mission --task-id task-release --repo "$REPO" \
   --parent-worktree "$PARENT" --worktree "$RELEASE_CHILD" >/dev/null 2>&1
 RELEASE_REPLACEMENT_RC=$?
-check "release-boundary replacement restores and preserves the new live lock" bash -c \
-  '[[ "$1" -ne 0 && -f "$2" && -f "$3" && "$2" -ef "$3" && -f "$4" && ! -e "$5.guard" ]]' \
-  _ "$RELEASE_REPLACEMENT_RC" "$RELEASE_LOCK" "$RELEASE_CANDIDATE" "$RELEASE_MARKER" "$RELEASE_LOCK"
+check "post-commit release replacement preserves committed resources and the new live lock" bash -c \
+  '[[ "$1" -eq 0 && -d "$2" && -s "$3/tasks/task-release/worktrees.txt" && -s "$4/worktrees.txt" && -f "$5" && -f "$6" && "$5" -ef "$6" && -f "$7" && ! -e "$5.guard" ]]' \
+  _ "$RELEASE_REPLACEMENT_RC" "$RELEASE_CHILD" "$RELEASE_CONTROL" "$RELEASE_TASK" \
+  "$RELEASE_LOCK" "$RELEASE_CANDIDATE" "$RELEASE_MARKER"
 kill "$RELEASE_OWNER_PID" >/dev/null 2>&1 || true
 wait "$RELEASE_OWNER_PID" 2>/dev/null || true
 

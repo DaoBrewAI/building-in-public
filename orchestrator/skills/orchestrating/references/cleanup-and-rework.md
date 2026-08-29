@@ -57,9 +57,9 @@ For each affected task:
    current generation via `--expected-generation`, and updated parent tip;
 4. publish matching coordinator/worker authority at generation `N+1`;
 5. write a bounded task-local rework prompt; and
-6. resume the same ID with `codex-task-client.py resume`.
+6. use native `send_message_to_thread` to the same ID.
 
-Never resume against a collected/missing worktree or create a replacement owner.
+Never send against a collected/missing worktree or create a replacement owner.
 After brokered fixes and verification, reintegrate and recollect. Rearchive only after verified reintegration and exact worktree and branch collection, using the
 same thread before Fable re-review.
 

@@ -22,8 +22,8 @@ check() {
   fi
 }
 
-check "manifest declares native-only cache-busted 0.5.0" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.0\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$MANIFEST"
+check "manifest declares native-only cache-busted 0.5.1" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.1\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$MANIFEST"
 
 for removed in \
   "$ROOT/claude-skills" \
@@ -49,7 +49,7 @@ check "Codex marketplace still advertises Orchestrator" bash -c \
   'jq -e '\''.plugins[] | select(.name == "orchestrator")'\'' "$1" >/dev/null' \
   _ "$REPO_ROOT/.agents/plugins/marketplace.json"
 check "Claude manifest shares the same native skill tree" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.5.0 && "$(jq -r '\''.skills | join(" ")'\'' "$1")" = "./skills/" ]]' \
+  '[[ "$(jq -r .version "$1")" = 0.5.1 && "$(jq -r '\''.skills | join(" ")'\'' "$1")" = "./skills/" ]]' \
   _ "$ROOT/.claude-plugin/plugin.json"
 check "Claude slash command routes to the shared native skill" grep -Fq \
   'orchestrator:orchestrating' "$ROOT/commands/orchestrate.md"
