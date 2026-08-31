@@ -396,9 +396,12 @@ printf '%s\t%s\t%s\t%s\t%s\n' \
   "$(cd "$REPO" && pwd -P)" main > "$CONTROL/parent-cleanup-manifest.txt"
 printf 'design\n' > "$MISSION/design.md"
 printf 'plan\n' > "$MISSION/plan.md"
+printf '<html>plan review</html>\n' > "$MISSION/plan-review.html"
+printf '<html>status truth</html>\n' > "$MISSION/status-truth.html"
 printf 'report\n## Code review\nresolved\n## Verification\nverified\n' > "$MISSION/report.md"
 printf 'decisions\n' > "$CONTROL/decisions.md"
 printf 'verification\n' > "$CONTROL/verification.md"
+printf '{"version":1,"site_url":"https://example.openai.site/mission"}\n' > "$CONTROL/sites-delivery.json"
 
 "$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
 UNMERGED_RC=$?
@@ -433,7 +436,7 @@ check "target merge enables exact parent GC and repeated cleanup is idempotent" 
   '[[ "$1" -eq 0 && "$2" -eq 0 && ! -e "$3" && "$(cat "$4/parent-cleanup-state")" = collected ]] && ! git -C "$5" show-ref --verify --quiet refs/heads/orc/mission && ! git --git-dir "$6" show-ref --verify --quiet refs/heads/orc/mission' \
   _ "$PARENT_GC_RC" "$PARENT_REPEAT_RC" "$PARENT" "$CONTROL" "$REPO" "$REMOTE"
 check "parent GC archives final review and verification evidence" bash -c \
-  '[[ -s "$1/design.md" && -s "$1/plan.md" && -s "$1/approved-task-dag.json" && -s "$1/report.md" && -s "$1/verification.md" && -s "$1/cleanup-journal.log" ]]' \
+  '[[ -s "$1/design.md" && -s "$1/plan.md" && -s "$1/plan-review.html" && -s "$1/status-truth.html" && -s "$1/sites-delivery.json" && -s "$1/approved-task-dag.json" && -s "$1/report.md" && -s "$1/verification.md" && -s "$1/cleanup-journal.log" ]]' \
   _ "$HUB/archive/mission"
 
 # API-only thread transitions stay contractually fail-closed at the coordinator boundary.
@@ -446,12 +449,12 @@ check "task API fixture observed create, archive failure/retry, unarchive/rearch
   _ "$TASK_API_LOG"
 
 # Task 8 documentation is part of the release contract.
-check "Codex manifest declares the 0.5.2 native-only release" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.2\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest declares the same 0.5.2 release" bash -c \
-  'codex="$(jq -r .version "$2")"; [[ "$(jq -r .version "$1")" = 0.5.2 && "${codex%%+*}" = 0.5.2 ]]' \
+check "Codex manifest declares the 0.5.3 native-only release" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.3\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest declares the same 0.5.3 release" bash -c \
+  'codex="$(jq -r .version "$2")"; [[ "$(jq -r .version "$1")" = 0.5.3 && "${codex%%+*}" = 0.5.3 ]]' \
   _ "$CLAUDE_MANIFEST" "$CODEX_MANIFEST"
-check "README labels the Orchestrator 0.5.2 release" contains "$README" "Orchestrator 0.5.2"
+check "README labels the Orchestrator 0.5.3 release" contains "$README" "Orchestrator 0.5.3"
 check "README documents the native DAG lifecycle" contains "$README" "Visible Codex DAG execution"
 check "README documents progressive disclosure" contains "$README" "Progressive disclosure"
 check "README documents native-only authority" contains "$README" "supports only native pipeline authority"

@@ -66,10 +66,13 @@ setup_fixture() {
     > "$CONTROL/parent-cleanup-manifest.txt"
   printf 'design artifact\n' > "$MISSION/design.md"
   printf 'plan artifact\n' > "$MISSION/plan.md"
+  printf '<html>plan review artifact</html>\n' > "$MISSION/plan-review.html"
+  printf '<html>status truth artifact</html>\n' > "$MISSION/status-truth.html"
   printf 'decision artifact\n' > "$CONTROL/decisions.md"
   printf 'report artifact\n## Code review\nresolved\n## Verification\nverified\n' > "$MISSION/report.md"
   printf '{"version":1,"mission":"mission","tasks":[]}\n' > "$CONTROL/approved-task-dag.json"
   printf 'verification artifact\n' > "$CONTROL/verification.md"
+  printf '{"version":1,"site_url":"https://example.openai.site/mission"}\n' > "$CONTROL/sites-delivery.json"
   printf 'request\n' > "$MISSION/request.md"
   printf 'Briefs: brief.md, brief-exec.md\n' > "$MISSION/MISSION.md"
   printf 'session_id: fable-session\nbackend: claude-headless\nmodel: claude-fable-5\nstage: review\n' > "$MISSION/session.txt"
@@ -171,8 +174,8 @@ if ! [[ "$(cat "$ARCHIVE/design.md" 2>/dev/null)" == "design artifact" && \
   ! grep -Fq "report artifact" "$ARCHIVE/report.md" 2>/dev/null; then
   find "$ARCHIVE" -maxdepth 1 -type f -print | sed 's/^/  archive diagnostic: /'
 fi
-check "archive preserves design plan approved DAG decisions report and verification" bash -c \
-  '[[ "$(cat "$1/design.md")" = "design artifact" && "$(cat "$1/plan.md")" = "plan artifact" && "$(cat "$1/DECISIONS.md")" = "decision artifact" && "$(cat "$1/verification.md")" = "verification artifact" ]] && grep -Fq "\"mission\":\"mission\"" "$1/approved-task-dag.json" && grep -Fq "report artifact" "$1/report.md"' \
+check "archive preserves plan/status HTML, Sites receipt, and existing evidence" bash -c \
+  '[[ "$(cat "$1/design.md")" = "design artifact" && "$(cat "$1/plan.md")" = "plan artifact" && "$(cat "$1/DECISIONS.md")" = "decision artifact" && "$(cat "$1/verification.md")" = "verification artifact" ]] && grep -Fq "plan review artifact" "$1/plan-review.html" && grep -Fq "status truth artifact" "$1/status-truth.html" && grep -Fq "https://example.openai.site/mission" "$1/sites-delivery.json" && grep -Fq "\"mission\":\"mission\"" "$1/approved-task-dag.json" && grep -Fq "report artifact" "$1/report.md"' \
   _ "$ARCHIVE"
 $GC --hub "$HUB" --clean >/dev/null 2>&1
 check "repeated exact parent cleanup is an idempotent no-op" bash -c \

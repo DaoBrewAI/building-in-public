@@ -145,7 +145,7 @@ def main() -> int:
         server.request(
             "initialize",
             {
-                "clientInfo": {"name": "orchestrator", "title": "Orchestrator", "version": "0.5.2"},
+                "clientInfo": {"name": "orchestrator", "title": "Orchestrator", "version": "0.5.3"},
                 "capabilities": {"experimentalApi": True},
             },
         )

@@ -1413,7 +1413,10 @@ archive_parent_artifacts() {
     "$control/brief-exec.md"
     "$control/decisions.md"
     "$mission_dir/report.md"
+    "$mission_dir/plan-review.html"
+    "$mission_dir/status-truth.html"
     "$control/verification.md"
+    "$control/sites-delivery.json"
   )
   destinations=(
     "$archive_dir/design.md"
@@ -1423,7 +1426,10 @@ archive_parent_artifacts() {
     "$archive_dir/brief-exec.md"
     "$archive_dir/DECISIONS.md"
     "$archive_dir/report.md"
+    "$archive_dir/plan-review.html"
+    "$archive_dir/status-truth.html"
     "$archive_dir/verification.md"
+    "$archive_dir/sites-delivery.json"
   )
   sources+=("$control/approved-task-dag.json")
   destinations+=("$archive_dir/approved-task-dag.json")

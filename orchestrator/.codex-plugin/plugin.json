@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
-  "version": "0.5.2+codex.20260831190157",
-  "description": "Hybrid mission-control orchestration for Codex: choose Fable/Opus or GPT-5.6-Sol Ultra for planning and review while bounded GPT-5.6-Sol child tasks execute an approved DAG in guarded worktrees.",
+  "version": "0.5.3+codex.20260831210848",
+  "description": "Hybrid mission-control orchestration for Codex with selectable planning/review, bounded implementation tasks, and Sites-first cross-device HTML approvals.",
   "author": {
     "name": "DaoBrew AI",
     "url": "https://github.com/DaoBrewAI"
@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "Orchestrator",
     "shortDescription": "Selectable planning, Codex-executed missions.",
-    "longDescription": "A hybrid mission coordinator that asks each new mission to use Fable/Opus or a visible GPT-5.6-Sol Ultra task for brainstorm, design, plan, and review, while bounded resumable GPT-5.6-Sol High child tasks own approved implementation DAG nodes.",
+    "longDescription": "A hybrid mission coordinator that selects Fable/Opus or GPT-5.6-Sol Ultra for planning/review, uses bounded GPT-5.6-Sol High implementation tasks, and publishes user-facing plan and status HTML through OpenAI Sites.",
     "developerName": "DaoBrew AI",
     "category": "Productivity",
     "capabilities": [

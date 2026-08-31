@@ -5,6 +5,7 @@
 - **Started:** {{DATE}}
 - **Design:** ./design.md · **Briefs:** ./brief.md + ./brief-exec.md · **Plan:** ./plan.md · **Report:** ./report.md
 - **Session spec:** {{PLANNING_BACKEND_SPEC}} — exec codex gpt-5.6-sol · reasoning high · workspace-write sandbox
+- **Sites:** {{SITES_URLS}}
 
 ## Repos & worktrees
 | Repo | Worktree | Branch | Base SHA |

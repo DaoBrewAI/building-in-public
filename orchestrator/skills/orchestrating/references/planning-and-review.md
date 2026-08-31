@@ -111,6 +111,10 @@ planning/review task only after the final verdict is durably accepted; its
 native planning worktree is never part of implementation integration or child
 GC authority.
 
+When founder corrections change design or plan, regenerate `plan-review.html`;
+the coordinator redeploys the same `/plan` route before asking for `go` again.
+The planning/review task never publishes or manages the Site.
+
 If native creation or messaging is unavailable, write
 `native-planning-task-api-unavailable` and stop before planning. Do not use
 App Server, hidden `codex exec`, the coordinator context, Fable, or Opus as a

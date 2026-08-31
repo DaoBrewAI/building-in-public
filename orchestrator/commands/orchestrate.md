@@ -1,5 +1,5 @@
 ---
-description: "Start or resume a native Hybrid mission: choose Fable/Opus or GPT-5.6-Sol Ultra for planning/review while visible Codex tasks implement the approved DAG."
+description: "Start or resume a native Hybrid mission with selectable planning/review, visible Codex implementation tasks, and Sites-first cross-device HTML approvals."
 disable-model-invocation: true
 ---
 

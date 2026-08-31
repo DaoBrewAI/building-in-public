@@ -1,4 +1,4 @@
-# Orchestrator 0.5.2
+# Orchestrator 0.5.3
 
 Native Codex mission control with explicit backend ownership:
 
@@ -8,6 +8,8 @@ Native Codex mission control with explicit backend ownership:
   node each.
 - The coordinator owns durable authority, scheduling, integration, mediation,
   cleanup, and continuation.
+- Every user-facing HTML handoff uses an owner-only OpenAI Sites HTTPS URL for
+  phone and desktop access.
 
 The package supports only native pipeline authority `0.4.0`. Historical 0.2 and
 0.3 coordinator/executor paths are intentionally removed.
@@ -40,8 +42,9 @@ adapter; it does not carry a second coordinator implementation.
    guarded mission worktrees, and attest the baseline.
 3. **Selected-backend brainstorm and plan** — use Fable/Opus or one visible
    same-project GPT-5.6-Sol Ultra planning task to ask material clarification
-   questions, write design/plan/review companion/task DAG, then pause once at
-   founder **go**.
+   questions, write design/plan/review companion/task DAG, publish the review
+   companion at the stable private Sites `/plan` URL, then pause once at founder
+   **go**.
 4. **Visible Codex DAG execution** — use the app-native task API to create every
    child and native worktree under the coordinator's saved Git project, adopt
    that exact worktree into guarded Orchestrator authority, use native follow-up
@@ -51,8 +54,13 @@ adapter; it does not carry a second coordinator implementation.
    integrated, collect all child resources and archive their windows in one
    batch; then reuse the accepted planning/review session and the exact accepted
    implementation task thread for every finding.
-6. **Acceptance and cleanup** — verify the merged tree, mark accepted, then run
-   mission-scoped GC and archive only after durable collection.
+6. **Acceptance and cleanup** — verify the merged tree, generate verified
+   status truth, publish the private Sites `/status` URL, mark accepted, then
+   run mission-scoped GC and archive only after durable collection.
+
+The coordinator needs OpenAI Sites building and hosting capability at human
+HTML gates. If that capability is unavailable, it preserves the canonical HTML
+and stops before asking the user to approve a local-only file.
 
 ## Progressive disclosure
 
@@ -63,6 +71,7 @@ stage that needs them:
 |---|---|
 | `references/task-execution.md` | ready set, child creation/health, outcomes, integration |
 | `references/planning-and-review.md` | backend selection, planning session, review/re-review |
+| `references/html-sites-delivery.md` | Sites-first plan, status-truth, and surfaced board HTML |
 | `references/cleanup-and-rework.md` | GC, task-window archive, rework, parent collection |
 | `references/continuation.md` | compaction, continuation acceptance, promotion |
 
@@ -82,6 +91,7 @@ Each mission has:
 │   ├── design.md
 │   ├── plan.md
 │   ├── plan-review.html
+│   ├── status-truth.html
 │   ├── task-dag.json
 │   └── report.md
 ├── control/<mission>/
@@ -92,6 +102,7 @@ Each mission has:
 │   ├── brief-exec.md
 │   ├── approved-task-dag.json
 │   ├── approved.sha256
+│   ├── sites-delivery.json
 │   └── tasks/<task-id>/
 ├── archive/
 ├── DECISIONS.md

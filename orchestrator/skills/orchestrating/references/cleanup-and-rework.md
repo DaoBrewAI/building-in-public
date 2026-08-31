@@ -85,9 +85,10 @@ scripts/orchestrator-gc.sh --hub <hub> --mission <mission> --clean
 Collection requires every child collected and archived, exact parent tip
 contained in the target, a clean exact parent worktree, and the frozen four-file
 approval manifest. PR metadata may corroborate but never replace ancestry.
-Archive design, plan, DAG, decisions, report, verification, and cleanup journal
-before removing planted settings, worktree, local mission ref, and exact-tip
-remote ref. Never delete or edit the target branch.
+Archive design, plan, DAG, decisions, plan/status HTML, Sites delivery receipt,
+report, verification, and cleanup journal before removing planted settings,
+worktree, local mission ref, and exact-tip remote ref.
+Never delete or edit the target branch.
 
 Archive the mission directory only after parent cleanup state is `collected`.
 On `cleanup_pending`, preserve the accepted mission in place and retry this same

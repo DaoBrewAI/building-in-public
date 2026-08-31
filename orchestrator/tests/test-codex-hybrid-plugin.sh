@@ -22,9 +22,9 @@ check() {
 contains() { grep -Fq -- "$2" "$1"; }
 compact() { tr '\n' ' ' < "$1" | sed 's/[[:space:]][[:space:]]*/ /g' | grep -Fqi -- "$2"; }
 
-check "Codex manifest is the 0.5.2 cache-busted release" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.2\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest is 0.5.2" bash -c '[[ "$(jq -r .version "$1")" = 0.5.2 ]]' _ "$CLAUDE_MANIFEST"
+check "Codex manifest is the 0.5.3 cache-busted release" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.3\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest is 0.5.3" bash -c '[[ "$(jq -r .version "$1")" = 0.5.3 ]]' _ "$CLAUDE_MANIFEST"
 check "both hosts share one skill tree" bash -c \
   '[[ "$(jq -r .skills "$1")" = ./skills/ && "$(jq -r '\''.skills | join(" ")'\'' "$2")" = ./skills/ ]]' \
   _ "$CODEX_MANIFEST" "$CLAUDE_MANIFEST"

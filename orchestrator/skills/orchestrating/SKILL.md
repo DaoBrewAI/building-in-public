@@ -33,6 +33,8 @@ Read only the reference needed for the current stage, completely, before acting:
   or integrating a task, read [references/task-execution.md](references/task-execution.md).
 - Before launching or resuming brainstorm, design, plan, review, or re-review,
   read [references/planning-and-review.md](references/planning-and-review.md).
+- Before presenting any HTML for preview, confirmation, approval, or status,
+  read [references/html-sites-delivery.md](references/html-sites-delivery.md).
 - Before child/parent collection, task-window archival, rework reprovision, or a
   cleanup retry, read
   [references/cleanup-and-rework.md](references/cleanup-and-rework.md).
@@ -52,7 +54,7 @@ Resolve `PLUGIN_DIR` by moving up two directories from this file. Require:
   `commit-broker.sh`, `orchestrator-gc.sh`, `classify-mission-version.sh`, and
   `codex-task-client.py`;
 - `skills/orchestrating/references/planning-and-review.md`, `task-execution.md`,
-  `cleanup-and-rework.md`, and `continuation.md`;
+  `html-sites-delivery.md`, `cleanup-and-rework.md`, and `continuation.md`;
 - `templates/MISSION.md`, `brief-codex.md`, `brief-exec.md`, `task-brief.md`,
   `task-dag.json`, `report.md`, `worker-settings.json`, and `board.html`.
 
@@ -175,12 +177,17 @@ session invokes `10x-engineer:brainstorming` and may return `blocked` with
 same accepted session. It then writes `design.md`, `plan.md`,
 `plan-review.html`, and `task-dag.json`, sets `planned`, and exits.
 
+After the planning stage exits, read `html-sites-delivery.md` and publish the
+current plan review through OpenAI Sites before entering the founder go gate.
+
 Do not poll or inspect a healthy running stage. The process exit is the wake.
 
 ## Founder go gate
 
-`planned` is the only planned human pause after the backend choice. Require and show `design.md`,
-`plan.md`, and `plan-review.html`. Ask for explicit **go**. Corrections resume
+`planned` is the only planned human pause after the backend choice. Require
+`design.md`, `plan.md`, and a current successful Sites receipt for
+`plan-review.html`. Present the `/plan` Sites HTTPS URL and ask for explicit
+**go**. Corrections resume
 the same accepted planning session so design changes before plan regeneration.
 
 On go:
@@ -232,13 +239,18 @@ a replacement task merely to mediate a question.
 3. Require each live checkout clean and on its default branch. Merge verified
    immutable task/parent tips without rewriting history. Run final merged-tree
    verification before claiming acceptance.
-4. Publish exact parent cleanup authority, resolved review, decisions, and
+4. After final verification, generate `status-truth.html` with
+   `10x-engineer:status-truth`, read `html-sites-delivery.md`, and publish it
+   through OpenAI Sites before any completion or acceptance claim. Report the
+   `/status` Sites HTTPS URL as the primary result.
+5. Publish exact parent cleanup authority, resolved review, decisions, and
    verification. Write mission state/phase `accepted`, then read the cleanup
    reference and run mission-scoped GC. Never run hub-wide destructive cleanup.
-5. Archive the mission directory only after `parent-cleanup-state=collected`.
+6. Archive the mission directory only after `parent-cleanup-state=collected`.
    Otherwise preserve it for exact retry. Regenerate `board.html` on every state
-   transition.
-6. Report changes, decisions, tests, and follow-ups; append durable memory once.
+   transition. If the board is presented, deploy the current `/board` route
+   first.
+7. Report changes, decisions, tests, and follow-ups; append durable memory once.
 
 ## Continuation
 

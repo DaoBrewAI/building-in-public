@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
-  "version": "0.5.2",
-  "description": "Native Hybrid mission control for Claude Code and Codex: choose Fable/Opus or GPT-5.6-Sol Ultra for planning/review while visible Codex tasks implement an approved DAG.",
+  "version": "0.5.3",
+  "description": "Native Hybrid mission control for Claude Code and Codex with selectable planning/review, visible Codex implementation tasks, and Sites-first cross-device HTML approvals.",
   "repository": "https://github.com/DaoBrewAI/building-in-public",
   "license": "MIT",
   "keywords": [
