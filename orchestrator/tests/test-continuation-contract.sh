@@ -173,6 +173,10 @@ make_hub() {
   hub="$repo/.orchestrator"
   mkdir -p "$hub/missions/mission-a" "$hub/control/mission-a/tasks/task-a"
   printf 'running\n' > "$hub/missions/mission-a/state"
+  printf 'fable-opus\n' > "$hub/missions/mission-a/planning-backend"
+  printf 'fable-opus\n' > "$hub/control/mission-a/planning-backend"
+  printf 'session_id: fable-session\nbackend: claude-headless\nmodel: claude-fable-5\nstage: plan\n' > "$hub/missions/mission-a/session.txt"
+  printf 'fable-session\n' > "$hub/control/mission-a/planning-session-id"
   printf 'running\n' > "$hub/control/mission-a/tasks/task-a/state"
   printf '3\n' > "$hub/control/mission-a/tasks/task-a/generation"
   printf 'child-thread-1\n' > "$hub/control/mission-a/tasks/task-a/accepted-thread-id"
@@ -323,11 +327,67 @@ raise SystemExit(0 if hashlib.sha256(binding).hexdigest() == request["request_id
 PY
   check "request binds the exact source session" json_expr "$REQ_FILE" '.binding.source.coordinator_thread_id == "coordinator-thread-1"'
   check "request binds exact mission state" json_expr "$REQ_FILE" '.binding.missions[0].mission == "mission-a" and .binding.missions[0].state.value == "running"'
+  check "request binds matching planning backend authority" json_expr "$REQ_FILE" '.binding.missions[0].planning_backend.mission.value == "fable-opus" and .binding.missions[0].planning_backend.control.value == "fable-opus"'
+  check "request binds accepted planning session identity and session bytes" \
+    json_expr "$REQ_FILE" '.binding.missions[0].planning_session.value == "fable-session" and (.binding.missions[0].session.sha256 | length) == 64 and .binding.missions[0].quota_fallbacks == {plan:null,review:null}'
   check "request binds exact task generation and state" \
     json_expr "$REQ_FILE" '.binding.missions[0].tasks[0].task == "task-a" and .binding.missions[0].tasks[0].generation.value == "3" and .binding.missions[0].tasks[0].state.value == "running"'
   BOUND_CARRYOVER="$(jq -r '.binding.carryover.path // .carryover_path' "$REQ_FILE")"
   check "carryover is published before and hash-bound by the request" \
     sh -c 'expected=$(jq -r .binding.carryover.sha256 "$1") && actual=$(shasum -a 256 "$2") && actual=${actual%% *} && test "$expected" = "$actual"' sh "$REQ_FILE" "$BOUND_CARRYOVER"
+
+  FABLE_REDIRECT="$TMP/fable-session-redirect"
+  mkdir -p "$FABLE_REDIRECT"
+  make_hub "$FABLE_REDIRECT"
+  authorize_coordinator "$FABLE_REDIRECT/.orchestrator" redirect-coordinator
+  printf 'other-session\n' > "$FABLE_REDIRECT/.orchestrator/control/mission-a/planning-session-id"
+  check "continuation rejects worker/session authority redirection" \
+    sh -c '! "$1" --manual --hub "$2" --session-id redirect-coordinator >/dev/null 2>&1' \
+      sh "$ADAPTER" "$FABLE_REDIRECT/.orchestrator"
+
+  CODEX_UNBOUND="$TMP/codex-unbound"
+  mkdir -p "$CODEX_UNBOUND"
+  make_hub "$CODEX_UNBOUND"
+  authorize_coordinator "$CODEX_UNBOUND/.orchestrator" codex-unbound-coordinator
+  printf 'codex-ultra\n' > "$CODEX_UNBOUND/.orchestrator/missions/mission-a/planning-backend"
+  printf 'codex-ultra\n' > "$CODEX_UNBOUND/.orchestrator/control/mission-a/planning-backend"
+  rm "$CODEX_UNBOUND/.orchestrator/missions/mission-a/session.txt" \
+    "$CODEX_UNBOUND/.orchestrator/control/mission-a/planning-session-id"
+  check "continuation rejects a running Codex Ultra mission without accepted planning task" \
+    sh -c '! "$1" --manual --hub "$2" --session-id codex-unbound-coordinator >/dev/null 2>&1' \
+      sh "$ADAPTER" "$CODEX_UNBOUND/.orchestrator"
+
+  CODEX_BOUND="$TMP/codex-bound"
+  mkdir -p "$CODEX_BOUND"
+  make_hub "$CODEX_BOUND"
+  authorize_coordinator "$CODEX_BOUND/.orchestrator" codex-bound-coordinator
+  printf 'codex-ultra\n' > "$CODEX_BOUND/.orchestrator/missions/mission-a/planning-backend"
+  printf 'codex-ultra\n' > "$CODEX_BOUND/.orchestrator/control/mission-a/planning-backend"
+  rm "$CODEX_BOUND/.orchestrator/control/mission-a/planning-session-id"
+  printf 'backend: codex-native\nmodel: gpt-5.6-sol\neffort: ultra\nthread_id: planning-thread\nstage: plan\n' > "$CODEX_BOUND/.orchestrator/missions/mission-a/session.txt"
+  printf 'planning-thread\n' > "$CODEX_BOUND/.orchestrator/control/mission-a/planning-thread-id"
+  jq -cS -n --arg cwd "$CODEX_BOUND/planning-worktree" '{
+    created:true, visible:true, title_verified:true, first_turn_exists:true,
+    startup_evidence:true, settings_recorded:true, writable_root_verified:true,
+    status:"completed", thread_id:"planning-thread", model:"gpt-5.6-sol",
+    effort:"ultra", project_id:"project-1", cwd:$cwd
+  }' > "$CODEX_BOUND/.orchestrator/control/mission-a/planning-thread-health.json"
+  "$ADAPTER" --manual --hub "$CODEX_BOUND/.orchestrator" \
+    --session-id codex-bound-coordinator > "$CODEX_BOUND/request.json"
+  CODEX_BOUND_REQ="$(request_file "$CODEX_BOUND/.orchestrator")"
+  check "continuation binds complete Codex Ultra task identity and health" \
+    json_expr "$CODEX_BOUND_REQ" '.binding.missions[0].planning_thread.value == "planning-thread" and (.binding.missions[0].planning_health.sha256 | length) == 64 and .binding.missions[0].planning_session == null'
+
+  FABLE_FALLBACK="$TMP/fable-fallback"
+  mkdir -p "$FABLE_FALLBACK"
+  make_hub "$FABLE_FALLBACK"
+  authorize_coordinator "$FABLE_FALLBACK/.orchestrator" fallback-coordinator
+  jq -cS -n '{from:"claude-fable-5",session_id:"fable-session",stage:"plan",to:"claude-opus-5"}' > "$FABLE_FALLBACK/.orchestrator/control/mission-a/quota-fallback-plan.json"
+  "$ADAPTER" --manual --hub "$FABLE_FALLBACK/.orchestrator" \
+    --session-id fallback-coordinator > "$FABLE_FALLBACK/request.json"
+  FABLE_FALLBACK_REQ="$(request_file "$FABLE_FALLBACK/.orchestrator")"
+  check "continuation binds the exact session-scoped Opus fallback receipt" \
+    json_expr "$FABLE_FALLBACK_REQ" '(.binding.missions[0].quota_fallbacks.plan.sha256 | length) == 64 and .binding.missions[0].quota_fallbacks.review == null'
 
   UNRELATED="$TMP/unrelated-session"
   mkdir -p "$UNRELATED"

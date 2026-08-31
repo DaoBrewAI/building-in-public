@@ -5,6 +5,7 @@
 #       --worktree <primary> [--worktree <other>]...
 #       fresh PLAN stage: claude (Fable-5) reads brief.md, plans, exits state=planned
 #   spawn-worker.sh ... --resume "<message>" [--stage plan|review]
+#       [--quota-fallback]
 #       resumes the same Fable session for clarification, plan revision,
 #       independent review, re-review, or crash salvage.
 #
@@ -17,7 +18,7 @@
 
 set -euo pipefail
 
-MISSION_DIR="" CONTROL_DIR="" RESUME_MSG="" STAGE=""
+MISSION_DIR="" CONTROL_DIR="" RESUME_MSG="" STAGE="" QUOTA_FALLBACK=0
 WORKTREES=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -26,11 +27,12 @@ while [[ $# -gt 0 ]]; do
     --worktree)    WORKTREES+=("$2"); shift 2 ;;
     --resume)      RESUME_MSG="$2"; shift 2 ;;
     --stage)       STAGE="$2"; shift 2 ;;
+    --quota-fallback) QUOTA_FALLBACK=1; shift ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
 if [[ -z "$MISSION_DIR" || -z "$CONTROL_DIR" || "${#WORKTREES[@]}" -eq 0 ]]; then
-  echo "usage: --mission-dir <dir> --control-dir <dir> --worktree <primary> [--worktree <other>]... [--stage plan|review] [--resume <msg>]" >&2
+  echo "usage: --mission-dir <dir> --control-dir <dir> --worktree <primary> [--worktree <other>]... [--stage plan|review] [--resume <msg>] [--quota-fallback]" >&2
   exit 1
 fi
 case "$STAGE" in
@@ -38,6 +40,12 @@ case "$STAGE" in
   *) echo "invalid --stage: $STAGE (plan|review)" >&2; exit 1 ;;
 esac
 PRIMARY="${WORKTREES[0]}"
+PLAN_STAGE="${STAGE:-plan}"
+PLAN_MODEL="${ORC_PLAN_MODEL:-claude-fable-5}"
+case "$PLAN_MODEL" in
+  claude-fable-5|claude-opus-5) ;;
+  *) echo "unsupported planning model: $PLAN_MODEL" >&2; exit 1 ;;
+esac
 for WT in "${WORKTREES[@]}"; do
   if [[ ! -d "$WT" ]]; then
     if [[ "$WT" == "$PRIMARY" ]]; then
@@ -51,6 +59,125 @@ done
 
 [[ -d "$MISSION_DIR" && ! -L "$MISSION_DIR" ]] || { echo "mission directory missing or symlinked: $MISSION_DIR" >&2; exit 1; }
 [[ -d "$CONTROL_DIR" && ! -L "$CONTROL_DIR" ]] || { echo "coordinator control directory missing or symlinked: $CONTROL_DIR" >&2; exit 1; }
+
+read_planning_session_authority() {
+  local authority="$CONTROL_DIR/planning-session-id" value
+  [[ -s "$authority" && ! -L "$authority" ]] || {
+    echo "planning session authority is missing or unsafe" >&2
+    return 1
+  }
+  value="$(tr -d '\n' < "$authority")"
+  [[ "$(wc -l < "$authority" | tr -d ' ')" == 1 && -n "$value" ]] || {
+    echo "planning session authority is malformed" >&2
+    return 1
+  }
+  case "$value" in
+    *[!A-Za-z0-9._-]*|[!A-Za-z0-9]*)
+      echo "planning session authority is malformed" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$value"
+}
+
+publish_planning_session_authority() {
+  local authority="$CONTROL_DIR/planning-session-id" temporary candidate
+  if [[ -e "$authority" || -L "$authority" ]]; then
+    read_planning_session_authority
+    return
+  fi
+  candidate="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  temporary="$(mktemp "$CONTROL_DIR/.planning-session-id.XXXXXX")" || return 1
+  printf '%s\n' "$candidate" > "$temporary"
+  chmod 0600 "$temporary"
+  if ! ln "$temporary" "$authority" 2>/dev/null; then
+    rm -f -- "$temporary"
+    read_planning_session_authority
+    return
+  fi
+  [[ "$temporary" -ef "$authority" ]] || {
+    rm -f -- "$temporary"
+    echo "planning session authority ownership mismatch" >&2
+    return 1
+  }
+  python3 - "$authority" "$CONTROL_DIR" <<'PY'
+import os
+import sys
+for path in sys.argv[1:]:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+PY
+  rm -f -- "$temporary"
+  printf '%s\n' "$candidate"
+}
+
+publish_quota_fallback_receipt() {
+  local session_id="$1" receipt="$CONTROL_DIR/quota-fallback-$PLAN_STAGE.json" temporary
+  [[ "$PLAN_MODEL" == claude-opus-5 ]] || {
+    echo "--quota-fallback requires claude-opus-5" >&2
+    return 1
+  }
+  [[ -n "$RESUME_MSG" ]] || {
+    echo "Opus fallback already consumed; a second fresh session is forbidden" >&2
+    return 1
+  }
+  if [[ -e "$receipt" || -L "$receipt" ]]; then
+    [[ -f "$receipt" && ! -L "$receipt" ]] || {
+      echo "quota fallback receipt is unsafe" >&2
+      return 1
+    }
+    jq -e --arg stage "$PLAN_STAGE" --arg session "$session_id" \
+      'keys == ["from","session_id","stage","to"] and .from == "claude-fable-5" and .to == "claude-opus-5" and .stage == $stage and .session_id == $session' \
+      "$receipt" >/dev/null || {
+        echo "quota fallback receipt conflicts with this stage" >&2
+        return 1
+      }
+    return 0
+  fi
+  temporary="$(mktemp "$CONTROL_DIR/.quota-fallback-$PLAN_STAGE.XXXXXX")" || return 1
+  jq -cS -n --arg stage "$PLAN_STAGE" --arg session "$session_id" \
+    '{from:"claude-fable-5",session_id:$session,stage:$stage,to:"claude-opus-5"}' > "$temporary"
+  chmod 0600 "$temporary"
+  if ! ln "$temporary" "$receipt" 2>/dev/null; then
+    rm -f -- "$temporary"
+    echo "quota fallback receipt publication raced" >&2
+    return 1
+  fi
+  [[ "$temporary" -ef "$receipt" ]] || {
+    rm -f -- "$temporary"
+    echo "quota fallback receipt ownership mismatch" >&2
+    return 1
+  }
+  python3 - "$receipt" "$CONTROL_DIR" <<'PY'
+import os
+import sys
+for path in sys.argv[1:]:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+PY
+  rm -f -- "$temporary"
+}
+
+if [[ "$PLAN_MODEL" == claude-opus-5 ]]; then
+  [[ "$QUOTA_FALLBACK" -eq 1 ]] || {
+    echo "claude-opus-5 requires --quota-fallback" >&2
+    exit 1
+  }
+  [[ -n "$RESUME_MSG" ]] || {
+    echo "Opus fallback already consumed; a second fresh session is forbidden" >&2
+    exit 1
+  }
+elif [[ "$QUOTA_FALLBACK" -eq 1 ]]; then
+  echo "--quota-fallback is invalid for claude-fable-5" >&2
+  exit 1
+fi
+
 CONTROL_MANIFEST="$CONTROL_DIR/worktrees.txt"
 [[ -s "$CONTROL_MANIFEST" && ! -L "$CONTROL_MANIFEST" ]] || { echo "coordinator control manifest missing, empty, or symlinked: $CONTROL_MANIFEST" >&2; exit 1; }
 cmp -s "$CONTROL_MANIFEST" "$MISSION_DIR/worktrees.txt" || { echo "worker manifest does not match coordinator control manifest" >&2; exit 1; }
@@ -76,11 +203,11 @@ for I in "${!WORKTREES[@]}"; do
   esac
 done
 
-# Plan and review always use Fable-5 high on Claude; native task execution is
-# launched separately through codex-task-client.py.
+# The Claude planning route uses Fable-5 high, with one receipt-backed Opus-5
+# fallback for the exact stage. Native implementation is launched separately.
 FABLE_TOOLS=(Read Glob Grep Write Edit Skill)
 FABLE_TOOL_LIST="$(IFS=,; echo "${FABLE_TOOLS[*]}")"
-WORKER_FLAGS=(--model "${ORC_PLAN_MODEL:-claude-fable-5}" --effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
+WORKER_FLAGS=(--model "$PLAN_MODEL" --effort high --permission-mode dontAsk --tools "$FABLE_TOOL_LIST" --allowedTools "$FABLE_TOOL_LIST" --output-format json)
 WORKER_FLAGS+=(--add-dir "$MISSION_DIR" --add-dir "$CONTROL_DIR")
 for ((i = 1; i < ${#WORKTREES[@]}; i++)); do
   WORKER_FLAGS+=(--add-dir "${WORKTREES[$i]}")
@@ -130,7 +257,44 @@ next_output() {
 }
 
 SESSION_FILE="$MISSION_DIR/session.txt"
+STATE_FILE="$MISSION_DIR/state"
 RC=0
+
+fsync_paths() {
+  python3 - "$@" <<'PY'
+import os
+import sys
+for path in sys.argv[1:]:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+PY
+}
+
+verify_pending_state() {
+  [[ -f "$STATE_FILE" && ! -L "$STATE_FILE" ]] || {
+    echo "mission state is missing or unsafe" >&2
+    return 1
+  }
+  [[ "$(cat "$STATE_FILE")" == pending ]] || {
+    echo "fresh planning launch requires pending mission state" >&2
+    return 1
+  }
+}
+
+publish_running_state() {
+  local temporary
+  verify_pending_state || return 1
+  temporary="$(mktemp "$MISSION_DIR/.state.XXXXXX")" || return 1
+  printf 'running\n' > "$temporary"
+  chmod 0600 "$temporary"
+  fsync_paths "$temporary"
+  mv -f -- "$temporary" "$STATE_FILE"
+  fsync_paths "$STATE_FILE" "$MISSION_DIR"
+}
+
 verify_approved_contract() {
   local APPROVED
   for APPROVED in approved-design.md approved-plan.md brief-exec.md; do
@@ -190,14 +354,15 @@ if [[ -z "$RESUME_MSG" ]]; then
     echo "no brief.md in $MISSION_DIR" >&2
     exit 1
   fi
-  SESSION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+  verify_pending_state || exit 1
+  SESSION_ID="$(publish_planning_session_authority)" || exit 1
   NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   # A fresh spawn over an existing session file keeps the old ids traceable.
   HISTORY=""
   if [[ -f "$SESSION_FILE" ]]; then
     HISTORY="$(grep '^superseded: ' "$SESSION_FILE" 2>/dev/null || true)"
     OLD_ID="$(awk -F': ' '/^session_id:/ {print $2}' "$SESSION_FILE")"
-    if [[ -n "$OLD_ID" ]]; then
+    if [[ -n "$OLD_ID" && "$OLD_ID" != "$SESSION_ID" ]]; then
       if [[ -n "$HISTORY" ]]; then
         HISTORY="$HISTORY
 superseded: $OLD_ID $NOW"
@@ -206,16 +371,27 @@ superseded: $OLD_ID $NOW"
       fi
     fi
   fi
+  SESSION_TEMP="$(mktemp "$MISSION_DIR/.session.XXXXXX")" || exit 1
   {
     if [[ -n "$HISTORY" ]]; then
       printf '%s\n' "$HISTORY"
     fi
     echo "session_id: $SESSION_ID"
     echo "backend: claude-headless"
+    echo "model: $PLAN_MODEL"
     echo "spawned: $NOW"
     echo "stage: plan"
     echo "spawn_pid: $$"
-  } > "$SESSION_FILE"
+  } > "$SESSION_TEMP"
+  chmod 0600 "$SESSION_TEMP"
+  fsync_paths "$SESSION_TEMP"
+  mv -f -- "$SESSION_TEMP" "$SESSION_FILE"
+  fsync_paths "$SESSION_FILE" "$MISSION_DIR"
+  if [[ "${ORC_SPAWN_TEST_FAIL_AFTER_AUTHORITY:-0}" == 1 ]]; then
+    echo "injected failure after planning authority publication" >&2
+    exit 70
+  fi
+  publish_running_state || exit 1
   OUT="$(next_output)"
   cd "$PRIMARY"
   # Brief goes in on stdin — passing it as an argv word risks ARG_MAX.
@@ -231,6 +407,14 @@ else
   if [[ -z "$SESSION_ID" ]]; then
     echo "no session_id in $SESSION_FILE" >&2
     exit 1
+  fi
+  CONTROL_SESSION_ID="$(read_planning_session_authority)" || exit 1
+  if [[ "$SESSION_ID" != "$CONTROL_SESSION_ID" ]]; then
+    echo "planning session authority mismatch" >&2
+    exit 1
+  fi
+  if [[ "$PLAN_MODEL" == claude-opus-5 ]]; then
+    publish_quota_fallback_receipt "$SESSION_ID" || exit 1
   fi
   {
     echo "resumed: $(date -u +%Y-%m-%dT%H:%M:%SZ)"

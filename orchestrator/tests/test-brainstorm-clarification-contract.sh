@@ -96,14 +96,14 @@ check_section_order "clarification classification precedes design publication" \
   'before writing design.md' 'save the resulting validated design'
 
 check_section_contains "phase 3 permits clarification before plan artifacts" \
-  "$SKILL" '## Phase 3 — Fable brainstorm and plan' '## Founder go gate' \
+  "$SKILL" '## Phase 3 — brainstorm and plan' '## Founder go gate' \
   'may return `blocked` with `kind: brainstorm-clarification`'
 check_contains "coordinator relays unresolved brainstorm intent to user" \
   "$MEDIATION" 'relay exactly one question'
 check_compact "coordinator does not self-decide brainstorm intent" \
   "$MEDIATION" 'never route it through reversible implementation detail or silently choose an option'
-check_compact "coordinator reuses exact Fable session after answer" \
-  "$MEDIATION" 'return the answer to the same Fable session'
+check_compact "coordinator reuses exact selected planning session after answer" \
+  "$MEDIATION" 'return the answer to the same selected planning/review session'
 check_compact "brainstorm clarification is not counted as ordinary implementation mediation" \
   "$MEDIATION" 'This is product-intent discovery'
 check_contains "mediation recognizes brainstorm clarification before ordinary triage" \

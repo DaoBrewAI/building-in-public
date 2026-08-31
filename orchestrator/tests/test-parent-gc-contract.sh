@@ -72,11 +72,14 @@ setup_fixture() {
   printf 'verification artifact\n' > "$CONTROL/verification.md"
   printf 'request\n' > "$MISSION/request.md"
   printf 'Briefs: brief.md, brief-exec.md\n' > "$MISSION/MISSION.md"
-  printf 'backend: claude-headless\nstage: review\n' > "$MISSION/session.txt"
+  printf 'session_id: fable-session\nbackend: claude-headless\nmodel: claude-fable-5\nstage: review\n' > "$MISSION/session.txt"
   printf 'approved design\n' > "$CONTROL/approved-design.md"
   printf 'approved plan\n' > "$CONTROL/approved-plan.md"
   printf 'approved brief\n' > "$CONTROL/brief-exec.md"
   printf '0.4.0\n' > "$CONTROL/pipeline-version"
+  printf 'fable-opus\n' > "$MISSION/planning-backend"
+  printf 'fable-opus\n' > "$CONTROL/planning-backend"
+  printf 'fable-session\n' > "$CONTROL/planning-session-id"
   mkdir -p "$CONTROL/tasks"
   (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
     brief-exec.md approved-task-dag.json > approved.sha256)

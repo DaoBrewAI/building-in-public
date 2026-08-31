@@ -72,13 +72,13 @@ for operation in inspect archive unarchive; do
   check "$operation lifecycle bridge succeeds" test "$?" -eq 0
 done
 
-check "inspect initializes the 0.5.1 lifecycle bridge" python3 - "$TMP/inspect.log" <<'PY'
+check "inspect initializes the 0.5.2 lifecycle bridge" python3 - "$TMP/inspect.log" <<'PY'
 import json, sys
 rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 methods = [row.get("method") for row in rows]
 params = next(row["params"] for row in rows if row.get("method") == "initialize")
 ok = methods[:4] == ["initialize", "initialized", "thread/list", "thread/list"]
-ok = ok and params.get("clientInfo", {}).get("version") == "0.5.1"
+ok = ok and params.get("clientInfo", {}).get("version") == "0.5.2"
 raise SystemExit(0 if ok else 1)
 PY
 check "inspect verifies list visibility before exact read" python3 - "$TMP/inspect.log" <<'PY'

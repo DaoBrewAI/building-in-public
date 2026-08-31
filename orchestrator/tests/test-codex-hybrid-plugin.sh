@@ -22,15 +22,15 @@ check() {
 contains() { grep -Fq -- "$2" "$1"; }
 compact() { tr '\n' ' ' < "$1" | sed 's/[[:space:]][[:space:]]*/ /g' | grep -Fqi -- "$2"; }
 
-check "Codex manifest is the 0.5.1 cache-busted release" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.1\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest is 0.5.1" bash -c '[[ "$(jq -r .version "$1")" = 0.5.1 ]]' _ "$CLAUDE_MANIFEST"
+check "Codex manifest is the 0.5.2 cache-busted release" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.2\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest is 0.5.2" bash -c '[[ "$(jq -r .version "$1")" = 0.5.2 ]]' _ "$CLAUDE_MANIFEST"
 check "both hosts share one skill tree" bash -c \
   '[[ "$(jq -r .skills "$1")" = ./skills/ && "$(jq -r '\''.skills | join(" ")'\'' "$2")" = ./skills/ ]]' \
   _ "$CODEX_MANIFEST" "$CLAUDE_MANIFEST"
 check "Claude command routes to shared skill" contains "$ROOT/commands/orchestrate.md" 'orchestrator:orchestrating'
 
-check "Fable owns brainstorm plan and review" compact "$SKILL" 'Fable-5 high owns brainstorm, design, plan, review, and re-review'
+check "selected backend owns brainstorm plan and review" compact "$SKILL" 'One mission-scoped planning backend owns brainstorm, design, plan, review, and re-review'
 check "Codex owns implementation" compact "$SKILL" 'GPT-5.6-Sol high owns every implementation'
 check "native child tasks are visible" compact "$SKILL" 'coordinator creates and messages each visible project-local Codex task'
 check "hidden codex exec is forbidden" compact "$SKILL" 'Never use hidden `codex exec` sessions'
@@ -41,7 +41,7 @@ check "Phase 0 is report-only" contains "$SKILL" 'Run report-only discovery'
 check "Phase 0 never uses hub-wide cleanup" contains "$SKILL" 'Never use hub-wide destructive cleanup here'
 check "brainstorm clarification bridge remains" contains "$SKILL" 'kind: brainstorm-clarification'
 check "founder go remains the only planned pause" contains "$SKILL" '`planned` is the only planned human pause'
-check "review reuses Fable" contains "$SKILL" '--stage review'
+check "review reuses selected planning session" compact "$SKILL" 'resume the same selected planning/review session for review'
 check "blocked work uses mediation" contains "$SKILL" 'orchestrator:orchestrator-mediation'
 check "acceptance marks terminal before GC" compact "$SKILL" 'Write mission state/phase `accepted`, then read the cleanup reference'
 
@@ -83,7 +83,7 @@ check "cleanup reference never deletes target" contains "$CLEANUP_REF" 'Never de
 check "continuation reference preserves immutable request" contains "$CONTINUATION_REF" 'request ID is the SHA-256'
 check "continuation limits replacement" compact "$CONTINUATION_REF" 'allow at most one replacement'
 check "continuation promotion prevents dual ownership" contains "$CONTINUATION_REF" 'without dual ownership'
-check "README documents dual-host native package" compact "$README" 'Native Codex mission control with fixed backend ownership'
+check "README documents explicit backend ownership" compact "$README" 'Native Codex mission control with explicit backend ownership'
 
 echo "  codex-hybrid-plugin: $OK/$N"
 [[ "$OK" -eq "$N" ]]

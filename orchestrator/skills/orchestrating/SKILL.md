@@ -1,27 +1,27 @@
 ---
 name: orchestrating
-description: Run native Hybrid Codex missions in which Claude Fable-5 brainstorms, plans, and independently reviews while visible Codex GPT-5.6-Sol child tasks perform every implementation and rework change.
+description: Run native Hybrid Codex missions with a user-selected Fable/Opus or GPT-5.6-Sol Ultra planning/review backend while visible GPT-5.6-Sol child tasks perform every implementation and rework change.
 ---
 
 # Native Hybrid Orchestrator
 
-Coordinate one durable native `0.4.0` mission pipeline. Fable plans and reviews;
-visible Codex tasks implement; the coordinator owns authority, scheduling,
-integration, mediation, cleanup, and continuation.
+Coordinate one durable native `0.4.0` mission pipeline. The user-selected
+backend plans and reviews; visible Codex tasks implement; the coordinator owns
+authority, scheduling, integration, mediation, cleanup, and continuation.
 
 ## Fixed ownership
 
-- Fable-5 high owns brainstorm, design, plan, review, and re-review. When Fable
-  has a quota wall, automatically retry that stage once with Opus-5 high and
-  record `quota-fallback: <date> <stage> fable→opus`.
+- One mission-scoped planning backend owns brainstorm, design, plan, review,
+  and re-review: either Fable-5 high with Opus-5 high quota fallback, or one
+  visible project-local GPT-5.6-Sol Ultra planning/review task.
 - GPT-5.6-Sol high owns every implementation, test-producing fix, and rework.
   The coordinator creates and messages each visible project-local Codex task
   with app-native task APIs, then adopts that task's native worktree through
   `scripts/task-worktree.sh`. Never use hidden `codex exec` sessions or App
   Server execution.
-- Fable is read-only on worktrees. Codex children write only their declared
-  task files and task-state directory. Commits pass through
-  `scripts/commit-broker.sh`.
+- The selected planning/review session is read-only on product worktrees. Codex
+  implementation children write only their declared task files and task-state
+  directory. Commits pass through `scripts/commit-broker.sh`.
 - Branches are `orc/<mission>` and `orc-task/<mission>/<task-id>`. Independent
   missions may share a repository because each has isolated worktrees.
 
@@ -31,6 +31,8 @@ Read only the reference needed for the current stage, completely, before acting:
 
 - Before computing a ready set, creating/resuming a child, consuming an outcome,
   or integrating a task, read [references/task-execution.md](references/task-execution.md).
+- Before launching or resuming brainstorm, design, plan, review, or re-review,
+  read [references/planning-and-review.md](references/planning-and-review.md).
 - Before child/parent collection, task-window archival, rework reprovision, or a
   cleanup retry, read
   [references/cleanup-and-rework.md](references/cleanup-and-rework.md).
@@ -49,22 +51,41 @@ Resolve `PLUGIN_DIR` by moving up two directories from this file. Require:
 - `scripts/validate-task-dag.sh`, `task-worktree.sh`, `integrate-task.sh`,
   `commit-broker.sh`, `orchestrator-gc.sh`, `classify-mission-version.sh`, and
   `codex-task-client.py`;
+- `skills/orchestrating/references/planning-and-review.md`, `task-execution.md`,
+  `cleanup-and-rework.md`, and `continuation.md`;
 - `templates/MISSION.md`, `brief-codex.md`, `brief-exec.md`, `task-brief.md`,
   `task-dag.json`, `report.md`, `worker-settings.json`, and `board.html`.
 
 Missing assets are a hard plugin-installation error.
 
+## Entry — planning/review backend
+
+The first user-facing action for every new mission is this choice:
+
+1. **Fable / Opus** — Fable-5 high, with one Opus-5 high quota fallback.
+2. **GPT-5.6-Sol Ultra** — one visible same-project native planning/review task.
+
+If the user already selected one option in the invocation, do not ask again. If
+an existing mission has matching planning-backend authority, reuse it without
+asking. Do not select a default or continue a new mission until the user chooses.
+
+Persist exactly one immutable planning-backend value in both mission and
+control: `fable-opus` or `codex-ultra`. Publish it before launching planning,
+verify exact equality on every resume and review transition, and never reinterpret
+a model name from chat after authority exists.
+
 ## External planning mode
 
-Invoking Orchestrator authorizes `auto-least-scope` Fable/Opus planning and
+Selecting `fable-opus` authorizes `auto-least-scope` Fable/Opus planning and
 review for task-relevant source, build configuration, and tests. Give this
-nonblocking notice once, then continue:
+nonblocking notice once after selection, then continue:
 
 `External planning: auto least-scope — Fable/Opus read-only; relevant source/tests only; secrets and customer/personal data excluded. Continuing now.`
 
 Do not ask for confirmation unless the user explicitly selected
 `approval-required`. Use `no-external` only when the user explicitly forbids
-Fable/Opus; the fixed Hybrid workflow then cannot run.
+Fable/Opus; that selection then cannot run. Selecting `codex-ultra` never
+invokes Fable/Opus or emits the external-planning notice.
 
 Always exclude credentials, tokens, OAuth values, personal/customer data,
 customer documents/outputs, ignored/private corpora, and unrelated files.
@@ -119,7 +140,9 @@ Resolve the repository set without making product decisions. Create one unique
 date-prefixed mission directory and its matching control directory. Persist the
 complete user request in `request.md`, render `MISSION.md`, write `pending`, and
 atomically publish coordinator-owned `pipeline-version`=`0.4.0` before exposing
-any worker-writable root. If repository scope is materially ambiguous, ask once.
+any worker-writable root. Atomically publish matching mission/control
+`planning-backend` files from the entry choice in the same phase. If repository
+scope is materially ambiguous, ask once.
 
 ## Phase 2 — provision
 
@@ -140,21 +163,25 @@ any worker-writable root. If repository scope is materially ambiguous, ask once.
 6. Run `provision-preflight.sh` outside the worker sandbox. Do not launch over
    an unadjudicated red baseline.
 
-## Phase 3 — Fable brainstorm and plan
+## Phase 3 — brainstorm and plan
 
-Write `running`, then launch `spawn-worker.sh` with the mission/control paths and
-all worktrees. The same Fable session invokes `10x-engineer:brainstorming` and
-may return `blocked` with `kind: brainstorm-clarification`. Mediate that single
-question and resume the same session. It then writes `design.md`, `plan.md`,
+Read `planning-and-review.md`. For `fable-opus`, keep `pending` and use the
+launcher; it durably publishes both session authorities, atomically transitions
+to `running`, then sends the brief. For `codex-ultra`, launch/health-accept the
+task while the mission remains `pending`; only after thread authority is durable,
+write `running` and send the brief. The accepted planning
+session invokes `10x-engineer:brainstorming` and may return `blocked` with
+`kind: brainstorm-clarification`. Mediate that single question and resume the
+same accepted session. It then writes `design.md`, `plan.md`,
 `plan-review.html`, and `task-dag.json`, sets `planned`, and exits.
 
 Do not poll or inspect a healthy running stage. The process exit is the wake.
 
 ## Founder go gate
 
-`planned` is the only planned human pause. Require and show `design.md`,
+`planned` is the only planned human pause after the backend choice. Require and show `design.md`,
 `plan.md`, and `plan-review.html`. Ask for explicit **go**. Corrections resume
-the same Fable session so design changes before plan regeneration.
+the same accepted planning session so design changes before plan regeneration.
 
 On go:
 
@@ -168,22 +195,25 @@ On go:
 
 ## State router
 
-- `running`: reconcile the recorded Fable process or accepted child tasks; do
-  not duplicate healthy work.
+- `running`: reconcile the selected planning process or accepted child tasks;
+  do not duplicate healthy work.
 - `planned`: enter the founder go gate.
 - `executed`: verify frozen authority, generate coordinator-owned review diffs,
   read `cleanup-and-rework.md`, batch-collect every integrated child, archive
-  every child window, then write `running` and resume the same Fable session
-  with `--stage review`. Do not collect an individual child earlier.
+  every child window, then write `running`, read `planning-and-review.md`, and
+  resume the same selected planning/review session for review. Do not collect an
+  individual child earlier.
 - `rework`: read `cleanup-and-rework.md`; route every finding to its owning
   child task and reuse that task's accepted thread.
 - `blocked`: use mediation, persist `ANSWER-<n>.md` and the decision, then resume
-  the exact Fable stage or accepted Codex task that blocked.
+  the exact selected planning stage or accepted implementation task that blocked.
 - `review`: enter acceptance.
 - `accepted` or `cleanup_pending`: finish mission-scoped cleanup and archival.
 - `failed`: report once and preserve all resources.
-- Fable exit 75: schedule one retry of the same stage at the reset time; it is
-  not a crash. Two real crashes preserve failure state and resources.
+- On `fable-opus`, Fable exit 75 schedules one retry of the same stage at the
+  reset time; it is not a crash. On `codex-ultra`, use native task health and
+  never change backend implicitly. Two real crashes preserve failure state and
+  resources.
 
 ## BLOCKED mediation
 
@@ -194,8 +224,9 @@ a replacement task merely to mediate a question.
 
 ## Acceptance
 
-1. Require real design/plan, brokered commits, Fable verdict, task reports, and
-   raw verification evidence. Missing evidence returns to its owner.
+1. Require real design/plan, brokered commits, the selected backend's verdict,
+   task reports, and raw verification evidence. Missing evidence returns to its
+   owner.
 2. Verify every diff stays inside declared files/contracts and excludes planted
    settings. Code corrections always return to Codex.
 3. Require each live checkout clean and on its default branch. Merge verified

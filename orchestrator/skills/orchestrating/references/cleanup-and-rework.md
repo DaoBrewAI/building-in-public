@@ -12,9 +12,9 @@ report, and task window remains intact.
 Then run one mission-scoped GC pass to collect all integrated children.
 Require every task to reach `collected`, then archive every accepted child window
 only after the batch collection has completed. If any child fails collection or
-archival, retain the mission in `cleanup_pending`; do not start Fable review with
+archival, retain the mission in `cleanup_pending`; do not start selected-backend review with
 a partially collected batch. Once all children are collected and archived,
-resume the same Fable session for independent review without another user gate.
+resume the same accepted planning/review session without another user gate.
 
 ## Child collection
 
@@ -46,7 +46,7 @@ the ID for Phase 0 retry. Archive state is hygiene, never completion evidence.
 
 ## Rework
 
-Map each Fable finding to the task owning its files/contracts. Stop after three
+Map each selected-reviewer finding to the task owning its files/contracts. Stop after three
 nonconverging review rounds.
 
 For each affected task:
@@ -61,7 +61,7 @@ For each affected task:
 
 Never send against a collected/missing worktree or create a replacement owner.
 After brokered fixes and verification, reintegrate and recollect. Rearchive only after verified reintegration and exact worktree and branch collection, using the
-same thread before Fable re-review.
+same thread before selected-backend re-review.
 
 ### Reprovision crash recovery
 

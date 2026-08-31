@@ -150,6 +150,10 @@ cat > "$MISSION/MISSION.md" <<'EOF'
 Briefs: coordinator-owned Hybrid pipeline
 EOF
 printf 'planned\n' > "$MISSION/state"
+printf 'fable-opus\n' > "$MISSION/planning-backend"
+printf 'fable-opus\n' > "$CONTROL/planning-backend"
+printf 'session_id: fable-session\nbackend: claude-headless\nmodel: claude-fable-5\nstage: plan\n' > "$MISSION/session.txt"
+printf 'fable-session\n' > "$CONTROL/planning-session-id"
 
 cat > "$MISSION/task-dag.json" <<'JSON'
 {
@@ -442,12 +446,12 @@ check "task API fixture observed create, archive failure/retry, unarchive/rearch
   _ "$TASK_API_LOG"
 
 # Task 8 documentation is part of the release contract.
-check "Codex manifest declares the 0.5.1 native-only release" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.1\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest declares the same 0.5.1 release" bash -c \
-  'codex="$(jq -r .version "$2")"; [[ "$(jq -r .version "$1")" = 0.5.1 && "${codex%%+*}" = 0.5.1 ]]' \
+check "Codex manifest declares the 0.5.2 native-only release" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.2\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest declares the same 0.5.2 release" bash -c \
+  'codex="$(jq -r .version "$2")"; [[ "$(jq -r .version "$1")" = 0.5.2 && "${codex%%+*}" = 0.5.2 ]]' \
   _ "$CLAUDE_MANIFEST" "$CODEX_MANIFEST"
-check "README labels the Orchestrator 0.5.1 release" contains "$README" "Orchestrator 0.5.1"
+check "README labels the Orchestrator 0.5.2 release" contains "$README" "Orchestrator 0.5.2"
 check "README documents the native DAG lifecycle" contains "$README" "Visible Codex DAG execution"
 check "README documents progressive disclosure" contains "$README" "Progressive disclosure"
 check "README documents native-only authority" contains "$README" "supports only native pipeline authority"

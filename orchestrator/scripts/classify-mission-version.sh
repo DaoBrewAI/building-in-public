@@ -29,6 +29,7 @@ exec python3 - "$MISSION_DIR" "$CONTROL_DIR" <<'PY'
 from __future__ import print_function
 
 import errno
+import json
 import os
 import re
 import signal
@@ -226,6 +227,8 @@ def classify(mission_path, control_path):
 
         mission_files = {
             "mission": optional_regular(mission_fd, "MISSION.md", "MISSION.md", descriptors),
+            "planning_backend": optional_regular(
+                mission_fd, "planning-backend", "mission planning backend", descriptors),
             "request": optional_regular(mission_fd, "request.md", "request.md", descriptors),
             "session": optional_regular(mission_fd, "session.txt", "session.txt", descriptors),
             "state": optional_regular(mission_fd, "state", "state", descriptors),
@@ -233,6 +236,18 @@ def classify(mission_path, control_path):
         control_files = {
             "version": optional_regular(
                 control_fd, "pipeline-version", "pipeline-version", descriptors),
+            "planning_backend": optional_regular(
+                control_fd, "planning-backend", "control planning backend", descriptors),
+            "planning_thread": optional_regular(
+                control_fd, "planning-thread-id", "planning thread id", descriptors),
+            "planning_health": optional_regular(
+                control_fd, "planning-thread-health.json", "planning thread health", descriptors),
+            "planning_session": optional_regular(
+                control_fd, "planning-session-id", "planning session id", descriptors),
+            "quota_plan": optional_regular(
+                control_fd, "quota-fallback-plan.json", "plan quota fallback", descriptors),
+            "quota_review": optional_regular(
+                control_fd, "quota-fallback-review.json", "review quota fallback", descriptors),
             "dag": optional_regular(
                 control_fd, "approved-task-dag.json", "approved task DAG", descriptors),
         }
@@ -244,9 +259,12 @@ def classify(mission_path, control_path):
             os.kill(os.getppid(), signal.SIGUSR1)
             os.kill(os.getpid(), signal.SIGSTOP)
 
-        for key in ("mission", "session", "state"):
+        for key in ("mission", "planning_backend", "session", "state"):
             read_regular(mission_files[key])
-        read_regular(control_files["version"])
+        for key in (
+                "version", "planning_backend", "planning_thread", "planning_health",
+                "planning_session", "quota_plan", "quota_review"):
+            read_regular(control_files[key])
 
         for snapshot in mission_files.values():
             revalidate_entry(mission_fd, snapshot)
@@ -269,6 +287,11 @@ def classify(mission_path, control_path):
         mission = decode(mission_files["mission"])
         session = decode(mission_files["session"])
         state = decode(mission_files["state"])
+        mission_planning = decode(mission_files["planning_backend"])
+        control_planning = decode(control_files["planning_backend"])
+        planning_thread = decode(control_files["planning_thread"])
+        planning_health = decode(control_files["planning_health"])
+        planning_session = decode(control_files["planning_session"])
         has_request = not mission_files["request"]["missing"]
         has_dag = not control_files["dag"]["missing"]
         has_tasks = not tasks["missing"]
@@ -276,6 +299,12 @@ def classify(mission_path, control_path):
             reject("partial DAG/task registry authority")
         if version != "0.4.0\n":
             reject("native pipeline-version must be exactly 0.4.0")
+        valid_planning = {"fable-opus\n", "codex-ultra\n"}
+        if mission_planning not in valid_planning or control_planning not in valid_planning:
+            reject("planning backend authority is missing or unsupported")
+        if mission_planning != control_planning:
+            reject("mission and control planning backend authority differ")
+        planning_backend = mission_planning[:-1]
         valid_states = {
             "pending", "running", "planned", "executed", "rework",
             "blocked", "review", "accepted", "failed", "cleanup_pending",
@@ -288,8 +317,102 @@ def classify(mission_path, control_path):
         if (not state.endswith("\n") or state.count("\n") != 1 or
                 state[:-1] not in valid_states):
             reject("native mission state is malformed or unsupported")
-        if session is not None and re.search(r"(?m)^stage:", session) is None:
-            reject("session authority contradicts the native pipeline")
+        state_value = state[:-1]
+
+        def one_session_value(key):
+            matches = re.findall(r"(?m)^" + re.escape(key) + r": ([^\r\n]+)$", session or "")
+            if len(matches) != 1:
+                reject("planning session %s authority is malformed" % key)
+            return matches[0]
+
+        quota_snapshots = (
+            ("plan", control_files["quota_plan"]),
+            ("review", control_files["quota_review"]),
+        )
+        if planning_backend == "fable-opus":
+            if planning_thread is not None or planning_health is not None:
+                reject("Fable/Opus mission has Codex planning-thread authority")
+            if (session is None) != (planning_session is None):
+                reject("partial Fable/Opus planning session authority")
+            if state_value != "pending" and session is None:
+                reject("active Fable/Opus mission lacks planning session authority")
+            if session is None:
+                if any(not item[1]["missing"] for item in quota_snapshots):
+                    reject("quota fallback exists without planning session authority")
+            else:
+                session_id = one_session_value("session_id")
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", session_id):
+                    reject("Fable/Opus planning session id is malformed")
+                if planning_session != session_id + "\n":
+                    reject("Fable/Opus planning session authority mismatch")
+                if one_session_value("backend") != "claude-headless":
+                    reject("Fable/Opus session backend authority is malformed")
+                if one_session_value("model") != "claude-fable-5":
+                    reject("Fable/Opus initial planning model is invalid")
+                stages = re.findall(r"(?m)^stage: ([^\r\n]+)$", session)
+                if not stages or any(value not in {"plan", "review"} for value in stages):
+                    reject("Fable/Opus planning session stage is invalid")
+                for expected_stage, snapshot in quota_snapshots:
+                    if snapshot["missing"]:
+                        continue
+                    try:
+                        receipt = json.loads(decode(snapshot))
+                    except (TypeError, ValueError):
+                        reject("quota fallback authority is invalid JSON")
+                    if (not isinstance(receipt, dict) or
+                            set(receipt) != {"from", "session_id", "stage", "to"} or
+                            receipt != {
+                                "from": "claude-fable-5",
+                                "session_id": session_id,
+                                "stage": expected_stage,
+                                "to": "claude-opus-5",
+                            }):
+                        reject("quota fallback authority contradicts planning session")
+        else:
+            if planning_session is not None or any(
+                    not item[1]["missing"] for item in quota_snapshots):
+                reject("Codex Ultra mission has Claude planning authority")
+            present = (session is not None, planning_thread is not None, planning_health is not None)
+            if any(present) and not all(present):
+                reject("partial Codex Ultra planning task authority")
+            if state_value != "pending" and not all(present):
+                reject("active Codex Ultra mission lacks planning task authority")
+            if all(present):
+                if one_session_value("backend") != "codex-native":
+                    reject("Codex planning session backend is invalid")
+                if one_session_value("model") != "gpt-5.6-sol":
+                    reject("Codex planning session model is invalid")
+                if one_session_value("effort") != "ultra":
+                    reject("Codex planning session effort is invalid")
+                thread_id = one_session_value("thread_id")
+                if one_session_value("stage") not in {"plan", "review"}:
+                    reject("Codex planning session stage is invalid")
+                if planning_thread != thread_id + "\n":
+                    reject("Codex planning thread authority differs from session")
+                try:
+                    health = json.loads(planning_health)
+                except (TypeError, ValueError):
+                    reject("Codex planning health authority is invalid JSON")
+                expected_health_keys = {
+                    "created", "visible", "title_verified", "first_turn_exists",
+                    "startup_evidence", "settings_recorded", "writable_root_verified",
+                    "status", "thread_id", "model", "effort", "project_id", "cwd",
+                }
+                if not isinstance(health, dict) or set(health) != expected_health_keys:
+                    reject("Codex planning health authority has an invalid schema")
+                for key in (
+                    "created", "visible", "title_verified", "first_turn_exists",
+                    "startup_evidence", "settings_recorded", "writable_root_verified",
+                ):
+                    if health[key] is not True:
+                        reject("Codex planning health check is incomplete")
+                if (health["thread_id"] != thread_id or
+                        health["model"] != "gpt-5.6-sol" or
+                        health["effort"] != "ultra" or
+                        health["status"] not in {"inProgress", "completed", "idle"} or
+                        not isinstance(health["project_id"], str) or not health["project_id"] or
+                        not isinstance(health["cwd"], str) or not health["cwd"]):
+                    reject("Codex planning health authority contradicts the session")
         return "native-0.4"
     finally:
         for descriptor in reversed(descriptors):

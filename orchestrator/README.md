@@ -1,8 +1,9 @@
-# Orchestrator 0.5.1
+# Orchestrator 0.5.2
 
-Native Codex mission control with fixed backend ownership:
+Native Codex mission control with explicit backend ownership:
 
-- Claude Fable-5 brainstorms, designs, plans, and independently reviews.
+- Each new mission first chooses Fable / Opus or GPT-5.6-Sol Ultra for
+  brainstorm, design, plan, review, and re-review.
 - Visible Codex GPT-5.6-Sol child tasks implement and rework one approved DAG
   node each.
 - The coordinator owns durable authority, scheduling, integration, mediation,
@@ -37,16 +38,19 @@ adapter; it does not carry a second coordinator implementation.
    new mission.
 2. **Record and provision** — persist the request and native authority, create
    guarded mission worktrees, and attest the baseline.
-3. **Fable brainstorm and plan** — ask material clarification questions, write
-   design/plan/review companion/task DAG, then pause once at founder **go**.
+3. **Selected-backend brainstorm and plan** — use Fable/Opus or one visible
+   same-project GPT-5.6-Sol Ultra planning task to ask material clarification
+   questions, write design/plan/review companion/task DAG, then pause once at
+   founder **go**.
 4. **Visible Codex DAG execution** — use the app-native task API to create every
    child and native worktree under the coordinator's saved Git project, adopt
    that exact worktree into guarded Orchestrator authority, use native follow-up
    messaging, consume only compact lifecycle output, broker commits, and
    integrate each verified tip while retaining its resources.
-5. **Batch child cleanup, then Fable review** — after every task is integrated,
-   collect all child resources and archive their windows in one batch; then reuse the same Fable session and the
-   exact accepted Codex task thread for every finding.
+5. **Batch child cleanup, then selected-backend review** — after every task is
+   integrated, collect all child resources and archive their windows in one
+   batch; then reuse the accepted planning/review session and the exact accepted
+   implementation task thread for every finding.
 6. **Acceptance and cleanup** — verify the merged tree, mark accepted, then run
    mission-scoped GC and archive only after durable collection.
 
@@ -58,6 +62,7 @@ stage that needs them:
 | Reference | Loaded for |
 |---|---|
 | `references/task-execution.md` | ready set, child creation/health, outcomes, integration |
+| `references/planning-and-review.md` | backend selection, planning session, review/re-review |
 | `references/cleanup-and-rework.md` | GC, task-window archive, rework, parent collection |
 | `references/continuation.md` | compaction, continuation acceptance, promotion |
 
@@ -140,7 +145,7 @@ branches are never deletion targets.
 
 Integrated child resources remain visible until every approved task is
 integrated. One mission-scoped batch then collects all children and archives all
-child windows before independent Fable review. Per-task eager GC is forbidden.
+child windows before selected-backend review. Per-task eager GC is forbidden.
 
 ## Continuation
 

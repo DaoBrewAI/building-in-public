@@ -4,7 +4,7 @@
 - **Files changed:** {{per repo: git diff <base>...HEAD --stat}}
 
 ## Code review
-{{Fable same-session review verdict + each finding and how it was resolved — paste the actual verdict, no summaries}}
+{{Selected backend same-session review verdict + each finding and how it was resolved — paste the actual verdict, no summaries}}
 
 ## Verification
 {{commands run + raw pass/fail output per repo — paste real output, never "all passing"}}

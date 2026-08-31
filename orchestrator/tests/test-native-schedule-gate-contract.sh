@@ -36,11 +36,14 @@ setup_repo() {
   printf 'request\n' > "$MISSION_DIR/request.md"
   printf 'Briefs: brief.md, brief-exec.md\n' > "$MISSION_DIR/MISSION.md"
   printf 'planned\n' > "$MISSION_DIR/state"
-  printf 'backend: hybrid\nstage: plan\n' > "$MISSION_DIR/session.txt"
+  printf 'session_id: fable-session\nbackend: claude-headless\nmodel: claude-fable-5\nstage: plan\n' > "$MISSION_DIR/session.txt"
 }
 
 make_native_authority() {
   printf '0.4.0\n' > "$CONTROL/pipeline-version"
+  printf 'fable-opus\n' > "$MISSION_DIR/planning-backend"
+  printf 'fable-opus\n' > "$CONTROL/planning-backend"
+  printf 'fable-session\n' > "$CONTROL/planning-session-id"
   printf 'design\n' > "$CONTROL/approved-design.md"
   printf 'plan\n' > "$CONTROL/approved-plan.md"
   printf 'brief\n' > "$CONTROL/brief-exec.md"

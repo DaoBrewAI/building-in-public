@@ -23,11 +23,11 @@ from planning to review or resumed the same external session.
 
 When the file contains `kind: brainstorm-clarification`, first check whether the
 current request or an exact durable user ruling already answers it. If yes, cite
-that answer. Otherwise relay exactly one question with Fable's 2–3 options and
+that answer. Otherwise relay exactly one question with the selected planner's 2–3 options and
 recommendation, then wait for the user. This is product-intent discovery: never
 route it through reversible implementation detail or silently choose an option
-for the user. Keep the relay concise and return the answer to the same Fable
-session through the coordinator's brainstorm-resume path.
+for the user. Keep the relay concise and return the answer to the same selected
+planning/review session through the coordinator's brainstorm-resume path.
 
 ## (a) Answerable — answer it yourself
 

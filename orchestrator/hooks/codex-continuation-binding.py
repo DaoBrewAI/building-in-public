@@ -214,6 +214,179 @@ def file_record(
     }
 
 
+def optional_scalar_record(path: str, label: str, parent: str) -> Optional[dict[str, Any]]:
+    return scalar_record(path, label, parent) if os.path.lexists(path) else None
+
+
+def optional_file_record(path: str, label: str, parent: str) -> Optional[dict[str, Any]]:
+    return file_record(path, label, parent) if os.path.lexists(path) else None
+
+
+def bound_bytes(record: dict[str, Any], label: str) -> bytes:
+    try:
+        return base64.b64decode(record["bytes_b64"], validate=True)
+    except (KeyError, ValueError) as error:
+        raise AuthorityError(f"invalid bound bytes for {label}") from error
+
+
+def planning_session_values(record: dict[str, Any], label: str) -> dict[str, list[str]]:
+    try:
+        text = bound_bytes(record, label).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AuthorityError(f"invalid UTF-8 in {label}") from error
+    values: dict[str, list[str]] = {}
+    for key, value in re.findall(r"(?m)^([A-Za-z_]+): ([^\r\n]+)$", text):
+        values.setdefault(key, []).append(value)
+    return values
+
+
+def one_planning_value(values: dict[str, list[str]], key: str, label: str) -> str:
+    matches = values.get(key, [])
+    if len(matches) != 1:
+        raise AuthorityError(f"invalid {label} {key} authority")
+    return strict_text(matches[0], f"{label} {key}")
+
+
+def validate_codex_health(record: dict[str, Any], thread_id: str) -> None:
+    try:
+        health = json.loads(bound_bytes(record, "planning thread health"))
+    except (TypeError, ValueError, UnicodeDecodeError) as error:
+        raise AuthorityError("invalid planning thread health JSON") from error
+    exact_keys(
+        health,
+        {
+            "created", "visible", "title_verified", "first_turn_exists",
+            "startup_evidence", "settings_recorded", "writable_root_verified",
+            "status", "thread_id", "model", "effort", "project_id", "cwd",
+        },
+        "planning thread health",
+    )
+    for key in (
+        "created", "visible", "title_verified", "first_turn_exists",
+        "startup_evidence", "settings_recorded", "writable_root_verified",
+    ):
+        if health[key] is not True:
+            raise AuthorityError("incomplete planning thread health")
+    if (
+        health["thread_id"] != thread_id
+        or health["model"] != "gpt-5.6-sol"
+        or health["effort"] != "ultra"
+        or health["status"] not in {"inProgress", "completed", "idle"}
+    ):
+        raise AuthorityError("planning thread health contradicts session authority")
+    strict_text(health["project_id"], "planning project id")
+    strict_text(health["cwd"], "planning cwd")
+
+
+def validate_quota_receipt(
+    record: dict[str, Any], stage: str, session_id: str
+) -> None:
+    try:
+        receipt = json.loads(bound_bytes(record, f"{stage} quota fallback"))
+    except (TypeError, ValueError, UnicodeDecodeError) as error:
+        raise AuthorityError("invalid quota fallback JSON") from error
+    exact_keys(receipt, {"from", "session_id", "stage", "to"}, "quota fallback")
+    if receipt != {
+        "from": "claude-fable-5",
+        "session_id": session_id,
+        "stage": stage,
+        "to": "claude-opus-5",
+    }:
+        raise AuthorityError("quota fallback contradicts planning session authority")
+
+
+def planning_authority_records(
+    mission_dir: str,
+    control_mission: str,
+    backend: str,
+    state: str,
+) -> dict[str, Any]:
+    session = optional_file_record(
+        os.path.join(mission_dir, "session.txt"), "planning session", mission_dir
+    )
+    planning_session = optional_scalar_record(
+        os.path.join(control_mission, "planning-session-id"),
+        "planning session id",
+        control_mission,
+    )
+    planning_thread = optional_scalar_record(
+        os.path.join(control_mission, "planning-thread-id"),
+        "planning thread",
+        control_mission,
+    )
+    planning_health = optional_file_record(
+        os.path.join(control_mission, "planning-thread-health.json"),
+        "planning thread health",
+        control_mission,
+    )
+    quota_fallbacks = {
+        stage: optional_file_record(
+            os.path.join(control_mission, f"quota-fallback-{stage}.json"),
+            f"{stage} quota fallback",
+            control_mission,
+        )
+        for stage in ("plan", "review")
+    }
+    if backend == "fable-opus":
+        if planning_thread is not None or planning_health is not None:
+            raise AuthorityError("Fable/Opus mission has Codex planning-thread authority")
+        if (session is None) != (planning_session is None):
+            raise AuthorityError("partial Fable/Opus planning session authority")
+        if state != "pending" and session is None:
+            raise AuthorityError("active Fable/Opus mission lacks planning session authority")
+        if session is None:
+            if any(value is not None for value in quota_fallbacks.values()):
+                raise AuthorityError("quota fallback exists without planning session authority")
+        else:
+            values = planning_session_values(session, "Fable/Opus planning session")
+            session_id = one_planning_value(values, "session_id", "Fable/Opus planning session")
+            if not ID_RE.fullmatch(session_id) or planning_session["value"] != session_id:
+                raise AuthorityError("Fable/Opus planning session authority mismatch")
+            if one_planning_value(values, "backend", "Fable/Opus planning session") != "claude-headless":
+                raise AuthorityError("invalid Fable/Opus planning backend")
+            if one_planning_value(values, "model", "Fable/Opus planning session") != "claude-fable-5":
+                raise AuthorityError("invalid Fable/Opus initial planning model")
+            stages = values.get("stage", [])
+            if not stages or any(stage not in {"plan", "review"} for stage in stages):
+                raise AuthorityError("invalid Fable/Opus planning stage")
+            for stage, receipt in quota_fallbacks.items():
+                if receipt is not None:
+                    validate_quota_receipt(receipt, stage, session_id)
+    elif backend == "codex-ultra":
+        if planning_session is not None or any(
+            value is not None for value in quota_fallbacks.values()
+        ):
+            raise AuthorityError("Codex Ultra mission has Claude planning authority")
+        present = (session is not None, planning_thread is not None, planning_health is not None)
+        if any(present) and not all(present):
+            raise AuthorityError("partial Codex Ultra planning task authority")
+        if state != "pending" and not all(present):
+            raise AuthorityError("active Codex Ultra mission lacks planning task authority")
+        if all(present):
+            values = planning_session_values(session, "Codex Ultra planning session")
+            if one_planning_value(values, "backend", "Codex Ultra planning session") != "codex-native":
+                raise AuthorityError("invalid Codex Ultra planning backend")
+            if one_planning_value(values, "model", "Codex Ultra planning session") != "gpt-5.6-sol":
+                raise AuthorityError("invalid Codex Ultra planning model")
+            if one_planning_value(values, "effort", "Codex Ultra planning session") != "ultra":
+                raise AuthorityError("invalid Codex Ultra planning effort")
+            thread_id = one_planning_value(values, "thread_id", "Codex Ultra planning session")
+            if one_planning_value(values, "stage", "Codex Ultra planning session") not in {"plan", "review"}:
+                raise AuthorityError("invalid Codex Ultra planning stage")
+            if planning_thread["value"] != thread_id:
+                raise AuthorityError("Codex Ultra planning thread authority mismatch")
+            validate_codex_health(planning_health, thread_id)
+    else:
+        raise AuthorityError("unsupported planning backend")
+    return {
+        "planning_health": planning_health,
+        "planning_session": planning_session,
+        "planning_thread": planning_thread,
+        "quota_fallbacks": quota_fallbacks,
+        "session": session,
+    }
+
+
 def direct_directories(path: str, label: str) -> list[str]:
     result: list[str] = []
     for entry in os.scandir(path):
@@ -292,11 +465,34 @@ def preflight_hub(hub: str) -> str:
 
     for mission in direct_directories(missions_root, "missions root"):
         mission_dir = safe_directory(os.path.join(missions_root, mission), "mission", missions_root)
-        scalar_record(os.path.join(mission_dir, "state"), "mission state", mission_dir)
+        mission_state = scalar_record(
+            os.path.join(mission_dir, "state"), "mission state", mission_dir
+        )
         control_mission = os.path.join(control_root, mission)
         safe_directory(control_mission, "control mission", control_root, allow_missing=True)
         if not os.path.lexists(control_mission):
             continue
+        mission_planning = scalar_record(
+            os.path.join(mission_dir, "planning-backend"),
+            "mission planning backend",
+            mission_dir,
+        )
+        control_planning = scalar_record(
+            os.path.join(control_mission, "planning-backend"),
+            "control planning backend",
+            control_mission,
+        )
+        if (
+            mission_planning["value"] not in {"fable-opus", "codex-ultra"}
+            or mission_planning["value"] != control_planning["value"]
+        ):
+            raise AuthorityError("planning backend authority mismatch")
+        planning_authority_records(
+            mission_dir,
+            control_mission,
+            mission_planning["value"],
+            mission_state["value"],
+        )
         tasks_root = os.path.join(control_mission, "tasks")
         safe_directory(tasks_root, "tasks root", control_mission, allow_missing=True)
         if not os.path.lexists(tasks_root):
@@ -320,7 +516,32 @@ def build_missions(hub: str) -> list[dict[str, Any]]:
     for mission in direct_directories(missions_root, "missions root"):
         mission_dir = os.path.join(missions_root, mission)
         tasks: list[dict[str, Any]] = []
-        tasks_root = os.path.join(control_root, mission, "tasks")
+        control_mission = os.path.join(control_root, mission)
+        mission_planning = scalar_record(
+            os.path.join(mission_dir, "planning-backend"),
+            "mission planning backend",
+            mission_dir,
+        )
+        control_planning = scalar_record(
+            os.path.join(control_mission, "planning-backend"),
+            "control planning backend",
+            control_mission,
+        )
+        if (
+            mission_planning["value"] not in {"fable-opus", "codex-ultra"}
+            or mission_planning["value"] != control_planning["value"]
+        ):
+            raise AuthorityError("planning backend authority mismatch")
+        mission_state = scalar_record(
+            os.path.join(mission_dir, "state"), "mission state", mission_dir
+        )
+        planning = planning_authority_records(
+            mission_dir,
+            control_mission,
+            mission_planning["value"],
+            mission_state["value"],
+        )
+        tasks_root = os.path.join(control_mission, "tasks")
         if os.path.isdir(tasks_root):
             for task in direct_directories(tasks_root, "tasks root"):
                 task_dir = os.path.join(tasks_root, task)
@@ -345,7 +566,12 @@ def build_missions(hub: str) -> list[dict[str, Any]]:
             {
                 "mission": mission,
                 "path": mission_dir,
-                "state": scalar_record(os.path.join(mission_dir, "state"), "mission state", mission_dir),
+                "planning_backend": {
+                    "control": control_planning,
+                    "mission": mission_planning,
+                },
+                **planning,
+                "state": mission_state,
                 "tasks": tasks,
             }
         )
@@ -704,6 +930,11 @@ def carryover_bytes(session_id: str, snapshot: dict[str, Any]) -> bytes:
     ]
     for mission in snapshot["missions"]:
         lines.append(f"mission\t{mission['mission']}\t{mission['state']['value']}")
+        lines.append(
+            f"planning-backend\t{mission['mission']}\t"
+            f"{mission['planning_backend']['control']['value']}\t"
+            f"{mission['planning_thread']['value'] if mission['planning_thread'] else ''}"
+        )
         for task in mission["tasks"]:
             accepted = task["accepted_thread"]["value"] if task["accepted_thread"] else ""
             lines.append(
@@ -1018,10 +1249,111 @@ def validate_binding_shape(binding: Any) -> None:
         raise AuthorityError("invalid missions")
     mission_names: list[str] = []
     for mission in binding["missions"]:
-        exact_keys(mission, {"mission", "path", "state", "tasks"}, "mission")
+        exact_keys(
+            mission,
+            {
+                "mission", "path", "planning_backend", "planning_health",
+                "planning_session", "planning_thread", "quota_fallbacks",
+                "session", "state", "tasks",
+            },
+            "mission",
+        )
         mission_names.append(strict_text(mission["mission"], "mission id"))
         strict_text(mission["path"], "mission path")
         validate_file_shape(mission["state"], True, "mission state")
+        planning = exact_keys(
+            mission["planning_backend"],
+            {"control", "mission"},
+            "planning backend",
+        )
+        validate_file_shape(planning["mission"], True, "mission planning backend")
+        validate_file_shape(planning["control"], True, "control planning backend")
+        if (
+            planning["mission"]["value"] not in {"fable-opus", "codex-ultra"}
+            or planning["mission"]["value"] != planning["control"]["value"]
+        ):
+            raise AuthorityError("invalid planning backend authority")
+        if (mission["planning_thread"] is None) != (mission["planning_health"] is None):
+            raise AuthorityError("partial planning-thread binding")
+        if mission["planning_thread"] is not None:
+            validate_file_shape(mission["planning_thread"], True, "planning thread")
+            validate_file_shape(mission["planning_health"], False, "planning health")
+        if planning["mission"]["value"] == "fable-opus" and mission["planning_thread"] is not None:
+            raise AuthorityError("Fable/Opus binding has Codex planning-thread authority")
+        if mission["session"] is not None:
+            validate_file_shape(mission["session"], False, "planning session")
+        if mission["planning_session"] is not None:
+            validate_file_shape(mission["planning_session"], True, "planning session id")
+        fallbacks = exact_keys(
+            mission["quota_fallbacks"], {"plan", "review"}, "quota fallbacks"
+        )
+        for stage, receipt in fallbacks.items():
+            if receipt is not None:
+                validate_file_shape(receipt, False, f"{stage} quota fallback")
+        backend = planning["mission"]["value"]
+        state = mission["state"]["value"]
+        if backend == "fable-opus":
+            if (mission["session"] is None) != (mission["planning_session"] is None):
+                raise AuthorityError("partial Fable/Opus planning session binding")
+            if state != "pending" and mission["session"] is None:
+                raise AuthorityError("active Fable/Opus binding lacks planning session")
+            if mission["session"] is None:
+                if any(receipt is not None for receipt in fallbacks.values()):
+                    raise AuthorityError("quota fallback binding lacks planning session")
+            else:
+                values = planning_session_values(
+                    mission["session"], "bound Fable/Opus planning session"
+                )
+                session_id = one_planning_value(
+                    values, "session_id", "bound Fable/Opus planning session"
+                )
+                if mission["planning_session"]["value"] != session_id:
+                    raise AuthorityError("bound Fable/Opus planning session mismatch")
+                if one_planning_value(
+                    values, "backend", "bound Fable/Opus planning session"
+                ) != "claude-headless":
+                    raise AuthorityError("invalid bound Fable/Opus backend")
+                if one_planning_value(
+                    values, "model", "bound Fable/Opus planning session"
+                ) != "claude-fable-5":
+                    raise AuthorityError("invalid bound Fable/Opus model")
+                for stage, receipt in fallbacks.items():
+                    if receipt is not None:
+                        validate_quota_receipt(receipt, stage, session_id)
+        else:
+            if mission["planning_session"] is not None or any(
+                receipt is not None for receipt in fallbacks.values()
+            ):
+                raise AuthorityError("Codex Ultra binding has Claude planning authority")
+            present = (
+                mission["session"] is not None,
+                mission["planning_thread"] is not None,
+                mission["planning_health"] is not None,
+            )
+            if any(present) and not all(present):
+                raise AuthorityError("partial Codex Ultra planning binding")
+            if state != "pending" and not all(present):
+                raise AuthorityError("active Codex Ultra binding lacks planning task")
+            if all(present):
+                values = planning_session_values(
+                    mission["session"], "bound Codex Ultra planning session"
+                )
+                thread_id = one_planning_value(
+                    values, "thread_id", "bound Codex Ultra planning session"
+                )
+                if (
+                    one_planning_value(values, "backend", "bound Codex Ultra planning session")
+                    != "codex-native"
+                    or one_planning_value(values, "model", "bound Codex Ultra planning session")
+                    != "gpt-5.6-sol"
+                    or one_planning_value(values, "effort", "bound Codex Ultra planning session")
+                    != "ultra"
+                    or one_planning_value(values, "stage", "bound Codex Ultra planning session")
+                    not in {"plan", "review"}
+                    or mission["planning_thread"]["value"] != thread_id
+                ):
+                    raise AuthorityError("invalid bound Codex Ultra planning session")
+                validate_codex_health(mission["planning_health"], thread_id)
         if not isinstance(mission["tasks"], list):
             raise AuthorityError("invalid task list")
         task_names: list[str] = []

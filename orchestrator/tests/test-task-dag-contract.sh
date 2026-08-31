@@ -178,10 +178,13 @@ make_native_mission() {
   mkdir -p "$mission" "$control"
   make_control "$control"
   printf '0.4.0\n' > "$control/pipeline-version"
+  printf 'fable-opus\n' > "$mission/planning-backend"
+  printf 'fable-opus\n' > "$control/planning-backend"
+  printf 'fable-session\n' > "$control/planning-session-id"
   printf 'request\n' > "$mission/request.md"
   printf 'Briefs: brief.md, brief-exec.md\n' > "$mission/MISSION.md"
   printf 'planned\n' > "$mission/state"
-  printf 'backend: hybrid\nstage: plan\n' > "$mission/session.txt"
+  printf 'session_id: fable-session\nbackend: claude-headless\nmodel: claude-fable-5\nstage: plan\n' > "$mission/session.txt"
 }
 freeze_initializes_classifiable_empty_registry() {
   local root="$TMP/classifiable-freeze"

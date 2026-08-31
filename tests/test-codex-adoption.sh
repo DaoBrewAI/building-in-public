@@ -19,10 +19,10 @@ done
 
 [[ "$(jq -r .version 10x-engineer/.codex-plugin/plugin.json)" == 1.1.0 ]] ||
   fail "10x-engineer Codex version must be 1.1.0"
-[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" =~ ^0\.5\.1\+codex\.[A-Za-z0-9._-]+$ ]] ||
-  fail "orchestrator Codex version must be a cache-busted 0.5.1 release"
-[[ "$(jq -r .version orchestrator/.claude-plugin/plugin.json)" == 0.5.1 ]] ||
-  fail "orchestrator Claude version must be 0.5.1"
+[[ "$(jq -r .version orchestrator/.codex-plugin/plugin.json)" =~ ^0\.5\.2\+codex\.[A-Za-z0-9._-]+$ ]] ||
+  fail "orchestrator Codex version must be a cache-busted 0.5.2 release"
+[[ "$(jq -r .version orchestrator/.claude-plugin/plugin.json)" == 0.5.2 ]] ||
+  fail "orchestrator Claude version must be 0.5.2"
 [[ "$(jq -r .skills orchestrator/.codex-plugin/plugin.json)" == ./skills/ ]] ||
   fail "orchestrator Codex manifest must use the shared native skill tree"
 [[ "$(jq -r '.skills | join(" ")' orchestrator/.claude-plugin/plugin.json)" == ./skills/ ]] ||
@@ -41,6 +41,7 @@ assert_file orchestrator/scripts/spawn-worker.sh
 assert_file orchestrator/scripts/codex-task-client.py
 assert_file orchestrator/scripts/commit-broker.sh
 assert_file orchestrator/skills/orchestrating/references/task-execution.md
+assert_file orchestrator/skills/orchestrating/references/planning-and-review.md
 assert_file orchestrator/skills/orchestrating/references/cleanup-and-rework.md
 assert_file orchestrator/skills/orchestrating/references/continuation.md
 

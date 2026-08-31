@@ -137,4 +137,4 @@ worktree, branch, and visible task window. Do not run GC or archive a child afte
 individual integration. Recompute the ready set from durable integration
 authority. When every approved node is integrated, set the parent mission to
 `executed`, then run the automatic batch child cleanup described in
-`cleanup-and-rework.md` before Fable review.
+`cleanup-and-rework.md` before selected-backend review.
