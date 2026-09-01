@@ -22,9 +22,9 @@ check() {
 contains() { grep -Fq -- "$2" "$1"; }
 compact() { tr '\n' ' ' < "$1" | sed 's/[[:space:]][[:space:]]*/ /g' | grep -Fqi -- "$2"; }
 
-check "Codex manifest is the 0.5.3 cache-busted release" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.3\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
-check "Claude manifest is 0.5.3" bash -c '[[ "$(jq -r .version "$1")" = 0.5.3 ]]' _ "$CLAUDE_MANIFEST"
+check "Codex manifest is the 0.5.4 cache-busted release" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.4\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$CODEX_MANIFEST"
+check "Claude manifest is 0.5.4" bash -c '[[ "$(jq -r .version "$1")" = 0.5.4 ]]' _ "$CLAUDE_MANIFEST"
 check "both hosts share one skill tree" bash -c \
   '[[ "$(jq -r .skills "$1")" = ./skills/ && "$(jq -r '\''.skills | join(" ")'\'' "$2")" = ./skills/ ]]' \
   _ "$CODEX_MANIFEST" "$CLAUDE_MANIFEST"
@@ -48,21 +48,25 @@ check "acceptance marks terminal before GC" compact "$SKILL" 'Write mission stat
 check "task reference defines ready-set integration" compact "$TASK_REF" 'every predecessor is durably `integrated` or `collected`'
 check "task reference uses production lifecycle gate" contains "$TASK_REF" 'scripts/task-worktree.sh adopt'
 check "task reference creates a native project child" compact "$TASK_REF" '`create_thread` with target type `project`'
-check "task health uses native task APIs" compact "$TASK_REF" '`wait_threads`, `list_threads`, and `read_thread`'
+check "task health uses native task APIs" compact "$TASK_REF" '`wait_threads`, `list_threads`, and one bounded `read_thread`'
 check "Claude host has lifecycle bridge operations" compact "$TASK_REF" '`codex-task-client.py stop` plus `archive`'
 check "all child windows target the parent saved project" compact "$TASK_REF" 'exact saved-project ID supplied to the native create request'
-check "nullable project projection is tolerated" compact "$TASK_REF" 'A null or absent `projectId` projection is unobservable, not a mismatch'
+check "project projection must match saved project" compact "$TASK_REF" 'non-null `projectId` exactly equal to the saved-project request'
+check "native health request is frozen before create" compact "$TASK_REF" 'native-task-health.py begin'
+check "native observations are durable and bounded" compact "$TASK_REF" 'at most two durable provisional attempts'
 check "accepted native task worktree is adopted" compact "$TASK_REF" 'scripts/task-worktree.sh adopt'
+check "adoption consumes exact native health" compact "$TASK_REF" 'consumes the accepted native-health receipt'
 check "adoption atomically binds native owner" compact "$TASK_REF" '--thread-id <accepted-formal-thread-id>'
-check "native writable root is proven" compact "$TASK_REF" 'native-writable-root-receipt'
+check "native task outcome is coordinator-bound" compact "$TASK_REF" 'coordinator-owned `outcome-nonce`'
+check "native terminal outcome is persisted by coordinator" compact "$TASK_REF" 'task-outcome.py record'
 check "native follow-up starts implementation" compact "$TASK_REF" '`send_message_to_thread` with the rendered task brief'
 check "App Server cannot own execution" compact "$TASK_REF" 'App Server is lifecycle inspection only'
 check "task outcomes remain durable" contains "$TASK_REF" 'Chat text is advisory'
 check "integration preserves immutable histories" contains "$TASK_REF" 'never rebase, squash, amend, reset, or force'
 check "individual integration retains visible child resources" compact "$TASK_REF" 'Do not run GC or archive a child after individual integration'
-check "all integrated tasks trigger one automatic batch cleanup" compact "$SKILL" 'batch-collect every integrated child, archive every child window'
-check "batch cleanup waits for every task integration" compact "$CLEANUP_REF" 'Batch child collection begins only after every approved task is completed and integrated into the parent'
-check "batch cleanup archives windows only after all task resources collect" compact "$CLEANUP_REF" 'archive every accepted child window only after the batch collection'
+check "clean final review triggers one automatic batch cleanup" compact "$SKILL" 'batch-archive every accepted child, and run mission-scoped GC'
+check "batch cleanup waits for final review and acceptance" compact "$CLEANUP_REF" 'Only after final review is durably resolved, merged-tree verification succeeds, and mission state is `accepted`'
+check "native archive releases worktrees before exact Git collection" compact "$CLEANUP_REF" 'Native archive is the worktree-release boundary'
 check "batch readiness is proven while holding the lifecycle lock" python3 - "$GC_SCRIPT" <<'PY'
 import sys
 

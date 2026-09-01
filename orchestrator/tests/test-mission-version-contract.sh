@@ -100,7 +100,7 @@ make_codex_shape() {
   printf 'planning-thread\n' > "$root/hub/control/demo/planning-thread-id"
   jq -cS -n '{
     created:true, visible:true, title_verified:true, first_turn_exists:true,
-    startup_evidence:true, settings_recorded:true, writable_root_verified:true,
+    startup_evidence:true, settings_recorded:true, worktree_verified:true,
     status:"completed", thread_id:"planning-thread", model:"gpt-5.6-sol",
     effort:"ultra", project_id:"project-1", cwd:"/tmp/planning-worktree"
   }' > "$root/hub/control/demo/planning-thread-health.json"

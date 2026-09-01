@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Verify and integrate one manifest-recorded child task without rewriting history.
 set -euo pipefail
+APPROVAL_HELPER="$(cd "$(dirname "$0")" && pwd -P)/verify-approved-authority.py"
+LIFECYCLE_HELPER="$(cd "$(dirname "$0")" && pwd -P)/coordinator_lifecycle_lock.py"
 
 usage() {
   echo "usage: integrate-task.sh --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --parent-worktree <dir> --expected-parent-tip <sha>" >&2
@@ -142,6 +144,52 @@ PY
   fi
 }
 
+acquire_shared_lifecycle_lock() {
+  local control="$1"
+  [[ -x "$LIFECYCLE_HELPER" ]] || return 1
+  LIFECYCLE_LOCK_FILE="$(python3 "$LIFECYCLE_HELPER" prepare --control-dir "$control")" || return 1
+  exec 8< "$LIFECYCLE_LOCK_FILE" || return 1
+  if ! python3 "$LIFECYCLE_HELPER" acquire-fd \
+      --lock-file "$LIFECYCLE_LOCK_FILE" --fd 8; then
+    exec 8>&-
+    return 1
+  fi
+}
+
+validate_approved_task_scope() {
+  local control="$1" repo="$2" task_id="$3" base="$4" tip="$5" allowed_json
+  [[ -x "$APPROVAL_HELPER" ]] || return 1
+  allowed_json="$("$APPROVAL_HELPER" --control-dir "$control" --task-files "$task_id")" || return 1
+  python3 - "$repo" "$base" "$tip" "$allowed_json" <<'PY'
+import json
+import subprocess
+import sys
+
+repo, base, tip, allowed_raw = sys.argv[1:]
+allowed_value = json.loads(allowed_raw)
+if not isinstance(allowed_value, list) or not allowed_value:
+    raise SystemExit("approved task DAG file scope is invalid")
+allowed = set(allowed_value)
+result = subprocess.run(
+    ["git", "-C", repo, "diff", "--name-only", "--no-renames", "-z", base, tip, "--"],
+    check=True,
+    stdout=subprocess.PIPE,
+)
+changed = {item.decode("utf-8") for item in result.stdout.split(b"\0") if item}
+outside = sorted(changed - allowed)
+if outside:
+    raise SystemExit("approved task DAG scope violation: " + ", ".join(outside))
+PY
+}
+
+validate_coordinator_child_verification() {
+  local control_task="$1" tip="$2" attested
+  attested="$(read_single_value "$control_task/coordinator-verification.sha" 2>/dev/null || true)"
+  [[ "$attested" == "$tip" ]] || return 1
+  [[ -s "$control_task/coordinator-verification.md" && \
+    ! -L "$control_task/coordinator-verification.md" ]] || return 1
+}
+
 CONTROL_DIR=""
 TASK_DIR=""
 MISSION=""
@@ -169,13 +217,16 @@ valid_identity "$TASK_ID" || fail "invalid task identity"
 case "$EXPECTED_PARENT_TIP" in *[!0-9a-fA-F]*|'') fail "invalid expected parent tip" ;; esac
 
 CONTROL_PHYS="$(physical_existing_dir "$CONTROL_DIR")" || fail "control directory is missing or symlinked"
-command -v python3 >/dev/null 2>&1 || fail "python3 is required for the coordinator integration lock"
+command -v python3 >/dev/null 2>&1 || fail "python3 is required for coordinator lifecycle locking"
+acquire_shared_lifecycle_lock "$CONTROL_PHYS" || fail "shared coordinator lifecycle lock is unsafe"
 acquire_integration_lock "$CONTROL_PHYS" || fail "coordinator integration lock is unsafe or busy"
 TASK_PHYS="$(physical_existing_dir "$TASK_DIR")" || fail "task directory is missing or symlinked"
 PARENT_PHYS="$(physical_existing_dir "$PARENT_WORKTREE")" || fail "parent worktree is missing or symlinked"
 CONTROL_TASK="$CONTROL_PHYS/tasks/$TASK_ID"
 MANIFEST="$CONTROL_TASK/worktrees.txt"
 [[ -d "$CONTROL_TASK" && ! -L "$CONTROL_TASK" ]] || fail "coordinator task authority is missing or symlinked"
+AUTHORIZED_TASK_DIR="$(read_single_value "$CONTROL_TASK/task-state-dir" 2>/dev/null || true)"
+[[ "$AUTHORIZED_TASK_DIR" == "$TASK_PHYS" ]] || fail "task directory differs from coordinator task-state-dir authority"
 [[ -f "$MANIFEST" && ! -L "$MANIFEST" ]] || fail "coordinator task manifest is missing or symlinked"
 
 ROW_WORKTREE=""
@@ -210,6 +261,8 @@ if [[ "$CONTROL_STATE" == integrated || "$CONTROL_STATE" == cleanup_pending || "
   [[ "$(git -C "$REPO_PHYS" rev-parse --verify "${RECORDED_INTEGRATED}^{commit}" 2>/dev/null || true)" == "$RECORDED_INTEGRATED" ]] || fail "recorded integrated_sha is invalid"
   [[ "$(git -C "$REPO_PHYS" rev-parse --verify "${RECORDED_CHILD}^{commit}" 2>/dev/null || true)" == "$RECORDED_CHILD" ]] || fail "recorded child tip is invalid"
   git -C "$REPO_PHYS" merge-base --is-ancestor "$ROW_BASE" "$RECORDED_CHILD" || fail "recorded child tip does not descend from the manifest base"
+  validate_approved_task_scope "$CONTROL_PHYS" "$REPO_PHYS" "$TASK_ID" "$ROW_BASE" "$RECORDED_CHILD" || fail "recorded child tip violates approved task DAG scope"
+  validate_coordinator_child_verification "$CONTROL_TASK" "$RECORDED_CHILD" || fail "coordinator verification does not attest recorded child tip"
   git -C "$REPO_PHYS" merge-base --is-ancestor "$RECORDED_CHILD" "$RECORDED_INTEGRATED" || fail "recorded integration does not contain the child tip"
   git -C "$REPO_PHYS" merge-base --is-ancestor "$RECORDED_INTEGRATED" "$PARENT_TIP" || fail "parent no longer contains the recorded integration"
   if [[ -e "$INTENT" || -L "$INTENT" ]]; then
@@ -217,11 +270,14 @@ if [[ "$CONTROL_STATE" == integrated || "$CONTROL_STATE" == cleanup_pending || "
     TERMINAL_INTENT_PARENT=""
     TERMINAL_INTENT_CHILD=""
     TERMINAL_INTENT_BRANCH=""
+    TERMINAL_INTENT_TREE=""
+    TERMINAL_INTENT_COMMIT=""
     TERMINAL_INTENT_EXTRA=""
-    IFS=$'\t' read -r TERMINAL_INTENT_PARENT TERMINAL_INTENT_CHILD TERMINAL_INTENT_BRANCH TERMINAL_INTENT_EXTRA < "$INTENT" || fail "terminal integration intent is malformed"
-    [[ -z "$TERMINAL_INTENT_EXTRA" && "$TERMINAL_INTENT_CHILD" == "$RECORDED_CHILD" && "$TERMINAL_INTENT_BRANCH" == "$ROW_BRANCH" && "$(wc -l < "$INTENT" | tr -d ' ')" == 1 ]] || fail "terminal integration intent does not match authority"
+    IFS=$'\t' read -r TERMINAL_INTENT_PARENT TERMINAL_INTENT_CHILD TERMINAL_INTENT_BRANCH TERMINAL_INTENT_TREE TERMINAL_INTENT_COMMIT TERMINAL_INTENT_EXTRA < "$INTENT" || fail "terminal integration intent is malformed"
+    [[ -z "$TERMINAL_INTENT_EXTRA" && "$TERMINAL_INTENT_CHILD" == "$RECORDED_CHILD" && "$TERMINAL_INTENT_BRANCH" == "$ROW_BRANCH" && "$TERMINAL_INTENT_COMMIT" == "$RECORDED_INTEGRATED" && "$(wc -l < "$INTENT" | tr -d ' ')" == 1 ]] || fail "terminal integration intent does not match authority"
     [[ "$(git -C "$REPO_PHYS" rev-parse "${RECORDED_INTEGRATED}^1" 2>/dev/null || true)" == "$TERMINAL_INTENT_PARENT" && \
-      "$(git -C "$REPO_PHYS" rev-parse "${RECORDED_INTEGRATED}^2" 2>/dev/null || true)" == "$RECORDED_CHILD" ]] || fail "terminal integration intent does not match recorded merge"
+      "$(git -C "$REPO_PHYS" rev-parse "${RECORDED_INTEGRATED}^2" 2>/dev/null || true)" == "$RECORDED_CHILD" && \
+      "$(git -C "$REPO_PHYS" rev-parse "${RECORDED_INTEGRATED}^{tree}" 2>/dev/null || true)" == "$TERMINAL_INTENT_TREE" ]] || fail "terminal integration intent does not match recorded merge"
     rm -f -- "$INTENT"
   fi
   write_value "$TASK_PHYS/state" "$CONTROL_STATE" || fail "could not reconcile task state"
@@ -238,6 +294,7 @@ CHILD_TIP="$(git -C "$CHILD_PHYS" rev-parse --verify 'HEAD^{commit}')" || fail "
 BRANCH_TIP="$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${ROW_BRANCH}^{commit}")" || fail "manifest child branch is missing"
 [[ "$BRANCH_TIP" == "$CHILD_TIP" ]] || fail "child branch and worktree tips differ"
 git -C "$REPO_PHYS" merge-base --is-ancestor "$ROW_BASE" "$CHILD_TIP" || fail "child tip does not descend from the manifest base"
+validate_approved_task_scope "$CONTROL_PHYS" "$REPO_PHYS" "$TASK_ID" "$ROW_BASE" "$CHILD_TIP" || fail "child tip violates approved task DAG scope"
 
 TASK_STATE="$(read_single_value "$TASK_PHYS/state" 2>/dev/null || true)"
 [[ "$TASK_STATE" == completed ]] || fail "child task state must be completed"
@@ -245,31 +302,63 @@ TASK_STATE="$(read_single_value "$TASK_PHYS/state" 2>/dev/null || true)"
 [[ ! -e "$CONTROL_TASK/unresolved-rework" && ! -L "$CONTROL_TASK/unresolved-rework" ]] || fail "task has unresolved rework"
 CHILD_VERIFIED="$(read_single_value "$TASK_PHYS/verification.sha" 2>/dev/null || true)"
 [[ "$CHILD_VERIFIED" == "$CHILD_TIP" ]] || fail "task verification does not attest the exact child tip"
+validate_coordinator_child_verification "$CONTROL_TASK" "$CHILD_TIP" || fail "coordinator verification does not attest child tip"
 PARENT_VERIFIED="$(read_single_value "$CONTROL_TASK/parent-verification.sha" 2>/dev/null || true)"
 [[ "$PARENT_VERIFIED" == "$EXPECTED_PARENT_TIP" ]] || fail "parent verification does not attest the expected parent tip"
 [[ -z "$(git -C "$CHILD_PHYS" status --porcelain --untracked-files=all)" ]] || fail "child worktree is dirty"
-[[ -z "$(git -C "$PARENT_PHYS" status --porcelain --untracked-files=all)" ]] || fail "parent worktree is dirty"
 
 if [[ -f "$INTENT" && ! -L "$INTENT" ]]; then
   INTENT_PARENT=""
   INTENT_CHILD=""
   INTENT_BRANCH=""
+  INTENT_TREE=""
+  INTENT_COMMIT=""
   INTENT_EXTRA=""
-  IFS=$'\t' read -r INTENT_PARENT INTENT_CHILD INTENT_BRANCH INTENT_EXTRA < "$INTENT" || fail "integration intent is malformed"
+  IFS=$'\t' read -r INTENT_PARENT INTENT_CHILD INTENT_BRANCH INTENT_TREE INTENT_COMMIT INTENT_EXTRA < "$INTENT" || fail "integration intent is malformed"
   [[ "$INTENT_CHILD" == "$CHILD_TIP" && "$INTENT_BRANCH" == "$ROW_BRANCH" && -z "$INTENT_EXTRA" ]] || fail "integration intent does not match the child"
   [[ "$(wc -l < "$INTENT" | tr -d ' ')" == 1 ]] || fail "integration intent must contain exactly one row"
   [[ "$(git -C "$REPO_PHYS" rev-parse --verify "${INTENT_PARENT}^{commit}" 2>/dev/null || true)" == "$INTENT_PARENT" ]] || fail "integration intent parent is invalid"
   git -C "$REPO_PHYS" merge-base --is-ancestor "$ROW_BASE" "$INTENT_PARENT" || fail "integration intent parent does not descend from the manifest base"
+  INTENT_ROW="$(git -C "$REPO_PHYS" rev-list --parents -n 1 "$INTENT_COMMIT" 2>/dev/null || true)"
+  INTENT_OBJECT=""; INTENT_FIRST=""; INTENT_SECOND=""; INTENT_PARENT_EXTRA=""
+  IFS=' ' read -r INTENT_OBJECT INTENT_FIRST INTENT_SECOND INTENT_PARENT_EXTRA <<< "$INTENT_ROW"
+  [[ "$INTENT_OBJECT" == "$INTENT_COMMIT" && "$INTENT_FIRST" == "$INTENT_PARENT" && \
+     "$INTENT_SECOND" == "$INTENT_CHILD" && -z "$INTENT_PARENT_EXTRA" && \
+     "$(git -C "$REPO_PHYS" rev-parse --verify "${INTENT_COMMIT}^{tree}" 2>/dev/null || true)" == "$INTENT_TREE" ]] || \
+    fail "integration intent commit does not bind its exact tree and parents"
 else
   [[ ! -e "$INTENT" && ! -L "$INTENT" ]] || fail "integration intent is unsafe"
+  [[ -z "$(git -C "$PARENT_PHYS" status --porcelain --untracked-files=all)" ]] || fail "parent worktree is dirty"
+  MERGE_TREE_OUTPUT="$(git -C "$REPO_PHYS" merge-tree --write-tree --no-messages "$EXPECTED_PARENT_TIP" "$CHILD_TIP" 2>/dev/null)" || \
+    fail "child merge has conflicts; parent preserved"
+  INTENT_TREE="$(printf '%s\n' "$MERGE_TREE_OUTPUT" | sed -n '1p')"
+  [[ "$(git -C "$REPO_PHYS" cat-file -t "$INTENT_TREE" 2>/dev/null || true)" == tree ]] || fail "merge-tree did not produce one exact tree"
+  validate_approved_task_scope "$CONTROL_PHYS" "$REPO_PHYS" "$TASK_ID" "$EXPECTED_PARENT_TIP" "$INTENT_TREE" || \
+    fail "integration merge tree violates approved task DAG scope"
+  INTENT_COMMIT="$(printf 'Integrate %s\n' "$TASK_ID" | git -C "$REPO_PHYS" -c core.hooksPath=/dev/null commit-tree "$INTENT_TREE" -p "$EXPECTED_PARENT_TIP" -p "$CHILD_TIP" 2>/dev/null)" || \
+    fail "could not create hook-free integration commit"
   INTENT_TMP="$(mktemp "$CONTROL_TASK/.integration-intent.XXXXXX")" || fail "cannot stage integration intent"
-  printf '%s\t%s\t%s\n' "$EXPECTED_PARENT_TIP" "$CHILD_TIP" "$ROW_BRANCH" > "$INTENT_TMP"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$EXPECTED_PARENT_TIP" "$CHILD_TIP" "$ROW_BRANCH" "$INTENT_TREE" "$INTENT_COMMIT" > "$INTENT_TMP"
   chmod 0600 "$INTENT_TMP"
+  python3 - "$INTENT_TMP" <<'PY' || fail "cannot sync integration intent contents"
+import os, sys
+with open(sys.argv[1], "rb") as handle:
+    os.fsync(handle.fileno())
+PY
   if ! ln "$INTENT_TMP" "$INTENT" 2>/dev/null; then
     rm -f -- "$INTENT_TMP"
     fail "integration intent publication raced"
   fi
   [[ "$INTENT_TMP" -ef "$INTENT" ]] || fail "integration intent publication ownership mismatch"
+  python3 - "$INTENT" "$CONTROL_TASK" <<'PY' || fail "cannot sync integration intent publication"
+import os, sys
+for path in sys.argv[1:]:
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+PY
   rm -f -- "$INTENT_TMP"
   INTENT_PARENT="$EXPECTED_PARENT_TIP"
   INTENT_CHILD="$CHILD_TIP"
@@ -277,20 +366,36 @@ else
 fi
 
 RECOVERED_INTEGRATION=0
-if [[ "$PARENT_TIP" != "$INTENT_PARENT" ]]; then
-  FIRST_PARENT="$(git -C "$PARENT_PHYS" rev-parse "${PARENT_TIP}^1" 2>/dev/null || true)"
-  SECOND_PARENT="$(git -C "$PARENT_PHYS" rev-parse "${PARENT_TIP}^2" 2>/dev/null || true)"
-  [[ "$FIRST_PARENT" == "$INTENT_PARENT" && "$SECOND_PARENT" == "$CHILD_TIP" ]] || fail "parent moved beyond an exact interrupted integration"
-  INTEGRATED_SHA="$PARENT_TIP"
+if [[ "$PARENT_TIP" == "$INTENT_COMMIT" ]]; then
+  INTEGRATED_SHA="$INTENT_COMMIT"
   RECOVERED_INTEGRATION=1
-else
-  if git -C "$PARENT_PHYS" merge --no-ff --no-edit "$CHILD_TIP" >/dev/null 2>&1; then
-    INTEGRATED_SHA="$(git -C "$PARENT_PHYS" rev-parse --verify 'HEAD^{commit}')" || fail "cannot resolve integrated parent tip"
-  else
-    git -C "$PARENT_PHYS" merge --abort >/dev/null 2>&1 || fail "merge failed and could not be aborted cleanly"
-    rm -f -- "$INTENT"
-    fail "child merge failed; parent restored"
+  if [[ -n "$(git -C "$PARENT_PHYS" status --porcelain --untracked-files=all)" ]]; then
+    [[ -z "$(git -C "$PARENT_PHYS" ls-files --others --exclude-standard)" ]] || \
+      fail "interrupted integration worktree has untracked changes"
+    git -C "$PARENT_PHYS" diff --quiet "$INTENT_PARENT" -- || \
+      fail "interrupted integration worktree differs from both bound trees"
+    git -C "$PARENT_PHYS" diff --cached --quiet "$INTENT_PARENT" -- || \
+      fail "interrupted integration index differs from both bound trees"
+    git -C "$PARENT_PHYS" read-tree --reset -u "$INTEGRATED_SHA" || \
+      fail "could not reconcile the exact interrupted integration worktree"
   fi
+elif [[ "$PARENT_TIP" == "$INTENT_PARENT" ]]; then
+  [[ -z "$(git -C "$PARENT_PHYS" status --porcelain --untracked-files=all)" ]] || fail "parent worktree is dirty"
+  [[ "$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/orc/${MISSION}^{commit}" 2>/dev/null || true)" == "$INTENT_PARENT" ]] || \
+    fail "parent branch changed before integration CAS"
+  [[ "$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${ROW_BRANCH}^{commit}" 2>/dev/null || true)" == "$CHILD_TIP" ]] || \
+    fail "child branch changed before integration CAS"
+  git -C "$REPO_PHYS" -c core.hooksPath=/dev/null update-ref -m "orchestrator integrate $TASK_ID" \
+    "refs/heads/orc/$MISSION" "$INTENT_COMMIT" "$INTENT_PARENT" >/dev/null 2>&1 || \
+    fail "parent branch changed before integration publication"
+  if [[ "${ORC_INTEGRATE_TEST_FAIL_AFTER_REF_UPDATE:-}" == 1 ]]; then
+    fail "injected interruption after integration ref update"
+  fi
+  git -C "$PARENT_PHYS" read-tree --reset -u "$INTENT_COMMIT" || \
+    fail "integration commit advanced but parent worktree reconciliation failed"
+  INTEGRATED_SHA="$INTENT_COMMIT"
+else
+  fail "parent moved beyond an exact interrupted integration"
 fi
 
 if [[ "${ORC_INTEGRATE_TEST_FAIL_AFTER_MERGE:-}" == 1 && "$RECOVERED_INTEGRATION" -eq 0 ]]; then
@@ -299,7 +404,14 @@ fi
 
 FIRST_PARENT="$(git -C "$PARENT_PHYS" rev-parse "${INTEGRATED_SHA}^1")" || fail "integration did not create a merge commit"
 SECOND_PARENT="$(git -C "$PARENT_PHYS" rev-parse "${INTEGRATED_SHA}^2")" || fail "integration did not preserve child history"
-[[ "$FIRST_PARENT" == "$INTENT_PARENT" && "$SECOND_PARENT" == "$CHILD_TIP" ]] || fail "integration merge parents are not exact"
+[[ "$FIRST_PARENT" == "$INTENT_PARENT" && "$SECOND_PARENT" == "$CHILD_TIP" && \
+   "$(git -C "$PARENT_PHYS" rev-parse "${INTEGRATED_SHA}^{tree}")" == "$INTENT_TREE" && \
+   "$(git -C "$PARENT_PHYS" rev-parse HEAD)" == "$INTEGRATED_SHA" && \
+   "$(git -C "$REPO_PHYS" rev-parse "refs/heads/orc/$MISSION")" == "$INTEGRATED_SHA" && \
+   -z "$(git -C "$PARENT_PHYS" status --porcelain --untracked-files=all)" ]] || \
+  fail "integration commit, tree, branch, or worktree is not exact"
+validate_approved_task_scope "$CONTROL_PHYS" "$REPO_PHYS" "$TASK_ID" "$INTENT_PARENT" "$INTEGRATED_SHA" || \
+  fail "published integration tree violates approved task DAG scope"
 write_value "$CONTROL_TASK/parent-worktree" "$PARENT_PHYS" || fail "could not record parent worktree"
 write_value "$CONTROL_TASK/parent_tip_before" "$INTENT_PARENT" || fail "could not record pre-integration parent tip"
 write_value "$CONTROL_TASK/child_tip" "$CHILD_TIP" || fail "could not record child tip"

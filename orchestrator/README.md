@@ -1,4 +1,4 @@
-# Orchestrator 0.5.3
+# Orchestrator 0.5.4
 
 Native Codex mission control with explicit backend ownership:
 
@@ -11,8 +11,9 @@ Native Codex mission control with explicit backend ownership:
 - Every user-facing HTML handoff uses an owner-only OpenAI Sites HTTPS URL for
   phone and desktop access.
 
-The package supports only native pipeline authority `0.4.0`. Historical 0.2 and
-0.3 coordinator/executor paths are intentionally removed.
+The package supports only native mission-schema authority `0.4.0` (a protocol
+ID, not the plugin release number). Historical 0.2 and 0.3
+coordinator/executor paths are intentionally removed.
 
 ## Install
 
@@ -50,13 +51,13 @@ adapter; it does not carry a second coordinator implementation.
    that exact worktree into guarded Orchestrator authority, use native follow-up
    messaging, consume only compact lifecycle output, broker commits, and
    integrate each verified tip while retaining its resources.
-5. **Batch child cleanup, then selected-backend review** — after every task is
-   integrated, collect all child resources and archive their windows in one
-   batch; then reuse the accepted planning/review session and the exact accepted
-   implementation task thread for every finding.
-6. **Acceptance and cleanup** — verify the merged tree, generate verified
-   status truth, publish the private Sites `/status` URL, mark accepted, then
-   run mission-scoped GC and archive only after durable collection.
+5. **Selected-backend review and retained rework** — after every task is
+   integrated, keep all child worktrees/windows and reuse the accepted
+   planning/review session plus the exact implementation thread for every
+   finding.
+6. **Acceptance and batch cleanup** — verify the merged tree, generate verified
+   status truth, publish the private Sites `/status` URL, mark accepted, archive
+   every child window, then run one mission-scoped GC pass.
 
 The coordinator needs OpenAI Sites building and hosting capability at human
 HTML gates. If that capability is unavailable, it preserves the canonical HTML
@@ -111,6 +112,8 @@ Each mission has:
 ```
 
 Mission-local copies are worker context; coordinator control is authority.
+`verify-approved-authority.py` checks the exact four-file hash manifest before
+broker, integration, continuation, or GC may trust the DAG.
 
 ## Execution safety
 
@@ -119,12 +122,18 @@ Mission-local copies are worker context; coordinator control is authority.
 - App-native task creation produces one independent context and worktree;
   `task-worktree.sh adopt` validates and registers that same worktree inside a
   shared lifecycle lock.
-- A one-line bootstrap receipt proves the exact external task-state/broker
-  directory is writable before adoption. Adoption atomically binds that proof,
-  the native thread ID, window state, worktree, branch, and task authority.
+- Every coordinator mutation also serializes on the mission's single
+  `.coordinator-lifecycle.lock`; helper-specific locks are nested inside it.
+- Native child health reuses the Loop Engineering identity/title/list/read/
+  first-turn sequence. Adoption atomically binds the native thread ID, window
+  state, worktree, branch, generation, sandbox, and one coordinator-owned
+  outcome nonce; the child never needs an external writable root.
+- Children edit only their project worktrees and return strict terminal
+  outcomes. The coordinator validates and persists external task state, reruns
+  frozen verification, and authors every identity-bound broker request.
 - Every child creation request targets the coordinator's exact saved project.
-  That request is authority; a null task-list `projectId` projection is not a
-  mismatch, while an explicit different saved-project ID is rejected.
+  Native list/read must return the same non-null `projectId`; a missing or
+  different saved-project ID is rejected.
 - App Server is lifecycle inspection only; it never creates, resumes, or
   executes a Desktop-owned task.
 - Child MCP/tool/token/item events remain in the child thread and are not
@@ -154,9 +163,10 @@ intent and journal records before deletion. Failure becomes retriable
 `cleanup_pending`; unrelated warnings never block new scheduling. Target/default
 branches are never deletion targets.
 
-Integrated child resources remain visible until every approved task is
-integrated. One mission-scoped batch then collects all children and archives all
-child windows before selected-backend review. Per-task eager GC is forbidden.
+Integrated child resources remain visible through selected-backend review and
+every rework round. Only after clean final review and acceptance does one batch
+archive all child windows and collect their exact residual Git resources.
+Per-task eager GC and GC-before-review are forbidden.
 
 ## Continuation
 

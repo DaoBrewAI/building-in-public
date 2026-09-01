@@ -4,6 +4,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LIFECYCLE="$ROOT/scripts/task-worktree.sh"
+HEALTH="$ROOT/scripts/native-task-health.py"
 VALIDATOR="$ROOT/scripts/validate-task-dag.sh"
 SKILL="$ROOT/skills/orchestrating/references/task-execution.md"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/orc-native-gate.XXXXXX")"
@@ -59,16 +60,37 @@ JSON
 }
 
 create_task() {
-  local task_id="$1" root="$3"
-  "$LIFECYCLE" create --mission-dir "$MISSION_DIR" --control-dir "$CONTROL" \
-    --task-dir "$root/tasks/$task_id" --mission mission --task-id "$task_id" \
-    --repo "$REPO" --parent-worktree "$PARENT" --worktree "$root/worktrees/$task_id"
+  local task_id="$1" root="$3" task_dir child base title
+  task_dir="$root/tasks/$task_id"
+  child="$root/worktrees/$task_id"
+  base="$(git -C "$PARENT" rev-parse HEAD)"
+  title="ORC mission · $task_id Native gate"
+  mkdir -p "$task_dir"
+  if [[ ! -d "$child" ]]; then
+    git -C "$REPO" worktree add -q --detach "$child" "$base" || return 1
+  fi
+  "$HEALTH" begin --control-dir "$CONTROL" --task-dir "$task_dir" \
+    --task-id "$task_id" --project-id project-native-gate \
+    --source-thread-id source-native-gate --title "$title" \
+    --repo "$REPO" --schedule-base "$base" >/dev/null || return 1
+  "$HEALTH" observe --control-dir "$CONTROL" --task-id "$task_id" \
+    --provisional-id "provisional-$task_id" --thread-id "thread-$task_id" \
+    --list-visible true --observed-title "$title" --bootstrap-state completed \
+    --task-state idle --cwd "$child" --tip "$base" \
+    --observed-project-id project-native-gate >/dev/null || return 1
+  "$LIFECYCLE" adopt --mission-dir "$MISSION_DIR" --control-dir "$CONTROL" \
+    --task-dir "$task_dir" --mission mission --task-id "$task_id" \
+    --repo "$REPO" --parent-worktree "$PARENT" --worktree "$child" \
+    --thread-id "thread-$task_id"
 }
 
 BYPASS="$TMP/bypass"
 setup_repo "$BYPASS"
 make_native_authority
-create_task task-b "" "$BYPASS" >/dev/null 2>&1
+"$LIFECYCLE" create --mission-dir "$MISSION_DIR" --control-dir "$CONTROL" \
+  --task-dir "$BYPASS/tasks/task-b" --mission mission --task-id task-b \
+  --repo "$REPO" --parent-worktree "$PARENT" --worktree "$BYPASS/worktrees/task-b" \
+  >/dev/null 2>&1
 BYPASS_RC=$?
 check "native 0.4 direct create without an explicit mode is refused without authority publication" bash -c \
   '[[ "$1" -ne 0 && ! -e "$2/worktrees/task-b" && ! -e "$2/.orchestrator/control/mission/tasks/task-b" ]] && ! git -C "$2/repo" show-ref --verify --quiet refs/heads/orc-task/mission/task-b' \
@@ -83,7 +105,7 @@ create_task task-b native-0.4 "$NATIVE" >/dev/null 2>&1
 check "native gate rejects a dependent task before predecessor integration" test "$?" -ne 0
 create_task task-a native-0.4 "$NATIVE" >/dev/null 2>&1
 TASK_A_RC=$?
-check "native gate creates an exact root task" bash -c \
+check "native gate adopts an exact root task" bash -c \
   '[[ "$1" -eq 0 && -d "$2/worktrees/task-a" && "$(cat "$2/.orchestrator/control/mission/tasks/task-a/state")" = ready ]]' \
   _ "$TASK_A_RC" "$NATIVE"
 printf 'integrated\n' > "$CONTROL/tasks/task-a/state"
@@ -110,9 +132,20 @@ check "native gate rejects contradictory active descendant file and contract con
 rm -rf "$CONTROL/tasks/task-c"
 create_task task-b native-0.4 "$NATIVE" >/dev/null 2>&1
 TASK_B_RC=$?
-check "native gate creates the dependent task only after exact readiness" bash -c \
+check "native gate adopts the dependent task only after exact readiness" bash -c \
   '[[ "$1" -eq 0 && -d "$2/worktrees/task-b" && "$(cat "$2/.orchestrator/control/mission/tasks/task-b/state")" = ready ]]' \
   _ "$TASK_B_RC" "$NATIVE"
+
+for RETAINED_STATE in ready_for_commit blocked failed; do
+  RETAINED="$TMP/retained-$RETAINED_STATE"
+  setup_repo "$RETAINED"
+  make_native_authority
+  mkdir -p "$CONTROL/tasks/task-a" "$CONTROL/tasks/task-c"
+  printf 'integrated\n' > "$CONTROL/tasks/task-a/state"
+  printf '%s\n' "$RETAINED_STATE" > "$CONTROL/tasks/task-c/state"
+  create_task task-b native-0.4 "$RETAINED" >/dev/null 2>&1
+  check "native gate retains file ownership for $RETAINED_STATE task outcome" test "$?" -ne 0
+done
 
 UNVERSIONED="$TMP/unversioned"
 setup_repo "$UNVERSIONED"
@@ -135,16 +168,25 @@ make_native_authority
 ADOPT_CHILD="$ADOPT_NATIVE/native-worktree"
 git -C "$REPO" worktree add -q --detach "$ADOPT_CHILD" "$(git -C "$PARENT" rev-parse HEAD)"
 mkdir -p "$ADOPT_NATIVE/tasks/task-a"
-printf 'native-root-proof\n' > "$ADOPT_NATIVE/tasks/task-a/native-writable-root-receipt"
+"$HEALTH" begin --control-dir "$CONTROL" --task-dir "$ADOPT_NATIVE/tasks/task-a" \
+  --task-id task-a --project-id project-native-gate \
+  --source-thread-id source-native-gate --title "ORC mission · task-a Gate" \
+  --repo "$REPO" --schedule-base "$(git -C "$PARENT" rev-parse HEAD)" >/dev/null
+"$HEALTH" observe --control-dir "$CONTROL" --task-id task-a \
+  --provisional-id provisional-task-a --thread-id thread-task-a \
+  --list-visible true --observed-title "ORC mission · task-a Gate" \
+  --bootstrap-state completed --task-state idle --cwd "$ADOPT_CHILD" \
+  --tip "$(git -C "$PARENT" rev-parse HEAD)" \
+  --observed-project-id project-native-gate >/dev/null
 "$LIFECYCLE" adopt --mission-dir "$MISSION_DIR" --control-dir "$CONTROL" \
   --task-dir "$ADOPT_NATIVE/tasks/task-a" --mission mission --task-id task-a \
   --repo "$REPO" --parent-worktree "$PARENT" --worktree "$ADOPT_CHILD" \
-  --thread-id thread-task-a --writable-root-token native-root-proof \
+  --thread-id thread-task-a \
   >/dev/null 2>&1
 ADOPT_RC=$?
 check "production gate adopts an exact app-native root task worktree" bash -c \
-  '[[ "$1" -eq 0 && "$(git -C "$2" branch --show-current)" = orc-task/mission/task-a && "$(cat "$3/tasks/task-a/state")" = ready && "$(cat "$3/tasks/task-a/accepted-thread-id")" = thread-task-a ]]' \
-  _ "$ADOPT_RC" "$ADOPT_CHILD" "$CONTROL"
+  'nonce="$3/tasks/task-a/outcome-nonce"; [[ "$1" -eq 0 && "$(git -C "$2" branch --show-current)" = orc-task/mission/task-a && "$(cat "$3/tasks/task-a/state")" = ready && "$(cat "$3/tasks/task-a/accepted-thread-id")" = thread-task-a && -f "$nonce" && ! -L "$nonce" && "$(wc -l < "$nonce" | tr -d " ")" = 1 && "$(tr -d "\n" < "$nonce")" =~ ^[0-9a-f]{64}$ && ! -e "$4/outcome-nonce" ]]' \
+  _ "$ADOPT_RC" "$ADOPT_CHILD" "$CONTROL" "$ADOPT_NATIVE/tasks/task-a"
 
 check "orchestrating skill wires child scheduling through native adoption" bash -c \
   'grep -Fq -- "$1" "$2" && grep -Fq -- "$3" "$2" && grep -Fq -- "$4" "$2"' \

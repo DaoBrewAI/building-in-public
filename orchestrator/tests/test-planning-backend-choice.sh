@@ -22,6 +22,7 @@ check() {
 }
 contains() { grep -Fq -- "$2" "$1"; }
 compact() { tr '\n' ' ' < "$1" | sed 's/[[:space:]][[:space:]]*/ /g' | grep -Fqi -- "$2"; }
+absent() { ! grep -Fq -- "$2" "$1"; }
 
 check "backend selection precedes every mission phase" python3 - "$SKILL" <<'PY'
 import sys
@@ -59,6 +60,8 @@ check "Fable route preserves Fable model" compact "$PLANNING" \
   'Fable-5 high'
 check "Fable route preserves Opus model" compact "$PLANNING" \
   'Opus-5 high'
+check "Fable route remains a direct mission-artifact writer" compact "$PLANNING" \
+  'Fable/Opus writes mission artifacts directly'
 check "Codex route creates a visible native task" compact "$PLANNING" \
   '`create_thread` under the coordinator saved project'
 check "Codex route pins Sol" compact "$PLANNING" \
@@ -69,8 +72,28 @@ check "Codex route uses an independent context" compact "$PLANNING" \
   'visible planning/review task with its own context'
 check "Codex route isolates accidental product writes" compact "$PLANNING" \
   '`environment=worktree`'
-check "Codex route proves mission artifact access" compact "$PLANNING" \
-  '`planning-writable-root-receipt`'
+check "Codex route has no external planning receipt" absent "$PLANNING" \
+  'planning-writable-root-receipt'
+check "Codex route writes only its exact native staging directory" compact "$PLANNING" \
+  'writes only `.orchestrator-planning-output` inside its native planning worktree'
+check "coordinator imports Codex planning output" compact "$PLANNING" \
+  '`scripts/planning-output.py import`'
+check "coordinator opens every Codex planning turn with one stage authority" compact "$PLANNING" \
+  '`scripts/planning-output.py begin`'
+check "stage authority binds nonce and prior mission state" compact "$PLANNING" \
+  'coordinator-owned stage nonce and exact expected mission state'
+check "Codex planning manifest carries the exact stage nonce" compact "$PLANNING" \
+  '`stage_nonce`'
+check "delayed planning output cannot cross rounds" compact "$PLANNING" \
+  'stale or delayed output from an earlier plan, clarification, review, or re-review round'
+check "planning importer records a durable receipt" compact "$PLANNING" \
+  'durable content-bound receipt'
+check "planning importer recovers cleanup interruption" compact "$PLANNING" \
+  'retry the same import after a post-publication cleanup interruption'
+check "planning import verifies clean exact native authority" compact "$PLANNING" \
+  'exact worktree and tip, zero tracked product drift, and no untracked files outside staging'
+check "permission denial never replaces the planning thread" compact "$PLANNING" \
+  'Permission denial never triggers planning-task replacement'
 check "Codex route preserves product baselines" compact "$PLANNING" \
   'verify every product worktree remains clean and at its stage-entry tip'
 check "Codex route reuses exact planning thread" compact "$PLANNING" \

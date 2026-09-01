@@ -4,10 +4,12 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 INTEGRATE="$ROOT/scripts/integrate-task.sh"
+OUTCOME="$ROOT/scripts/task-outcome.py"
 GC="$ROOT/scripts/orchestrator-gc.sh"
 LIFECYCLE="$ROOT/scripts/task-worktree.sh"
 VALIDATOR="$ROOT/scripts/validate-task-dag.sh"
 SKILL="$ROOT/skills/orchestrating/references/cleanup-and-rework.md"
+SHARED_LOCK="$ROOT/scripts/coordinator_lifecycle_lock.py"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -64,10 +66,19 @@ setup_fixture() {
   git -C "$REPO" push -q -u origin main
   git -C "$REPO" worktree add -qb orc/mission "$PARENT" main >/dev/null
   PARENT_BASE="$(git -C "$PARENT" rev-parse HEAD)"
-  "$LIFECYCLE" create --mission-dir "$MISSION_DIR" \
-    --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
-    --mission mission --task-id task-a --repo "$REPO" \
-    --parent-worktree "$PARENT" --worktree "$CHILD" >/dev/null
+  ORC_TASK_WORKTREE_TESTING=1 ORC_TASK_WORKTREE_TEST_FIXTURE_ROOT="$FIXTURE" \
+    "$LIFECYCLE" create --create-mode test-fixture --mission-dir "$MISSION_DIR" \
+      --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+      --mission mission --task-id task-a --repo "$REPO" \
+      --parent-worktree "$PARENT" --worktree "$CHILD" >/dev/null
+  printf '%s\n' "$(cd "$TASK_DIR" && pwd -P)" \
+    > "$CONTROL/tasks/task-a/task-state-dir"
+  printf 'thread-task-a\n' > "$CONTROL/tasks/task-a/accepted-thread-id"
+  printf 'thread-task-a\n' > "$TASK_DIR/accepted-thread-id"
+  printf '%s\n' \
+    0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+    > "$CONTROL/tasks/task-a/outcome-nonce"
+  printf 'archived\n' > "$CONTROL/tasks/task-a/task-window-state"
   printf 'child\n' > "$CHILD/child.txt"
   git -C "$CHILD" add child.txt
   git -C "$CHILD" commit -qm child
@@ -75,6 +86,8 @@ setup_fixture() {
   printf 'completed\n' > "$TASK_DIR/state"
   printf 'task-a verified at %s\n' "$CHILD_TIP" > "$TASK_DIR/report.md"
   printf '%s\n' "$CHILD_TIP" > "$TASK_DIR/verification.sha"
+  printf '%s\n' "$CHILD_TIP" > "$CONTROL/tasks/task-a/coordinator-verification.sha"
+  printf 'coordinator verified %s\n' "$CHILD_TIP" > "$CONTROL/tasks/task-a/coordinator-verification.md"
   printf '%s\n' "$PARENT_BASE" > "$CONTROL/tasks/task-a/parent-verification.sha"
 }
 
@@ -85,9 +98,10 @@ integrate_fixture() {
     --expected-parent-tip "$1"
   rc=$?
   if [[ "$rc" -eq 0 ]]; then
-    # This fixture has exactly one approved task. A successful integration
-    # therefore completes the approved batch and authorizes batch GC.
-    printf 'executed\n' > "$MISSION_DIR/state"
+    # Most GC fixtures model the post-review acceptance boundary. Individual
+    # tests override this state to prove earlier phases cannot collect.
+    printf 'accepted\n' > "$MISSION_DIR/state"
+    printf 'resolved\n' > "$CONTROL/review-resolution"
   fi
   return "$rc"
 }
@@ -98,6 +112,11 @@ unchanged_parent() {
 }
 
 check "child integration script exists and is executable" test -x "$INTEGRATE"
+check "shared coordinator lifecycle lock helper is installed" test -x "$SHARED_LOCK"
+check "integration acquires the shared lifecycle lock before its task lock" \
+  grep -Fq 'coordinator_lifecycle_lock.py' "$INTEGRATE"
+check "mission cleanup acquires the shared lifecycle lock before its GC lock" \
+  grep -Fq 'coordinator_lifecycle_lock.py' "$GC"
 
 setup_fixture happy
 OLD_PARENT="$PARENT_BASE"
@@ -110,6 +129,39 @@ check "completed child integrates from exact manifest branch/base and parent tip
 check "integration preserves both histories with a merge commit" bash -c \
   '[[ "$(git -C "$1" rev-list --parents -n 1 "$2" | awk "{print NF}")" -eq 3 ]] && git -C "$1" merge-base --is-ancestor "$3" "$2" && git -C "$1" merge-base --is-ancestor "$4" "$2"' \
   _ "$REPO" "$INTEGRATED_SHA" "$OLD_PARENT" "$CHILD_TIP"
+
+setup_fixture missing-coordinator-verification
+rm "$CONTROL/tasks/task-a/coordinator-verification.sha" \
+  "$CONTROL/tasks/task-a/coordinator-verification.md"
+MISSING_COORDINATOR_VERIFICATION_PARENT="$PARENT_BASE"
+integrate_fixture "$MISSING_COORDINATOR_VERIFICATION_PARENT" >/dev/null \
+  2>"$FIXTURE/missing-coordinator-verification.err"
+MISSING_COORDINATOR_VERIFICATION_RC=$?
+check "integration requires coordinator-owned exact-tip child verification" bash -c \
+  '[[ "$1" -ne 0 && "$(git -C "$2" rev-parse HEAD)" = "$3" && "$(cat "$4")" = completed ]] && grep -Fq "coordinator verification" "$5"' \
+  _ "$MISSING_COORDINATOR_VERIFICATION_RC" "$PARENT" \
+  "$MISSING_COORDINATOR_VERIFICATION_PARENT" "$TASK_DIR/state" \
+  "$FIXTURE/missing-coordinator-verification.err"
+
+setup_fixture integration-scope-escape
+printf 'outside frozen task scope\n' > "$CHILD/outside.txt"
+git -C "$CHILD" add outside.txt
+git -C "$CHILD" commit -qm 'escape frozen task scope'
+SCOPE_ESCAPE_TIP="$(git -C "$CHILD" rev-parse HEAD)"
+printf 'task-a forged verification at %s\n' "$SCOPE_ESCAPE_TIP" > "$TASK_DIR/report.md"
+printf '%s\n' "$SCOPE_ESCAPE_TIP" > "$TASK_DIR/verification.sha"
+SCOPE_ESCAPE_PARENT="$PARENT_BASE"
+integrate_fixture "$SCOPE_ESCAPE_PARENT" >/dev/null 2>"$FIXTURE/scope-escape.err"
+SCOPE_ESCAPE_RC=$?
+check "integration independently rejects committed paths outside approved task DAG" bash -c \
+  '[[ "$1" -ne 0 && "$(git -C "$2" rev-parse HEAD)" = "$3" && "$(cat "$4")" = completed ]] && grep -Fq "approved task DAG" "$5"' \
+  _ "$SCOPE_ESCAPE_RC" "$PARENT" "$SCOPE_ESCAPE_PARENT" "$TASK_DIR/state" "$FIXTURE/scope-escape.err"
+
+setup_fixture happy-after-scope
+OLD_PARENT="$PARENT_BASE"
+integrate_fixture "$OLD_PARENT" >/dev/null 2>&1
+HAPPY_RC=$?
+INTEGRATED_SHA="$(cat "$CONTROL/tasks/task-a/integrated_sha" 2>/dev/null || true)"
 integrate_fixture "$INTEGRATED_SHA" >/dev/null 2>&1
 check "repeated integration is an idempotent no-op" bash -c \
   '[[ "$1" -eq 0 && "$(git -C "$2" rev-parse HEAD)" = "$3" && "$(cat "$4")" = "$3" ]]' \
@@ -181,6 +233,47 @@ check "retry adopts only the exact intent merge without another merge" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2")" = "$3" && "$(cat "$4")" = integrated && ! -e "$5" && "$(git -C "$6" rev-list --parents -n 1 "$3" | awk "{print NF}")" -eq 3 ]]' \
   _ "$RECOVERY_RC" "$CONTROL/tasks/task-a/integrated_sha" "$MERGED_BUT_UNRECORDED" "$CONTROL/tasks/task-a/state" "$CONTROL/tasks/task-a/integration-intent" "$REPO"
 
+setup_fixture interrupted-after-ref-cas
+ORC_INTEGRATE_TEST_FAIL_AFTER_REF_UPDATE=1 integrate_fixture "$PARENT_BASE" >/dev/null 2>&1
+REF_CAS_INTERRUPTED_RC=$?
+REF_CAS_TIP="$(git -C "$PARENT" rev-parse HEAD)"
+REF_CAS_DIRTY="$(git -C "$PARENT" status --porcelain --untracked-files=all)"
+REF_CAS_INTENT_SURVIVED=0
+[[ -f "$CONTROL/tasks/task-a/integration-intent" ]] && REF_CAS_INTENT_SURVIVED=1
+REF_CAS_CONTROL_BEFORE="$(cat "$CONTROL/tasks/task-a/state")"
+printf '%s\n' "$REF_CAS_TIP" > "$CONTROL/tasks/task-a/parent-verification.sha"
+integrate_fixture "$REF_CAS_TIP" >/dev/null 2>&1
+REF_CAS_RECOVERY_RC=$?
+check "post-ref-CAS interruption leaves exact intent and no false completion" bash -c \
+  '[[ "$1" -ne 0 && "$2" != "$3" && "$4" -eq 1 && "$5" != integrated ]]' \
+  _ "$REF_CAS_INTERRUPTED_RC" "$REF_CAS_TIP" "$PARENT_BASE" "$REF_CAS_INTENT_SURVIVED" "$REF_CAS_CONTROL_BEFORE"
+check "post-ref-CAS retry reconciles the original hook-free merge and publishes once" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/integrated_sha")" = "$3" && "$(cat "$2/state")" = integrated && ! -e "$2/integration-intent" && -z "$(git -C "$4" status --porcelain --untracked-files=all)" ]]' \
+  _ "$REF_CAS_RECOVERY_RC" "$CONTROL/tasks/task-a" "$REF_CAS_TIP" "$PARENT"
+
+setup_fixture merge-hooks-bypassed
+HOOKS_DIR="$(git -C "$REPO" rev-parse --absolute-git-dir)/hooks"
+mkdir -p "$HOOKS_DIR"
+HOOK_MARKER="$FIXTURE/merge-hook-ran"
+REF_HOOK_MARKER="$FIXTURE/reference-transaction-hook-ran"
+cat > "$HOOKS_DIR/pre-merge-commit" <<SH
+#!/bin/sh
+printf 'hook outside scope\n' > '$PARENT/outside-hook.txt'
+git -C '$PARENT' add -- outside-hook.txt
+printf 'ran\n' > '$HOOK_MARKER'
+SH
+chmod +x "$HOOKS_DIR/pre-merge-commit"
+cat > "$HOOKS_DIR/reference-transaction" <<SH
+#!/bin/sh
+printf 'ran\n' > '$REF_HOOK_MARKER'
+SH
+chmod +x "$HOOKS_DIR/reference-transaction"
+integrate_fixture "$PARENT_BASE" >/dev/null 2>&1
+HOOK_FREE_RC=$?
+check "integration uses a verified tree and never runs mutating merge hooks" bash -c \
+  '[[ "$1" -eq 0 && ! -e "$2" && ! -e "$3" && ! -e "$4/outside-hook.txt" && -z "$(git -C "$4" status --porcelain --untracked-files=all)" && "$(cat "$5/state")" = integrated ]]' \
+  _ "$HOOK_FREE_RC" "$HOOK_MARKER" "$REF_HOOK_MARKER" "$PARENT" "$CONTROL/tasks/task-a"
+
 setup_fixture immutable-child-tip
 IMMUTABLE_PARENT="$PARENT_BASE"
 MALICIOUS_TIP="$(printf 'ref advance\n' | git -C "$REPO" commit-tree "$(git -C "$REPO" rev-parse "${CHILD_TIP}^{tree}")" -p "$CHILD_TIP")"
@@ -191,7 +284,7 @@ mkdir -p "$REF_ADVANCE_BIN"
 cat > "$REF_ADVANCE_BIN/git" <<'SH'
 #!/usr/bin/env bash
 set -u
-if [[ " $* " == *" merge --no-ff --no-edit "* && ! -e "$ORC_REF_ADVANCE_MARKER" ]]; then
+if [[ " $* " == *" update-ref -m orchestrator integrate "* && ! -e "$ORC_REF_ADVANCE_MARKER" ]]; then
   "$ORC_REF_ADVANCE_REAL_GIT" -C "$ORC_REF_ADVANCE_REPO" update-ref \
     "refs/heads/$ORC_REF_ADVANCE_BRANCH" "$ORC_REF_ADVANCE_TIP" "$ORC_REF_ATTESTED_TIP" || exit 90
   : > "$ORC_REF_ADVANCE_MARKER"
@@ -210,6 +303,16 @@ REF_ADVANCE_SECOND_PARENT="$(git -C "$PARENT" rev-parse "${REF_ADVANCE_PARENT}^2
 check "branch ref advance cannot make integration consume an unattested child tip" bash -c \
   '[[ -e "$1" && "$(git -C "$2" rev-parse "refs/heads/$3")" = "$4" ]] && { [[ "$5" -eq 0 && "$6" = "$7" ]] || [[ "$5" -ne 0 && "$8" = "$9" ]]; }' \
   _ "$REF_ADVANCE_MARKER" "$REPO" "$BRANCH" "$MALICIOUS_TIP" "$REF_ADVANCE_RC" "$REF_ADVANCE_SECOND_PARENT" "$CHILD_TIP" "$REF_ADVANCE_PARENT" "$IMMUTABLE_PARENT"
+
+setup_fixture wrong-task-state-dir
+mkdir -p "$FIXTURE/other-task-state"
+printf '%s\n' "$FIXTURE/other-task-state" > "$CONTROL/tasks/task-a/task-state-dir"
+WRONG_TASK_STATE_PARENT="$PARENT_BASE"
+integrate_fixture "$WRONG_TASK_STATE_PARENT" >/dev/null 2>&1
+WRONG_TASK_STATE_RC=$?
+check "integration refuses a task directory outside coordinator task-state-dir authority" bash -c \
+  '[[ "$1" -ne 0 && "$(git -C "$2" rev-parse HEAD)" = "$3" && "$(cat "$4/state")" = completed ]]' \
+  _ "$WRONG_TASK_STATE_RC" "$PARENT" "$WRONG_TASK_STATE_PARENT" "$TASK_DIR"
 
 setup_fixture wrong-state
 printf 'running\n' > "$TASK_DIR/state"
@@ -255,6 +358,105 @@ check "held coordinator integration lock prevents parent mutation" bash -c \
 check "integration retries after the advisory lock is released" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2")" = integrated ]]' \
   _ "$LOCK_RETRY_RC" "$CONTROL/tasks/task-a/state"
+
+setup_fixture lifecycle-integration-vs-gc
+LIFECYCLE_HOOK="$FIXTURE/lifecycle-hook"
+mkdir -p "$LIFECYCLE_HOOK"
+LIFECYCLE_HOOK="$(cd "$LIFECYCLE_HOOK" && pwd -P)"
+ORC_COORDINATOR_LIFECYCLE_TEST_HOOK_DIR="$LIFECYCLE_HOOK" \
+  ORC_COORDINATOR_LIFECYCLE_TEST_PARTICIPANT=integration \
+  "$INTEGRATE" --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
+    --mission mission --task-id task-a --parent-worktree "$PARENT" \
+    --expected-parent-tip "$PARENT_BASE" > "$FIXTURE/integration.out" \
+    2> "$FIXTURE/integration.err" &
+LIFECYCLE_INTEGRATION_PID=$!
+LIFECYCLE_ATTEMPTS=0
+while [[ ! -e "$LIFECYCLE_HOOK/entered-integration" && \
+         "$LIFECYCLE_ATTEMPTS" -lt 200 ]]; do
+  LIFECYCLE_ATTEMPTS=$((LIFECYCLE_ATTEMPTS + 1))
+  sleep 0.01
+done
+LIFECYCLE_INTEGRATION_ENTERED=0
+LIFECYCLE_GC_WAITED=0
+LIFECYCLE_INTEGRATION_RC=127
+LIFECYCLE_GC_RC=127
+if [[ -e "$LIFECYCLE_HOOK/entered-integration" ]]; then
+  LIFECYCLE_INTEGRATION_ENTERED=1
+  "$GC" --hub "$HUB" --mission mission --clean > "$FIXTURE/gc.out" \
+    2> "$FIXTURE/gc.err" &
+  LIFECYCLE_GC_PID=$!
+  sleep 0.2
+  if kill -0 "$LIFECYCLE_GC_PID" 2>/dev/null; then
+    LIFECYCLE_GC_WAITED=1
+  fi
+  : > "$LIFECYCLE_HOOK/continue-integration"
+  wait "$LIFECYCLE_INTEGRATION_PID"
+  LIFECYCLE_INTEGRATION_RC=$?
+  wait "$LIFECYCLE_GC_PID"
+  LIFECYCLE_GC_RC=$?
+else
+  wait "$LIFECYCLE_INTEGRATION_PID"
+  LIFECYCLE_INTEGRATION_RC=$?
+fi
+check "integration and mission GC serialize on one coordinator lifecycle epoch" bash -c \
+  '[[ "$1" -eq 1 && "$2" -eq 1 && "$3" -eq 0 && "$4" -ne 0 &&
+     "$(cat "$5/state")" = integrated && -d "$6" &&
+     "$(git -C "$7" rev-parse HEAD)" != "$8" ]]' \
+  _ "$LIFECYCLE_INTEGRATION_ENTERED" "$LIFECYCLE_GC_WAITED" \
+  "$LIFECYCLE_INTEGRATION_RC" "$LIFECYCLE_GC_RC" \
+  "$CONTROL/tasks/task-a" "$CHILD" "$PARENT" "$PARENT_BASE"
+
+setup_fixture lifecycle-reopen-vs-gc
+integrate_fixture "$PARENT_BASE" >/dev/null 2>&1
+printf 'unarchived\n' > "$CONTROL/tasks/task-a/task-window-state"
+printf '%s\n' \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  > "$CONTROL/tasks/task-a/latest-outcome"
+REOPEN_LIFECYCLE_HOOK="$FIXTURE/reopen-lifecycle-hook"
+mkdir -p "$REOPEN_LIFECYCLE_HOOK"
+REOPEN_LIFECYCLE_HOOK="$(cd "$REOPEN_LIFECYCLE_HOOK" && pwd -P)"
+ORC_COORDINATOR_LIFECYCLE_TEST_HOOK_DIR="$REOPEN_LIFECYCLE_HOOK" \
+  ORC_COORDINATOR_LIFECYCLE_TEST_PARTICIPANT=reopen \
+  "$OUTCOME" reopen --control-dir "$(cd "$CONTROL" && pwd -P)" \
+    --task-dir "$(cd "$TASK_DIR" && pwd -P)" --task-id task-a \
+    --parent-worktree "$(cd "$PARENT" && pwd -P)" --expected-generation 1 \
+    > "$FIXTURE/reopen.out" 2> "$FIXTURE/reopen.err" &
+REOPEN_LIFECYCLE_PID=$!
+REOPEN_LIFECYCLE_ATTEMPTS=0
+while [[ ! -e "$REOPEN_LIFECYCLE_HOOK/entered-reopen" && \
+         "$REOPEN_LIFECYCLE_ATTEMPTS" -lt 200 ]]; do
+  REOPEN_LIFECYCLE_ATTEMPTS=$((REOPEN_LIFECYCLE_ATTEMPTS + 1))
+  sleep 0.01
+done
+REOPEN_LIFECYCLE_ENTERED=0
+REOPEN_GC_WAITED=0
+REOPEN_LIFECYCLE_RC=127
+REOPEN_GC_RC=127
+if [[ -e "$REOPEN_LIFECYCLE_HOOK/entered-reopen" ]]; then
+  REOPEN_LIFECYCLE_ENTERED=1
+  "$GC" --hub "$HUB" --mission mission --clean > "$FIXTURE/reopen-gc.out" \
+    2> "$FIXTURE/reopen-gc.err" &
+  REOPEN_GC_PID=$!
+  sleep 0.2
+  if kill -0 "$REOPEN_GC_PID" 2>/dev/null; then
+    REOPEN_GC_WAITED=1
+  fi
+  : > "$REOPEN_LIFECYCLE_HOOK/continue-reopen"
+  wait "$REOPEN_LIFECYCLE_PID"
+  REOPEN_LIFECYCLE_RC=$?
+  wait "$REOPEN_GC_PID"
+  REOPEN_GC_RC=$?
+else
+  wait "$REOPEN_LIFECYCLE_PID"
+  REOPEN_LIFECYCLE_RC=$?
+fi
+check "reopen and mission GC serialize before either changes the task epoch" bash -c \
+  '[[ "$1" -eq 1 && "$2" -eq 1 && "$3" -eq 0 && "$4" -ne 0 &&
+     "$(cat "$5/state")" = ready && "$(cat "$6/state")" = ready &&
+     "$(cat "$5/generation")" = 2 && -d "$7" ]]' \
+  _ "$REOPEN_LIFECYCLE_ENTERED" "$REOPEN_GC_WAITED" \
+  "$REOPEN_LIFECYCLE_RC" "$REOPEN_GC_RC" "$CONTROL/tasks/task-a" \
+  "$TASK_DIR" "$CHILD"
 
 setup_fixture wrong-branch
 python3 - "$CONTROL/tasks/task-a/worktrees.txt" <<'PY'
@@ -356,6 +558,55 @@ check "merge conflict aborts without rewriting or advancing parent" bash -c \
   '[[ "$1" -ne 0 && "$(git -C "$2" rev-parse HEAD)" = "$3" && -z "$(git -C "$2" status --porcelain --untracked-files=all)" && "$(cat "$4")" = completed ]]' \
   _ "$RC" "$PARENT" "$CURRENT_PARENT" "$TASK_DIR/state"
 
+setup_fixture pre-review-retained
+integrate_fixture "$PARENT_BASE" >/dev/null
+printf 'executed\n' > "$MISSION_DIR/state"
+rm -f "$CONTROL/review-resolution"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+PRE_REVIEW_GC_RC=$?
+check "all integrated children remain intact before selected-backend review" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/state")" = integrated ]] && git -C "$4" show-ref --verify --quiet "refs/heads/$5"' \
+  _ "$PRE_REVIEW_GC_RC" "$CHILD" "$CONTROL/tasks/task-a" "$REPO" "$BRANCH"
+printf 'review\n' > "$MISSION_DIR/state"
+printf 'resolved\n' > "$CONTROL/review-resolution"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+REVIEW_STATE_GC_RC=$?
+check "resolved review still retains children until mission acceptance" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/state")" = integrated ]]' \
+  _ "$REVIEW_STATE_GC_RC" "$CHILD" "$CONTROL/tasks/task-a"
+printf 'accepted\n' > "$MISSION_DIR/state"
+printf 'unarchived\n' > "$CONTROL/tasks/task-a/task-window-state"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+UNARCHIVED_GC_RC=$?
+check "accepted mission retains Git resources until native child archive succeeds" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/state")" = integrated ]]' \
+  _ "$UNARCHIVED_GC_RC" "$CHILD" "$CONTROL/tasks/task-a"
+
+setup_fixture forged-cleanup-pending-sibling
+integrate_fixture "$PARENT_BASE" >/dev/null
+jq '.tasks += [{"id":"task-b","depends_on":[],"files":["other.txt"],"contracts":[],"verification":["true"],"state":"ready"}]' \
+  "$CONTROL/approved-task-dag.json" > "$CONTROL/approved-task-dag.json.tmp"
+mv "$CONTROL/approved-task-dag.json.tmp" "$CONTROL/approved-task-dag.json"
+(cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md brief-exec.md approved-task-dag.json > approved.sha256)
+mkdir -p "$CONTROL/tasks/task-b"
+printf 'cleanup_pending\n' > "$CONTROL/tasks/task-b/state"
+printf 'thread-task-b\n' > "$CONTROL/tasks/task-b/accepted-thread-id"
+printf 'archived\n' > "$CONTROL/tasks/task-b/task-window-state"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+FORGED_SIBLING_GC_RC=$?
+check "batch preflight refuses cleanup_pending sibling without integration authority before deleting any child" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/state")" = integrated ]] && git -C "$4" show-ref --verify --quiet "refs/heads/$5"' \
+  _ "$FORGED_SIBLING_GC_RC" "$CHILD" "$CONTROL/tasks/task-a" "$REPO" "$BRANCH"
+
+setup_fixture frozen-dag-drift-before-gc
+integrate_fixture "$PARENT_BASE" >/dev/null
+printf '\n' >> "$CONTROL/approved-task-dag.json"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+DAG_DRIFT_GC_RC=$?
+check "batch GC refuses DAG bytes that drift from frozen approval authority" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" && "$(cat "$3/state")" = integrated ]] && git -C "$4" show-ref --verify --quiet "refs/heads/$5"' \
+  _ "$DAG_DRIFT_GC_RC" "$CHILD" "$CONTROL/tasks/task-a" "$REPO" "$BRANCH"
+
 setup_fixture collect
 git -C "$CHILD" push -q -u origin "$BRANCH"
 integrate_fixture "$PARENT_BASE" >/dev/null
@@ -370,14 +621,29 @@ check "verified child GC removes exact worktree and local and remote branches" b
   '[[ "$1" -eq 0 && ! -e "$2" ]] && ! git -C "$3" show-ref --verify --quiet "refs/heads/$4" && ! git --git-dir "$5" show-ref --verify --quiet "refs/heads/$4" && git -C "$3" merge-base --is-ancestor "$6" "$(git -C "$7" rev-parse HEAD)"' \
   _ "$GC_RC" "$CHILD" "$REPO" "$BRANCH" "$REMOTE" "$CHILD_TIP" "$PARENT"
 check "successful exact cleanup records collected state" bash -c \
-  '[[ "$(cat "$1")" = collected && "$(cat "$2")" = "$3" ]]' \
-  _ "$CONTROL/tasks/task-a/state" "$CONTROL/tasks/task-a/integrated_sha" "$COLLECTED_SHA"
+  '[[ "$(cat "$1")" = collected && "$(cat "$2")" = collected && "$(cat "$3")" = "$4" ]]' \
+  _ "$CONTROL/tasks/task-a/state" "$TASK_DIR/state" "$CONTROL/tasks/task-a/integrated_sha" "$COLLECTED_SHA"
 integrate_fixture "$(git -C "$PARENT" rev-parse HEAD)" >/dev/null 2>&1
 check "integration repeat remains idempotent after exact collection" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2")" = collected && "$(cat "$3")" = collected ]]' \
   _ "$?" "$CONTROL/tasks/task-a/state" "$TASK_DIR/state"
 $GC --hub "$HUB" --clean >/dev/null 2>&1
 check "repeated collection is an idempotent no-op" test "$?" -eq 0
+
+setup_fixture dual-state-collected-crash
+integrate_fixture "$PARENT_BASE" >/dev/null
+ORC_GC_TEST_FAIL_AFTER_TASK_STATE_COLLECTED=1 \
+  "$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+DUAL_STATE_INTERRUPTED_RC=$?
+check "interruption between external and control collected states preserves recovery intent" bash -c \
+  '[[ "$1" -ne 0 && "$(cat "$2/state")" = integrated && "$(cat "$3/state")" = collected &&
+     "$(cut -f1 "$2/cleanup-intent")" = resources_collected ]]' \
+  _ "$DUAL_STATE_INTERRUPTED_RC" "$CONTROL/tasks/task-a" "$TASK_DIR"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+DUAL_STATE_RECOVERY_RC=$?
+check "exact retry converges the split collected state on both authority copies" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/state")" = collected && "$(cat "$3/state")" = collected && ! -e "$2/cleanup-intent" ]]' \
+  _ "$DUAL_STATE_RECOVERY_RC" "$CONTROL/tasks/task-a" "$TASK_DIR"
 
 setup_fixture remote-check-failure
 git -C "$CHILD" push -q -u origin "$BRANCH"
@@ -553,113 +819,79 @@ check "initial child authority records generation one and exact sandbox root" ba
   _ "$REWORK_CONTROL_TASK" "$TASK_DIR" "$REWORK_MANIFEST_WORKTREE"
 printf '01a0exact-thread-id\n' > "$REWORK_CONTROL_TASK/accepted-thread-id"
 printf '01a0exact-thread-id\n' > "$TASK_DIR/accepted-thread-id"
-printf 'archived\n' > "$REWORK_CONTROL_TASK/task-window-state"
-git -C "$CHILD" push -q -u origin "$BRANCH"
+printf 'unarchived\n' > "$REWORK_CONTROL_TASK/task-window-state"
 integrate_fixture "$PARENT_BASE" >/dev/null
-"$GC" --hub "$HUB" --clean >/dev/null
+FIRST_REWORK_INTEGRATION="$(cat "$REWORK_CONTROL_TASK/integrated_sha")"
+FIRST_REWORK_CHILD_TIP="$(cat "$REWORK_CONTROL_TASK/child_tip")"
+printf '%s\n' \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  > "$REWORK_CONTROL_TASK/latest-outcome"
 printf 'parent after review\n' > "$PARENT/rework-parent.txt"
 git -C "$PARENT" add rework-parent.txt
 git -C "$PARENT" commit -qm rework-parent
 REWORK_PARENT_TIP="$(git -C "$PARENT" rev-parse HEAD)"
-printf 'unarchived\n' > "$REWORK_CONTROL_TASK/task-window-state"
-"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
-  --mission mission --task-id task-a --repo "$REPO" \
-  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 1 \
-  >/dev/null 2>&1
-REPROVISION_RC=$?
+printf 'rework\n' > "$MISSION_DIR/state"
+rm -f "$CONTROL/review-resolution"
+"$OUTCOME" reopen --control-dir "$(cd "$CONTROL" && pwd -P)" \
+  --task-dir "$(cd "$TASK_DIR" && pwd -P)" --task-id task-a \
+  --parent-worktree "$(cd "$PARENT" && pwd -P)" --expected-generation 1 \
+  >"$FIXTURE/reopen.out" 2>"$FIXTURE/reopen.err"
+REOPEN_RC=$?
+if [[ "$REOPEN_RC" -ne 0 ]]; then
+  sed 's/^/  reopen diagnostic: /' "$FIXTURE/reopen.err"
+fi
 REWORK_CONTROL_ROW="$(cat "$REWORK_CONTROL_TASK/worktrees.txt" 2>/dev/null || true)"
 REWORK_WORKER_ROW="$(cat "$TASK_DIR/worktrees.txt" 2>/dev/null || true)"
-check "collected task reprovisions exact path and branch from updated parent" bash -c \
-  'IFS=$'"'"'\t'"'"' read -r worktree branch base repo extra <<< "$1"; [[ "$2" -eq 0 && -d "$3" && "$worktree" = "$4" && "$branch" = "$5" && "$base" = "$6" && "$repo" = "$7" && -z "$extra" && "$(git -C "$3" rev-parse HEAD)" = "$6" ]]' \
-  _ "$REWORK_CONTROL_ROW" "$REPROVISION_RC" "$CHILD" "$REWORK_MANIFEST_WORKTREE" "$BRANCH" "$REWORK_PARENT_TIP" "$(cd "$REPO" && pwd -P)"
-check "reprovision atomically advances generation and both authority copies" bash -c \
-  '[[ "$1" = "$2" && "$(cat "$3/generation")" = 2 && "$(cat "$4/generation")" = 2 && "$(cat "$3/sandbox-root")" = "$5" && "$(cat "$4/sandbox-root")" = "$5" && "$(cat "$3/state")" = ready && "$(cat "$4/state")" = ready && "$(cat "$3/accepted-thread-id")" = "$6" ]]' \
-  _ "$REWORK_CONTROL_ROW" "$REWORK_WORKER_ROW" "$REWORK_CONTROL_TASK" "$TASK_DIR" "$REWORK_MANIFEST_WORKTREE" 01a0exact-thread-id
+check "review reopens the retained exact worktree branch and native thread" bash -c \
+  'IFS=$'"'"'\t'"'"' read -r worktree branch base repo extra <<< "$1"; [[ "$2" -eq 0 && "$1" = "$3" && -d "$4" && "$worktree" = "$5" && "$branch" = "$6" && "$base" = "$7" && "$repo" = "$8" && -z "$extra" && "$(git -C "$4" rev-parse HEAD)" = "$9" && "$(cat "${10}/accepted-thread-id")" = "${11}" && "$(cat "${10}/task-window-state")" = unarchived ]]' \
+  _ "$REWORK_CONTROL_ROW" "$REOPEN_RC" "$REWORK_WORKER_ROW" "$CHILD" \
+  "$REWORK_MANIFEST_WORKTREE" "$BRANCH" "$PARENT_BASE" "$(cd "$REPO" && pwd -P)" \
+  "$FIRST_REWORK_CHILD_TIP" "$REWORK_CONTROL_TASK" 01a0exact-thread-id
+check "reopen advances generation and nonce without replacing retained ownership" bash -c \
+  '[[ "$(cat "$1/generation")" = 2 && "$(cat "$2/generation")" = 2 &&
+     "$(cat "$1/state")" = ready && "$(cat "$2/state")" = ready &&
+     "$(cat "$1/outcome-nonce")" =~ ^[0-9a-f]{64}$ &&
+     "$(cat "$1/outcome-nonce")" != "$3" && -s "$1/rework-completion-2.json" &&
+     "$(cat "$1/integrated_sha")" = "$4" ]]' \
+  _ "$REWORK_CONTROL_TASK" "$TASK_DIR" \
+  0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  "$FIRST_REWORK_INTEGRATION"
 "$LIFECYCLE" create --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
   --mission mission --task-id task-a --repo "$REPO" \
   --parent-worktree "$PARENT" --worktree "$CHILD" >/dev/null 2>&1
 check "ordinary create never overwrites retained task ownership" test "$?" -ne 0
-if [[ "$REPROVISION_RC" -eq 0 ]]; then
-  printf 'rework child\n' > "$CHILD/rework.txt"
-  git -C "$CHILD" add rework.txt
+if [[ "$REOPEN_RC" -eq 0 ]]; then
+  printf 'rework child\n' >> "$CHILD/child.txt"
+  git -C "$CHILD" add child.txt
   git -C "$CHILD" commit -qm rework-child
   REWORK_CHILD_TIP="$(git -C "$CHILD" rev-parse HEAD)"
   printf 'completed\n' > "$TASK_DIR/state"
   printf 'task-a rework verified at %s\n' "$REWORK_CHILD_TIP" > "$TASK_DIR/report.md"
   printf '%s\n' "$REWORK_CHILD_TIP" > "$TASK_DIR/verification.sha"
+  printf '%s\n' "$REWORK_CHILD_TIP" > "$REWORK_CONTROL_TASK/coordinator-verification.sha"
+  printf 'coordinator verified %s\n' "$REWORK_CHILD_TIP" > "$REWORK_CONTROL_TASK/coordinator-verification.md"
   printf '%s\n' "$REWORK_PARENT_TIP" > "$REWORK_CONTROL_TASK/parent-verification.sha"
   integrate_fixture "$REWORK_PARENT_TIP" >/dev/null 2>&1
   REINTEGRATE_RC=$?
-  "$GC" --hub "$HUB" --clean >/dev/null 2>&1
-  RECOLLECT_RC=$?
 else
   REWORK_CHILD_TIP=""
   REINTEGRATE_RC=127
-  RECOLLECT_RC=127
 fi
+check "same retained child generation reintegrates before final review cleanup" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/state")" = integrated && "$(cat "$2/generation")" = 2 &&
+     "$(cat "$2/accepted-thread-id")" = "$3" && "$(cat "$2/task-window-state")" = unarchived &&
+     -d "$4" && "$(git -C "$4" rev-parse HEAD)" = "$5" ]]' \
+  _ "$REINTEGRATE_RC" "$REWORK_CONTROL_TASK" 01a0exact-thread-id "$CHILD" "$REWORK_CHILD_TIP"
+printf 'accepted\n' > "$MISSION_DIR/state"
+printf 'resolved\n' > "$CONTROL/review-resolution"
 printf 'archived\n' > "$REWORK_CONTROL_TASK/task-window-state"
-check "same task generation reintegrates and recollects after rework" bash -c \
-  '[[ "$1" -eq 0 && "$2" -eq 0 && "$(cat "$3/state")" = collected && "$(cat "$3/generation")" = 2 && ! -e "$4" ]] && ! git -C "$5" show-ref --verify --quiet "refs/heads/$6"' \
-  _ "$REINTEGRATE_RC" "$RECOLLECT_RC" "$REWORK_CONTROL_TASK" "$CHILD" "$REPO" "$BRANCH"
-check "archive and unarchive lifecycle retains the exact accepted thread ID" bash -c \
-  '[[ "$(cat "$1/accepted-thread-id")" = "$2" && "$(cat "$1/task-window-state")" = archived ]]' \
-  _ "$REWORK_CONTROL_TASK" 01a0exact-thread-id
-
-setup_fixture gc-reprovision-race
-RACE_CONTROL_TASK="$CONTROL/tasks/task-a"
-printf '01a0gc-race-thread\n' > "$RACE_CONTROL_TASK/accepted-thread-id"
-printf '01a0gc-race-thread\n' > "$TASK_DIR/accepted-thread-id"
-printf 'unarchived\n' > "$RACE_CONTROL_TASK/task-window-state"
-integrate_fixture "$PARENT_BASE" >/dev/null
-RACE_PARENT_TIP="$(git -C "$PARENT" rev-parse HEAD)"
-RACE_BIN="$FIXTURE/gc-race-bin"
-RACE_PAUSED="$FIXTURE/gc-paused"
-RACE_RELEASE="$FIXTURE/gc-release"
-REAL_GIT="$(command -v git)"
-mkdir -p "$RACE_BIN"
-mkfifo "$RACE_RELEASE"
-cat > "$RACE_BIN/git" <<'SH'
-#!/usr/bin/env bash
-set -u
-if [[ " $* " == *" update-ref -d refs/heads/$ORC_GC_RACE_BRANCH "* && ! -e "$ORC_GC_RACE_PAUSED" ]]; then
-  "$ORC_GC_RACE_REAL_GIT" "$@" || exit "$?"
-  : > "$ORC_GC_RACE_PAUSED"
-  IFS= read -r _ < "$ORC_GC_RACE_RELEASE"
-  exit 0
-fi
-exec "$ORC_GC_RACE_REAL_GIT" "$@"
-SH
-chmod +x "$RACE_BIN/git"
-PATH="$RACE_BIN:$PATH" ORC_GC_RACE_REAL_GIT="$REAL_GIT" \
-  ORC_GC_RACE_BRANCH="$BRANCH" ORC_GC_RACE_PAUSED="$RACE_PAUSED" \
-  ORC_GC_RACE_RELEASE="$RACE_RELEASE" \
-  "$GC" --hub "$HUB" --clean >"$FIXTURE/gc-race.out" 2>"$FIXTURE/gc-race.err" &
-RACE_GC_PID=$!
-RACE_WAIT=0
-while [[ ! -e "$RACE_PAUSED" && "$RACE_WAIT" -lt 300 ]]; do
-  kill -0 "$RACE_GC_PID" 2>/dev/null || break
-  RACE_WAIT=$((RACE_WAIT + 1))
-  sleep 0.01
-done
-"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
-  --mission mission --task-id task-a --repo "$REPO" \
-  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 1 \
-  >/dev/null 2>&1
-PAUSED_REPROVISION_RC=$?
-printf 'release\n' > "$RACE_RELEASE"
-wait "$RACE_GC_PID"
-RACE_GC_RC=$?
-"$LIFECYCLE" reprovision --control-dir "$CONTROL" --task-dir "$TASK_DIR" \
-  --mission mission --task-id task-a --repo "$REPO" \
-  --parent-worktree "$PARENT" --worktree "$CHILD" --expected-generation 1 \
-  >/dev/null 2>&1
-POST_GC_REPROVISION_RC=$?
-check "paused generation-one GC excludes concurrent generation-two reprovision" bash -c \
-  '[[ -e "$1" && "$2" -ne 0 && "$3" -eq 0 ]]' \
-  _ "$RACE_PAUSED" "$PAUSED_REPROVISION_RC" "$RACE_GC_RC"
-check "post-GC reprovision converges one exact generation-two authority" bash -c \
-  '[[ "$1" -eq 0 && "$(cat "$2/generation")" = 2 && "$(cat "$3/generation")" = 2 && "$(cat "$2/state")" = ready && "$(cat "$3/state")" = ready && -d "$4" && "$(git -C "$4" rev-parse HEAD)" = "$5" && ! -e "$2/cleanup-intent" ]] && git -C "$6" show-ref --verify --quiet "refs/heads/$7" && cmp -s "$2/worktrees.txt" "$3/worktrees.txt"' \
-  _ "$POST_GC_REPROVISION_RC" "$RACE_CONTROL_TASK" "$TASK_DIR" "$CHILD" "$RACE_PARENT_TIP" "$REPO" "$BRANCH"
+"$GC" --hub "$HUB" --clean >/dev/null 2>&1
+RECOLLECT_RC=$?
+check "final accepted review archives then batch-collects the retained child" bash -c \
+  '[[ "$1" -eq 0 && "$(cat "$2/state")" = collected && "$(cat "$2/generation")" = 2 &&
+     "$(cat "$2/accepted-thread-id")" = "$3" && "$(cat "$2/task-window-state")" = archived &&
+     "$(cat "$4/state")" = collected && ! -e "$5" ]] && ! git -C "$6" show-ref --verify --quiet "refs/heads/$7"' \
+  _ "$RECOLLECT_RC" "$REWORK_CONTROL_TASK" 01a0exact-thread-id "$TASK_DIR" "$CHILD" "$REPO" "$BRANCH"
 
 for UNSAFE_STATE in running blocked failed review rework completed; do
   setup_fixture "unsafe-$UNSAFE_STATE"
@@ -675,41 +907,40 @@ integrate_fixture "$PARENT_BASE" >/dev/null
 printf 'cleanup_pending\n' > "$CONTROL/tasks/task-a/state"
 : > "$CONTROL/tasks/task-a/task-window-archive-pending"
 "$GC" --hub "$HUB" --clean >/dev/null 2>&1
-check "archive-only cleanup_pending is preserved for coordinator API retry" bash -c \
-  '[[ "$1" -eq 0 && "$(cat "$2")" = cleanup_pending && -f "$3" && -d "$4" ]]' \
+check "archive-only cleanup_pending blocks batch GC and is preserved for API retry" bash -c \
+  '[[ "$1" -ne 0 && "$(cat "$2")" = cleanup_pending && -f "$3" && -d "$4" ]]' \
   _ "$?" "$CONTROL/tasks/task-a/state" "$CONTROL/tasks/task-a/task-window-archive-pending" "$CHILD"
 
 check "coordinator documents full child lifecycle with retriable cleanup" \
   grep -Fq -- "ready -> running -> completed -> integrated -> collected" "$SKILL"
-check "completed child windows archive only after exact collection" \
+check "accepted child windows archive before exact residual collection" \
   grep -Fq -- "archive the exact accepted child thread" "$SKILL"
 check "unsafe child windows remain visible" \
   grep -Fq -- "Never archive running, blocked, review, or unresolved-rework" "$SKILL"
 check "archive failure becomes cleanup_pending and is retried" \
   grep -Fq -- "task-window archive failure" "$SKILL"
-check "rework unarchives and later rearchives exact accepted thread" bash -c \
-  'grep -Fq -- "unarchive the exact accepted child thread" "$1" && grep -Fq -- "Rearchive only after verified reintegration" "$1"' \
-  _ "$SKILL"
-check "coordinator invokes the exact-authority reprovision lifecycle operation" \
-  grep -Fq -- "task-worktree.sh reprovision" "$SKILL"
-check "rework reprovision requires monotonic generation authority" \
+check "rework retains the exact unarchived accepted thread" \
+  grep -Fq -- "task window still unarchived" "$SKILL"
+check "coordinator invokes the retained-child reopen operation" \
+  grep -Fq -- "task-outcome.py reopen" "$SKILL"
+check "retained reopen requires monotonic generation authority" \
   grep -Fq -- "--expected-generation" "$SKILL"
-check "GC and reprovision share one lifecycle mutation lock" \
-  grep -Fq -- "shared coordinator lifecycle mutation lock" "$SKILL"
+check "retained reopen refreshes coordinator outcome authority" \
+  grep -Fq -- "coordinator-owned outcome nonce" "$SKILL"
 check "destructive GC revalidates generation and manifest epoch" \
   grep -Fq -- "revalidate the exact generation and manifest" "$SKILL"
-check "incomplete reprovision rollback preserves recovery evidence" \
-  grep -Fq -- "preserve reprovision-intent, staging, and backups" "$SKILL"
-check "exact retry recognizes an already-converged reprovision epoch" \
-  grep -Fq -- "already-converged reprovision epoch" "$SKILL"
-check "reprovision durability fsyncs evidence before authority replacement" \
-  grep -Fq -- "fsync intent, stage, and backup contents" "$SKILL"
-check "ambiguous reprovision success requires an fsynced completion receipt" \
-  grep -Fq -- "fsynced reprovision completion receipt" "$SKILL"
-check "completion receipt requires strict one-row and scalar authority formats" \
-  grep -Fq -- "strict one-row manifests and one-line scalar authorities" "$SKILL"
+check "interrupted reopen preserves durable recovery evidence" \
+  grep -Fq -- "rework intent" "$SKILL"
+check "exact retry recognizes one completed rework epoch" \
+  grep -Fq -- "rework-completion-<N+1>.json" "$SKILL"
+check "reopen durability converges both state and generation copies" \
+  grep -Fq -- "generation and state" "$SKILL"
+check "rework never archives or collects the retained child" \
+  grep -Fq -- "Never collect, archive, unarchive" "$SKILL"
+check "late outcomes cannot cross a rework epoch" \
+  grep -Fq -- "old or delayed outcome" "$SKILL"
 check "stale completion receipts cannot bless a newer epoch" \
-  grep -Fq -- "stale receipt never authorizes a newer epoch" "$SKILL"
+  grep -Fq -- "stale receipt never authorizes" "$SKILL"
 
 echo "  child-integration-gc-contract: $OK/$N"
 [[ "$OK" -eq "$N" ]]

@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
-  "version": "0.5.3+codex.20260831210848",
-  "description": "Hybrid mission-control orchestration for Codex with selectable planning/review, bounded implementation tasks, and Sites-first cross-device HTML approvals.",
+  "version": "0.5.4+codex.20260901075628",
+  "description": "Hybrid mission control with Loop-style native task health, coordinator-owned outcomes, frozen-scope brokered commits, and Sites-first approvals.",
   "author": {
     "name": "DaoBrew AI",
     "url": "https://github.com/DaoBrewAI"
@@ -22,7 +22,7 @@
   "interface": {
     "displayName": "Orchestrator",
     "shortDescription": "Selectable planning, Codex-executed missions.",
-    "longDescription": "A hybrid mission coordinator that selects Fable/Opus or GPT-5.6-Sol Ultra for planning/review, uses bounded GPT-5.6-Sol High implementation tasks, and publishes user-facing plan and status HTML through OpenAI Sites.",
+    "longDescription": "A hybrid mission coordinator that uses Loop-style native task health, keeps child writes inside project worktrees, persists verified outcomes and broker authority in the coordinator, and publishes plan/status HTML through OpenAI Sites.",
     "developerName": "DaoBrew AI",
     "category": "Productivity",
     "capabilities": [

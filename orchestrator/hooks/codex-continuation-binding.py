@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import stat
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -19,9 +20,16 @@ from typing import Any, Optional
 
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
+OUTCOME_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$")
 COORDINATOR_FILE_RE = re.compile(r"^([0-9a-f]{64})\.session-id$")
 SUPERSEDED_FILE_RE = re.compile(r"^([0-9a-f]{64})\.superseded\.json$")
 PROMOTION_COMMIT_RE = re.compile(r"^([0-9a-f]{64})\.promotion-commit\.json$")
+BROKER_LIFECYCLE_RE = re.compile(
+    r"^COMMIT-(?:REQUEST|INTENT|DONE|REJECTED)-[A-Za-z0-9._-]+\.json$"
+)
+PLANNING_RECEIPT_RE = re.compile(r"^planning-stage-receipt-[0-9a-f]{64}\.json$")
+REWORK_COMPLETION_RE = re.compile(r"^rework-completion-[1-9][0-9]*\.json$")
+BLOCKED_LIFECYCLE_RE = re.compile(r"^BLOCKED-[1-9][0-9]*\.md$")
 ELIGIBLE_MISSION_STATES = {
     "blocked",
     "cleanup_pending",
@@ -31,6 +39,43 @@ ELIGIBLE_MISSION_STATES = {
     "review",
     "rework",
     "running",
+}
+MISSION_LIFECYCLE_FILES = {
+    "approved-design.md",
+    "approved-plan.md",
+    "approved-task-dag.json",
+    "approved.sha256",
+    "brief-exec.md",
+    "parent-cleanup-intent",
+    "parent-cleanup-journal.log",
+    "parent-cleanup-manifest.txt",
+    "parent-cleanup-state",
+    "parent-cleanup-targets.txt",
+    "planning-stage-authority.json",
+    "planning-stage-import-intent.json",
+}
+TASK_LIFECYCLE_FILES = {
+    ".rework-intent.json",
+    "child_tip",
+    "cleanup-intent",
+    "cleanup-journal.log",
+    "coordinator-verification.md",
+    "coordinator-verification.sha",
+    "integrated_sha",
+    "integration-intent",
+    "parent-verification.sha",
+    "task-state-dir",
+    "task-window-archive-pending",
+    "task-window-state",
+    "unresolved-rework",
+}
+TASK_STATE_LIFECYCLE_FILES = {
+    "accepted-thread-id", "generation", "report.md", "state",
+    "verification.sha", "worktrees.txt",
+}
+NATIVE_HEALTH_FILES = {
+    "request.json", "attempt-1.json", "attempt-1-archive.json", "attempt-2.json",
+    "accepted.json", "blocked.json",
 }
 REQUEST_KEYS = {"binding", "binding_sha256", "request_id"}
 BINDING_KEYS = {
@@ -44,6 +89,22 @@ BINDING_KEYS = {
 }
 FILE_KEYS = {"bytes_b64", "device", "inode", "path", "sha256", "size"}
 SCALAR_KEYS = FILE_KEYS | {"value"}
+OUTCOME_COMMON_KEYS = {
+    "accepted_thread_id", "generation", "kind", "outcome_nonce",
+    "protocol_version", "task_id",
+}
+OUTCOME_KIND_KEYS = {
+    "ready_for_commit": {
+        "base_sha", "changed_files", "commit_message", "deviations",
+        "head_sha", "risks", "verification",
+    },
+    "blocked": {"options", "question", "recommendation", "work_in_progress"},
+    "failed": {"error", "work_in_progress"},
+    "completed": {
+        "base_sha", "changed_files", "commit_sha", "deviations", "risks",
+        "verification",
+    },
+}
 
 
 class AuthorityError(RuntimeError):
@@ -222,6 +283,397 @@ def optional_file_record(path: str, label: str, parent: str) -> Optional[dict[st
     return file_record(path, label, parent) if os.path.lexists(path) else None
 
 
+def strict_scalar_from_record(record: dict[str, Any], label: str) -> str:
+    data = bound_bytes(record, label)
+    if not data or not data.endswith(b"\n") or data.count(b"\n") != 1:
+        raise AuthorityError(f"{label} is not a strict one-line authority")
+    body = data[:-1]
+    if not body or any(marker in body for marker in (b"\r", b"\t", b"\x00")):
+        raise AuthorityError(f"invalid bytes in {label}")
+    try:
+        return body.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise AuthorityError(f"invalid UTF-8 in {label}") from error
+
+
+def lifecycle_file(path: str, label: str, parent: str) -> dict[str, Any]:
+    metadata = os.lstat(path)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise AuthorityError(f"unsafe {label}")
+    return file_record(path, label, parent)
+
+
+def stage_lifecycle_records(
+    root: str,
+    label: str,
+    directory_pattern: re.Pattern[str],
+    allowed_names: set[str],
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for entry in os.scandir(root):
+        if directory_pattern.fullmatch(entry.name) is None:
+            continue
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+            raise AuthorityError(f"unsafe {label} directory")
+        directory = safe_directory(entry.path, label, root)
+        for child in os.scandir(directory):
+            if child.name not in allowed_names:
+                raise AuthorityError(f"unexpected file in {label}: {child.name}")
+            records.append(
+                lifecycle_file(child.path, f"{label} {child.name}", directory)
+            )
+    return records
+
+
+def mission_lifecycle_records(control_mission: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    approval_names = {
+        "approved-design.md", "approved-plan.md", "approved-task-dag.json",
+        "approved.sha256", "brief-exec.md",
+    }
+    present_approval = {
+        name for name in approval_names if os.path.lexists(os.path.join(control_mission, name))
+    }
+    if present_approval:
+        if present_approval != approval_names:
+            raise AuthorityError("partial frozen approval authority")
+        helper = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+            "scripts", "verify-approved-authority.py",
+        )
+        completed = subprocess.run(
+            [helper, "--control-dir", control_mission],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if completed.returncode != 0:
+            raise AuthorityError("frozen approval authority is invalid")
+    for entry in os.scandir(control_mission):
+        if (
+            entry.name not in MISSION_LIFECYCLE_FILES
+            and PLANNING_RECEIPT_RE.fullmatch(entry.name) is None
+        ):
+            continue
+        records.append(
+            lifecycle_file(entry.path, f"mission lifecycle {entry.name}", control_mission)
+        )
+    return sorted(records, key=lambda record: record["path"])
+
+
+def task_lifecycle_records(task_dir: str) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    task_state_record: Optional[dict[str, Any]] = None
+    for entry in os.scandir(task_dir):
+        if (
+            entry.name not in TASK_LIFECYCLE_FILES
+            and BROKER_LIFECYCLE_RE.fullmatch(entry.name) is None
+            and REWORK_COMPLETION_RE.fullmatch(entry.name) is None
+        ):
+            continue
+        record = lifecycle_file(entry.path, f"task lifecycle {entry.name}", task_dir)
+        records.append(record)
+        if entry.name == "task-state-dir":
+            task_state_record = record
+    if task_state_record is not None:
+        task_state_path = strict_scalar_from_record(task_state_record, "task state directory")
+        task_state_path = safe_directory(task_state_path, "task state directory")
+        for mirrored_name in ("state", "generation", "accepted-thread-id", "worktrees.txt"):
+            control_path = os.path.join(task_dir, mirrored_name)
+            worker_path = os.path.join(task_state_path, mirrored_name)
+            control_exists = os.path.lexists(control_path)
+            worker_exists = os.path.lexists(worker_path)
+            if control_exists != worker_exists:
+                raise AuthorityError(f"partial mirrored task authority: {mirrored_name}")
+            if control_exists:
+                control_raw, _ = safe_regular(
+                    control_path, f"control mirrored {mirrored_name}", task_dir
+                )
+                worker_raw, _ = safe_regular(
+                    worker_path, f"worker mirrored {mirrored_name}", task_state_path
+                )
+                if control_raw != worker_raw:
+                    raise AuthorityError(f"mirrored task authority differs: {mirrored_name}")
+        for entry in os.scandir(task_state_path):
+            if (
+                entry.name not in TASK_STATE_LIFECYCLE_FILES
+                and BROKER_LIFECYCLE_RE.fullmatch(entry.name) is None
+                and BLOCKED_LIFECYCLE_RE.fullmatch(entry.name) is None
+            ):
+                continue
+            records.append(
+                lifecycle_file(
+                    entry.path, f"task state lifecycle {entry.name}", task_state_path
+                )
+            )
+    native_health = os.path.join(task_dir, "native-health")
+    if os.path.lexists(native_health):
+        native_health = safe_directory(native_health, "native health", task_dir)
+        for entry in os.scandir(native_health):
+            if entry.name == ".lock":
+                if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                    raise AuthorityError("unsafe native health lock")
+                continue
+            if entry.name not in NATIVE_HEALTH_FILES:
+                raise AuthorityError(f"unexpected native health authority: {entry.name}")
+            records.append(
+                lifecycle_file(entry.path, f"native health {entry.name}", native_health)
+            )
+    return sorted(records, key=lambda record: record["path"])
+
+
+def validate_lifecycle_bundle(
+    records: Any,
+    label: str,
+    allowed_path: Any,
+) -> None:
+    if not isinstance(records, list):
+        raise AuthorityError(f"invalid {label} bundle")
+    paths: list[str] = []
+    for record in records:
+        validate_file_shape(record, False, label)
+        path = lexical_absolute(record["path"], f"{label} path")
+        if not allowed_path(path, records):
+            raise AuthorityError(f"{label} path is outside the allowlist")
+        paths.append(path)
+    if paths != sorted(paths) or len(set(paths)) != len(paths):
+        raise AuthorityError(f"noncanonical {label} ordering")
+
+
+def mission_lifecycle_path_allowed(control_mission: str, path: str) -> bool:
+    if os.path.dirname(path) != control_mission:
+        return False
+    name = os.path.basename(path)
+    return name in MISSION_LIFECYCLE_FILES or PLANNING_RECEIPT_RE.fullmatch(name) is not None
+
+
+def task_state_path_from_bundle(
+    task_dir: str, records: list[dict[str, Any]]
+) -> Optional[str]:
+    expected = os.path.join(task_dir, "task-state-dir")
+    matches = [record for record in records if record.get("path") == expected]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise AuthorityError("duplicate task state directory authority")
+    validate_file_shape(matches[0], False, "task state directory")
+    value = strict_scalar_from_record(matches[0], "bound task state directory")
+    return lexical_absolute(value, "bound task state directory")
+
+
+def task_lifecycle_path_allowed(
+    task_dir: str, path: str, records: list[dict[str, Any]]
+) -> bool:
+    if os.path.dirname(path) == task_dir:
+        name = os.path.basename(path)
+        return (
+            name in TASK_LIFECYCLE_FILES
+            or BROKER_LIFECYCLE_RE.fullmatch(name) is not None
+            or REWORK_COMPLETION_RE.fullmatch(name) is not None
+        )
+    relative = os.path.relpath(path, task_dir)
+    parts = relative.split(os.sep)
+    if len(parts) == 2 and parts[0] == "native-health":
+        return parts[1] in NATIVE_HEALTH_FILES
+    task_state_path = task_state_path_from_bundle(task_dir, records)
+    if task_state_path is None:
+        return False
+    relative = os.path.relpath(path, task_state_path)
+    parts = relative.split(os.sep)
+    if len(parts) == 1:
+        return (
+            parts[0] in TASK_STATE_LIFECYCLE_FILES
+            or BROKER_LIFECYCLE_RE.fullmatch(parts[0]) is not None
+            or BLOCKED_LIFECYCLE_RE.fullmatch(parts[0]) is not None
+        )
+    return False
+
+
+def lifecycle_record_value(
+    records: list[dict[str, Any]], name: str, label: str
+) -> Optional[str]:
+    matches = [record for record in records if os.path.basename(record["path"]) == name]
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise AuthorityError(f"ambiguous {label}")
+    return strict_scalar_from_record(matches[0], label)
+
+
+def validate_outcome_event(
+    event: dict[str, Any], digest: str, accepted_thread: str,
+    task_id: str, generation: int, nonce: str,
+) -> None:
+    raw = bound_bytes(event, "latest outcome event")
+    if event.get("sha256") != digest or sha256_bytes(raw) != digest:
+        raise AuthorityError("latest outcome event content address mismatch")
+    try:
+        wrapper = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AuthorityError("latest outcome event is invalid JSON") from error
+    exact_keys(
+        wrapper, {"accepted_thread_id", "outcome", "turn_id"},
+        "latest outcome event wrapper",
+    )
+    if canonical_bytes(wrapper, newline=True) != raw:
+        raise AuthorityError("latest outcome event is not canonical")
+    if wrapper["accepted_thread_id"] != accepted_thread:
+        raise AuthorityError("latest outcome event thread mismatch")
+    if not isinstance(wrapper["turn_id"], str) or not OUTCOME_ID_RE.fullmatch(wrapper["turn_id"]):
+        raise AuthorityError("latest outcome event turn id is invalid")
+    outcome = wrapper["outcome"]
+    if not isinstance(outcome, dict):
+        raise AuthorityError("latest outcome envelope is invalid")
+    kind = outcome.get("kind")
+    expected_kind_keys = OUTCOME_KIND_KEYS.get(kind)
+    if expected_kind_keys is None:
+        raise AuthorityError("latest outcome kind is invalid")
+    exact_keys(outcome, OUTCOME_COMMON_KEYS | expected_kind_keys, "latest outcome envelope")
+    if (
+        outcome["protocol_version"] != 1
+        or outcome["accepted_thread_id"] != accepted_thread
+        or outcome["task_id"] != task_id
+        or outcome["generation"] != generation
+        or outcome["outcome_nonce"] != nonce
+    ):
+        raise AuthorityError("latest outcome identity mismatch")
+
+
+def validate_outcome_intent(record: dict[str, Any]) -> dict[str, Any]:
+    raw = bound_bytes(record, "outcome intent")
+    try:
+        intent = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AuthorityError("outcome intent is invalid JSON") from error
+    exact_keys(
+        intent,
+        {"digest", "previous_latest", "previous_state", "turn_id"},
+        "outcome intent",
+    )
+    if not isinstance(intent["digest"], str) or not SHA_RE.fullmatch(intent["digest"]):
+        raise AuthorityError("outcome intent digest is invalid")
+    previous = intent["previous_latest"]
+    if previous is not None and (
+        not isinstance(previous, str) or not SHA_RE.fullmatch(previous)
+    ):
+        raise AuthorityError("outcome intent previous digest is invalid")
+    strict_text(intent["previous_state"], "outcome intent previous state")
+    if not isinstance(intent["turn_id"], str) or not OUTCOME_ID_RE.fullmatch(intent["turn_id"]):
+        raise AuthorityError("outcome intent turn id is invalid")
+    if canonical_bytes(intent, newline=True) != raw:
+        raise AuthorityError("outcome intent is not canonical")
+    return intent
+
+
+def task_outcome_records(
+    task_dir: str, task_id: str, generation: dict[str, Any],
+    accepted_thread: Optional[dict[str, Any]],
+) -> dict[str, Any]:
+    nonce = optional_scalar_record(
+        os.path.join(task_dir, "outcome-nonce"), "outcome nonce", task_dir
+    )
+    latest = optional_scalar_record(
+        os.path.join(task_dir, "latest-outcome"), "latest outcome", task_dir
+    )
+    intent = optional_file_record(
+        os.path.join(task_dir, ".outcome-intent.json"), "outcome intent", task_dir
+    )
+    if (accepted_thread is None) != (nonce is None):
+        raise AuthorityError("accepted task thread and outcome nonce authority are incomplete")
+    if accepted_thread is not None:
+        if not OUTCOME_ID_RE.fullmatch(accepted_thread["value"]):
+            raise AuthorityError("accepted task thread is invalid")
+        if not OUTCOME_ID_RE.fullmatch(nonce["value"]):
+            raise AuthorityError("outcome nonce is invalid")
+    if latest is None:
+        if intent is not None:
+            if accepted_thread is None or nonce is None:
+                raise AuthorityError("outcome intent lacks accepted task identity")
+            validate_outcome_intent(intent)
+        return {
+            "latest_outcome": None,
+            "latest_outcome_event": None,
+            "outcome_intent": intent,
+            "outcome_nonce": nonce,
+        }
+    if accepted_thread is None or nonce is None:
+        raise AuthorityError("latest outcome lacks accepted task identity")
+    digest = latest["value"]
+    if not SHA_RE.fullmatch(digest):
+        raise AuthorityError("latest outcome digest is invalid")
+    outcomes = safe_directory(
+        os.path.join(task_dir, "outcomes"), "task outcomes", task_dir
+    )
+    event = file_record(
+        os.path.join(outcomes, digest + ".json"), "latest outcome event", outcomes
+    )
+    validate_outcome_event(
+        event, digest, accepted_thread["value"], task_id,
+        int(generation["value"]), nonce["value"],
+    )
+    if intent is not None:
+        validate_outcome_intent(intent)
+    return {
+        "latest_outcome": latest,
+        "latest_outcome_event": event,
+        "outcome_intent": intent,
+        "outcome_nonce": nonce,
+    }
+
+
+def validate_bound_scalar(record: dict[str, Any], label: str) -> str:
+    validate_file_shape(record, True, label)
+    value = strict_text(record["value"], label)
+    if bound_bytes(record, label) != (value + "\n").encode("utf-8"):
+        raise AuthorityError(f"bound {label} bytes contradict value")
+    return value
+
+
+def validate_bound_task_outcome(task: dict[str, Any]) -> None:
+    accepted = task["accepted_thread"]
+    nonce = task["outcome_nonce"]
+    latest = task["latest_outcome"]
+    event = task["latest_outcome_event"]
+    intent = task["outcome_intent"]
+    if (accepted is None) != (nonce is None):
+        raise AuthorityError("bound accepted task thread and outcome nonce are incomplete")
+    accepted_value = validate_bound_scalar(accepted, "accepted thread") if accepted else None
+    nonce_value = validate_bound_scalar(nonce, "outcome nonce") if nonce else None
+    if accepted_value is not None and (
+        not OUTCOME_ID_RE.fullmatch(accepted_value)
+        or not OUTCOME_ID_RE.fullmatch(nonce_value)
+    ):
+        raise AuthorityError("bound accepted task identity is invalid")
+    if (latest is None) != (event is None):
+        raise AuthorityError("partial bound latest outcome authority")
+    if intent is not None:
+        validate_file_shape(intent, False, "outcome intent")
+        task_path = strict_text(task["path"], "task path")
+        if intent["path"] != os.path.join(task_path, ".outcome-intent.json"):
+            raise AuthorityError("bound outcome intent path is invalid")
+        validate_outcome_intent(intent)
+        if accepted_value is None or nonce_value is None:
+            raise AuthorityError("bound outcome intent lacks accepted task identity")
+    if latest is None:
+        return
+    if accepted_value is None or nonce_value is None:
+        raise AuthorityError("bound latest outcome lacks accepted task identity")
+    digest = validate_bound_scalar(latest, "latest outcome")
+    if not SHA_RE.fullmatch(digest):
+        raise AuthorityError("bound latest outcome digest is invalid")
+    validate_file_shape(event, False, "latest outcome event")
+    task_path = strict_text(task["path"], "task path")
+    if latest["path"] != os.path.join(task_path, "latest-outcome"):
+        raise AuthorityError("bound latest outcome path is invalid")
+    expected_event_path = os.path.join(task_path, "outcomes", digest + ".json")
+    if event["path"] != expected_event_path:
+        raise AuthorityError("bound latest outcome event path is invalid")
+    validate_outcome_event(
+        event, digest, accepted_value, task["task"],
+        int(task["generation"]["value"]), nonce_value,
+    )
+
+
 def bound_bytes(record: dict[str, Any], label: str) -> bytes:
     try:
         return base64.b64decode(record["bytes_b64"], validate=True)
@@ -256,14 +708,14 @@ def validate_codex_health(record: dict[str, Any], thread_id: str) -> None:
         health,
         {
             "created", "visible", "title_verified", "first_turn_exists",
-            "startup_evidence", "settings_recorded", "writable_root_verified",
+            "startup_evidence", "settings_recorded", "worktree_verified",
             "status", "thread_id", "model", "effort", "project_id", "cwd",
         },
         "planning thread health",
     )
     for key in (
         "created", "visible", "title_verified", "first_turn_exists",
-        "startup_evidence", "settings_recorded", "writable_root_verified",
+        "startup_evidence", "settings_recorded", "worktree_verified",
     ):
         if health[key] is not True:
             raise AuthorityError("incomplete planning thread health")
@@ -493,6 +945,7 @@ def preflight_hub(hub: str) -> str:
             mission_planning["value"],
             mission_state["value"],
         )
+        mission_lifecycle_records(control_mission)
         tasks_root = os.path.join(control_mission, "tasks")
         safe_directory(tasks_root, "tasks root", control_mission, allow_missing=True)
         if not os.path.lexists(tasks_root):
@@ -503,9 +956,14 @@ def preflight_hub(hub: str) -> str:
             generation = scalar_record(os.path.join(task_dir, "generation"), "task generation", task_dir)
             if not generation["value"].isdigit():
                 raise AuthorityError("task generation is not numeric")
-            accepted = os.path.join(task_dir, "accepted-thread-id")
-            if os.path.lexists(accepted):
-                scalar_record(accepted, "accepted thread", task_dir)
+            accepted_path = os.path.join(task_dir, "accepted-thread-id")
+            accepted = (
+                scalar_record(accepted_path, "accepted thread", task_dir)
+                if os.path.lexists(accepted_path)
+                else None
+            )
+            task_outcome_records(task_dir, task, generation, accepted)
+            task_lifecycle_records(task_dir)
     return hub
 
 
@@ -541,22 +999,30 @@ def build_missions(hub: str) -> list[dict[str, Any]]:
             mission_planning["value"],
             mission_state["value"],
         )
+        lifecycle_files = mission_lifecycle_records(control_mission)
         tasks_root = os.path.join(control_mission, "tasks")
         if os.path.isdir(tasks_root):
             for task in direct_directories(tasks_root, "tasks root"):
                 task_dir = os.path.join(tasks_root, task)
+                generation = scalar_record(
+                    os.path.join(task_dir, "generation"), "task generation", task_dir
+                )
+                if not generation["value"].isdigit():
+                    raise AuthorityError("task generation is not numeric")
                 accepted_path = os.path.join(task_dir, "accepted-thread-id")
                 accepted = (
                     scalar_record(accepted_path, "accepted thread", task_dir)
                     if os.path.lexists(accepted_path)
                     else None
                 )
+                outcome = task_outcome_records(task_dir, task, generation, accepted)
+                task_lifecycle = task_lifecycle_records(task_dir)
                 tasks.append(
                     {
                         "accepted_thread": accepted,
-                        "generation": scalar_record(
-                            os.path.join(task_dir, "generation"), "task generation", task_dir
-                        ),
+                        "generation": generation,
+                        "lifecycle_files": task_lifecycle,
+                        **outcome,
                         "path": task_dir,
                         "state": scalar_record(os.path.join(task_dir, "state"), "task state", task_dir),
                         "task": task,
@@ -570,6 +1036,7 @@ def build_missions(hub: str) -> list[dict[str, Any]]:
                     "control": control_planning,
                     "mission": mission_planning,
                 },
+                "lifecycle_files": lifecycle_files,
                 **planning,
                 "state": mission_state,
                 "tasks": tasks,
@@ -595,6 +1062,37 @@ def coordinator_authority(hub: str, session_id: str) -> dict[str, Any]:
     return record
 
 
+def mission_is_continuation_eligible(mission: dict[str, Any]) -> bool:
+    state = mission["state"]["value"]
+    if state in ELIGIBLE_MISSION_STATES:
+        return True
+    if state != "accepted":
+        return False
+    parent_state = lifecycle_record_value(
+        mission["lifecycle_files"], "parent-cleanup-state", "parent cleanup state"
+    )
+    if parent_state is not None and parent_state not in {
+        "ready", "cleanup_pending", "collected"
+    }:
+        raise AuthorityError("invalid parent cleanup state")
+    if parent_state != "collected":
+        return True
+    for task in mission["tasks"]:
+        if task["state"]["value"] != "collected":
+            return True
+        window_state = lifecycle_record_value(
+            task["lifecycle_files"], "task-window-state", "task window state"
+        )
+        if window_state != "archived":
+            return True
+        if any(
+            os.path.basename(record["path"]) == "task-window-archive-pending"
+            for record in task["lifecycle_files"]
+        ):
+            return True
+    return False
+
+
 def classify_session(hub: str, session_id: str) -> str:
     hub = preflight_hub(hub)
     strict_text(session_id, "coordinator session id")
@@ -618,7 +1116,7 @@ def classify_session(hub: str, session_id: str) -> str:
         return "unrelated"
     if session_id in promoted_to:
         missions = build_missions(hub)
-        if not any(mission["state"]["value"] in ELIGIBLE_MISSION_STATES for mission in missions):
+        if not any(mission_is_continuation_eligible(mission) for mission in missions):
             return "terminal"
         return "eligible"
     expected = sha256_bytes((session_id + "\n").encode("utf-8")) + ".session-id"
@@ -627,7 +1125,7 @@ def classify_session(hub: str, session_id: str) -> str:
         return "unrelated"
     coordinator_authority(hub, session_id)
     missions = build_missions(hub)
-    if not any(mission["state"]["value"] in ELIGIBLE_MISSION_STATES for mission in missions):
+    if not any(mission_is_continuation_eligible(mission) for mission in missions):
         return "terminal"
     return "eligible"
 
@@ -653,7 +1151,7 @@ def build_binding(hub: str, session_id: str, carryover: str) -> dict[str, Any]:
     if os.path.dirname(carryover) != carryovers_root:
         raise AuthorityError("request carryover is not a direct child of the carryover store")
     missions = build_missions(hub)
-    if not any(mission["state"]["value"] in ELIGIBLE_MISSION_STATES for mission in missions):
+    if not any(mission_is_continuation_eligible(mission) for mission in missions):
         raise AuthorityError("no eligible nonterminal mission state")
     source = {
         "authority": coordinator_authority(hub, session_id),
@@ -935,8 +1433,22 @@ def carryover_bytes(session_id: str, snapshot: dict[str, Any]) -> bytes:
             f"{mission['planning_backend']['control']['value']}\t"
             f"{mission['planning_thread']['value'] if mission['planning_thread'] else ''}"
         )
+        for record in mission["lifecycle_files"]:
+            name = os.path.basename(record["path"])
+            if "intent" in name.lower() or name == "planning-stage-authority.json":
+                lines.append(
+                    f"active-intent\t{mission['mission']}\tmission\t"
+                    f"{record['path']}\t{record['sha256']}"
+                )
         for task in mission["tasks"]:
             accepted = task["accepted_thread"]["value"] if task["accepted_thread"] else ""
+            nonce = task["outcome_nonce"]["value"] if task["outcome_nonce"] else ""
+            latest = task["latest_outcome"]["value"] if task["latest_outcome"] else ""
+            intent = (
+                validate_outcome_intent(task["outcome_intent"])
+                if task["outcome_intent"]
+                else None
+            )
             lines.append(
                 "\t".join(
                     (
@@ -946,9 +1458,20 @@ def carryover_bytes(session_id: str, snapshot: dict[str, Any]) -> bytes:
                         task["generation"]["value"],
                         task["state"]["value"],
                         accepted,
+                        nonce,
+                        latest,
+                        intent["digest"] if intent else "",
+                        intent["turn_id"] if intent else "",
                     )
                 )
             )
+            for record in task["lifecycle_files"]:
+                name = os.path.basename(record["path"])
+                if "intent" in name.lower() or name.endswith("pending"):
+                    lines.append(
+                        f"active-intent\t{mission['mission']}\t{task['task']}\t"
+                        f"{record['path']}\t{record['sha256']}"
+                    )
     lines.extend(
         (
             "```",
@@ -1252,15 +1775,25 @@ def validate_binding_shape(binding: Any) -> None:
         exact_keys(
             mission,
             {
-                "mission", "path", "planning_backend", "planning_health",
+                "lifecycle_files", "mission", "path", "planning_backend", "planning_health",
                 "planning_session", "planning_thread", "quota_fallbacks",
                 "session", "state", "tasks",
             },
             "mission",
         )
         mission_names.append(strict_text(mission["mission"], "mission id"))
-        strict_text(mission["path"], "mission path")
+        mission_path = strict_text(mission["path"], "mission path")
         validate_file_shape(mission["state"], True, "mission state")
+        control_mission = os.path.join(
+            os.path.dirname(os.path.dirname(mission_path)),
+            "control",
+            mission["mission"],
+        )
+        validate_lifecycle_bundle(
+            mission["lifecycle_files"],
+            "mission lifecycle",
+            lambda path, _records: mission_lifecycle_path_allowed(control_mission, path),
+        )
         planning = exact_keys(
             mission["planning_backend"],
             {"control", "mission"},
@@ -1360,17 +1893,27 @@ def validate_binding_shape(binding: Any) -> None:
         for task in mission["tasks"]:
             exact_keys(
                 task,
-                {"accepted_thread", "generation", "path", "state", "task"},
+                {
+                    "accepted_thread", "generation", "latest_outcome",
+                    "latest_outcome_event", "lifecycle_files", "outcome_intent", "outcome_nonce",
+                    "path", "state", "task",
+                },
                 "task",
             )
             task_names.append(strict_text(task["task"], "task id"))
-            strict_text(task["path"], "task path")
+            task_path = strict_text(task["path"], "task path")
             validate_file_shape(task["generation"], True, "task generation")
             if not task["generation"]["value"].isdigit():
                 raise AuthorityError("non-numeric task generation")
             validate_file_shape(task["state"], True, "task state")
-            if task["accepted_thread"] is not None:
-                validate_file_shape(task["accepted_thread"], True, "accepted thread")
+            validate_lifecycle_bundle(
+                task["lifecycle_files"],
+                "task lifecycle",
+                lambda path, records, task_path=task_path: task_lifecycle_path_allowed(
+                    task_path, path, records
+                ),
+            )
+            validate_bound_task_outcome(task)
         if task_names != sorted(task_names) or len(set(task_names)) != len(task_names):
             raise AuthorityError("noncanonical task ordering")
     if mission_names != sorted(mission_names) or len(set(mission_names)) != len(mission_names):

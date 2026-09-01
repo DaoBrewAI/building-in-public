@@ -1,7 +1,7 @@
 {
   "name": "orchestrator",
-  "version": "0.5.3",
-  "description": "Native Hybrid mission control for Claude Code and Codex with selectable planning/review, visible Codex implementation tasks, and Sites-first cross-device HTML approvals.",
+  "version": "0.5.4",
+  "description": "Native Hybrid mission control with Loop-style task health, coordinator-owned durable outcomes, frozen-scope brokered commits, and Sites-first approvals.",
   "repository": "https://github.com/DaoBrewAI/building-in-public",
   "license": "MIT",
   "keywords": [

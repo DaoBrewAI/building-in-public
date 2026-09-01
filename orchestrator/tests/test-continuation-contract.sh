@@ -180,6 +180,7 @@ make_hub() {
   printf 'running\n' > "$hub/control/mission-a/tasks/task-a/state"
   printf '3\n' > "$hub/control/mission-a/tasks/task-a/generation"
   printf 'child-thread-1\n' > "$hub/control/mission-a/tasks/task-a/accepted-thread-id"
+  printf 'outcome-nonce-task-a\n' > "$hub/control/mission-a/tasks/task-a/outcome-nonce"
 }
 
 authorize_coordinator() {
@@ -189,6 +190,45 @@ authorize_coordinator() {
   printf '%s\n' "$session_id" > "$hub/control/coordinators/$digest.session-id"
   chmod 0700 "$hub/control/coordinators"
   chmod 0600 "$hub/control/coordinators/$digest.session-id"
+}
+
+write_latest_outcome() {
+  local hub="$1" task_dir digest event_tmp
+  task_dir="$hub/control/mission-a/tasks/task-a"
+  mkdir -p "$task_dir/outcomes"
+  event_tmp="$task_dir/outcomes/.event.json"
+  jq -cS -n '{
+    accepted_thread_id:"child-thread-1",
+    outcome:{
+      accepted_thread_id:"child-thread-1", base_sha:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      changed_files:["feature.txt"], commit_message:"feat: outcome", deviations:[], generation:3,
+      head_sha:"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", kind:"ready_for_commit",
+      outcome_nonce:"outcome-nonce-task-a", protocol_version:1, risks:[], task_id:"task-a",
+      verification:[]
+    },
+    turn_id:"turn-task-a"
+  }' > "$event_tmp"
+  digest="$(shasum -a 256 "$event_tmp" | awk '{print $1}')"
+  mv "$event_tmp" "$task_dir/outcomes/$digest.json"
+  printf '%s\n' "$digest" > "$task_dir/latest-outcome"
+}
+
+rewrite_latest_outcome() {
+  local hub="$1" filter="$2" task_dir old event_tmp digest
+  task_dir="$hub/control/mission-a/tasks/task-a"
+  old="$(cat "$task_dir/latest-outcome")"
+  event_tmp="$task_dir/outcomes/.event.json"
+  jq -cS "$filter" "$task_dir/outcomes/$old.json" > "$event_tmp"
+  digest="$(shasum -a 256 "$event_tmp" | awk '{print $1}')"
+  mv "$event_tmp" "$task_dir/outcomes/$digest.json"
+  printf '%s\n' "$digest" > "$task_dir/latest-outcome"
+}
+
+outcome_manual_fails() {
+  local repo="$1" coordinator="$2"
+  authorize_coordinator "$repo/.orchestrator" "$coordinator"
+  ! "$ADAPTER" --manual --hub "$repo/.orchestrator" --session-id "$coordinator" \
+    >/dev/null 2>&1
 }
 
 precompact_input() {
@@ -331,10 +371,300 @@ PY
   check "request binds accepted planning session identity and session bytes" \
     json_expr "$REQ_FILE" '.binding.missions[0].planning_session.value == "fable-session" and (.binding.missions[0].session.sha256 | length) == 64 and .binding.missions[0].quota_fallbacks == {plan:null,review:null}'
   check "request binds exact task generation and state" \
-    json_expr "$REQ_FILE" '.binding.missions[0].tasks[0].task == "task-a" and .binding.missions[0].tasks[0].generation.value == "3" and .binding.missions[0].tasks[0].state.value == "running"'
+    json_expr "$REQ_FILE" '.binding.missions[0].tasks[0].task == "task-a" and .binding.missions[0].tasks[0].generation.value == "3" and .binding.missions[0].tasks[0].state.value == "running" and .binding.missions[0].tasks[0].outcome_nonce.value == "outcome-nonce-task-a" and .binding.missions[0].tasks[0].latest_outcome == null and .binding.missions[0].tasks[0].latest_outcome_event == null'
   BOUND_CARRYOVER="$(jq -r '.binding.carryover.path // .carryover_path' "$REQ_FILE")"
   check "carryover is published before and hash-bound by the request" \
     sh -c 'expected=$(jq -r .binding.carryover.sha256 "$1") && actual=$(shasum -a 256 "$2") && actual=${actual%% *} && test "$expected" = "$actual"' sh "$REQ_FILE" "$BOUND_CARRYOVER"
+
+  OUTCOME_INTENT_REPO="$TMP/outcome-intent"
+  mkdir -p "$OUTCOME_INTENT_REPO"
+  make_hub "$OUTCOME_INTENT_REPO"
+  OUTCOME_INTENT_HUB="$OUTCOME_INTENT_REPO/.orchestrator"
+  authorize_coordinator "$OUTCOME_INTENT_HUB" outcome-intent-coordinator
+  jq -cS -n '{digest:("a" * 64),previous_latest:null,previous_state:"running",turn_id:"turn-outcome-1"}' \
+    > "$OUTCOME_INTENT_HUB/control/mission-a/tasks/task-a/.outcome-intent.json"
+  "$ADAPTER" --manual --hub "$OUTCOME_INTENT_HUB" \
+    --session-id outcome-intent-coordinator > "$OUTCOME_INTENT_REPO/manual.json"
+  OUTCOME_INTENT_REQ="$(request_file "$OUTCOME_INTENT_HUB")"
+  check "continuation binds an unresolved task outcome transaction" \
+    json_expr "$OUTCOME_INTENT_REQ" '.binding.missions[0].tasks[0].outcome_intent.sha256 | length == 64'
+  check "carryover names the pending task outcome digest and turn" bash -c \
+    'carry=$(jq -r .binding.carryover.path "$1"); grep -Fq "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" "$carry" && grep -Fq "turn-outcome-1" "$carry"' \
+    _ "$OUTCOME_INTENT_REQ"
+
+  MALFORMED_INTENT_REPO="$TMP/malformed-outcome-intent"
+  mkdir -p "$MALFORMED_INTENT_REPO"
+  make_hub "$MALFORMED_INTENT_REPO"
+  MALFORMED_INTENT_HUB="$MALFORMED_INTENT_REPO/.orchestrator"
+  authorize_coordinator "$MALFORMED_INTENT_HUB" malformed-intent-coordinator
+  printf '{"digest":"bad"}\n' \
+    > "$MALFORMED_INTENT_HUB/control/mission-a/tasks/task-a/.outcome-intent.json"
+  check "malformed pending task outcome transaction fails closed" \
+    sh -c '! "$1" --manual --hub "$2" --session-id malformed-intent-coordinator >/dev/null 2>&1' \
+      sh "$ADAPTER" "$MALFORMED_INTENT_HUB"
+
+  OUTCOME_BOUND="$TMP/outcome-bound"
+  mkdir -p "$OUTCOME_BOUND"
+  make_hub "$OUTCOME_BOUND"
+  write_latest_outcome "$OUTCOME_BOUND/.orchestrator"
+  authorize_coordinator "$OUTCOME_BOUND/.orchestrator" outcome-bound-coordinator
+  "$ADAPTER" --manual --hub "$OUTCOME_BOUND/.orchestrator" \
+    --session-id outcome-bound-coordinator > "$OUTCOME_BOUND/request.json"
+  OUTCOME_BOUND_REQUEST="$(request_file "$OUTCOME_BOUND/.orchestrator")"
+  check "request binds the latest outcome digest and exact content-addressed event" \
+    json_expr "$OUTCOME_BOUND_REQUEST" '.binding.missions[0].tasks[0] as $task | ($task.latest_outcome.value | test("^[0-9a-f]{64}$")) and $task.latest_outcome_event.sha256 == $task.latest_outcome.value and ($task.latest_outcome_event.path | endswith("/outcomes/" + $task.latest_outcome.value + ".json"))'
+  check "carryover names accepted thread nonce and latest outcome for broker-crash recovery" \
+    python3 - "$OUTCOME_BOUND_REQUEST" <<'PY'
+import json, pathlib, sys
+request = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+carryover = pathlib.Path(request["binding"]["carryover"]["path"]).read_text(encoding="utf-8")
+task = request["binding"]["missions"][0]["tasks"][0]
+expected = "\t".join((
+    "task", "mission-a", "task-a", "3", "running", "child-thread-1",
+    "outcome-nonce-task-a", task["latest_outcome"]["value"],
+))
+raise SystemExit(0 if expected in carryover else 1)
+PY
+
+  REOPEN_CONTINUATION="$TMP/reopen-continuation"
+  mkdir -p "$REOPEN_CONTINUATION"
+  make_hub "$REOPEN_CONTINUATION"
+  write_latest_outcome "$REOPEN_CONTINUATION/.orchestrator"
+  REOPEN_TASK="$REOPEN_CONTINUATION/.orchestrator/control/mission-a/tasks/task-a"
+  REOPEN_PREVIOUS="$(cat "$REOPEN_TASK/latest-outcome")"
+  rm "$REOPEN_TASK/latest-outcome"
+  printf '4\n' > "$REOPEN_TASK/generation"
+  printf 'ready\n' > "$REOPEN_TASK/state"
+  printf 'new-rework-outcome-nonce\n' > "$REOPEN_TASK/outcome-nonce"
+  printf 'rework completion binding %s\n' "$REOPEN_PREVIOUS" > "$REOPEN_TASK/rework-completion-4.json"
+  authorize_coordinator "$REOPEN_CONTINUATION/.orchestrator" reopen-continuation-coordinator
+  "$ADAPTER" --manual --hub "$REOPEN_CONTINUATION/.orchestrator" \
+    --session-id reopen-continuation-coordinator > "$REOPEN_CONTINUATION/manual.json"
+  check "continuation succeeds after reopen clears old-generation latest pointer but retains ledger" bash -c \
+    '[[ "$1" -eq 0 && "$(find "$2/outcomes" -type f | wc -l | tr -d " ")" = 1 && ! -e "$2/latest-outcome" ]]' \
+    _ "$?" "$REOPEN_TASK"
+
+  REOPEN_INTERRUPTED="$TMP/reopen-interrupted-continuation"
+  mkdir -p "$REOPEN_INTERRUPTED"
+  make_hub "$REOPEN_INTERRUPTED"
+  write_latest_outcome "$REOPEN_INTERRUPTED/.orchestrator"
+  REOPEN_INTERRUPTED_TASK="$REOPEN_INTERRUPTED/.orchestrator/control/mission-a/tasks/task-a"
+  rm "$REOPEN_INTERRUPTED_TASK/latest-outcome"
+  printf '4\n' > "$REOPEN_INTERRUPTED_TASK/generation"
+  printf 'ready\n' > "$REOPEN_INTERRUPTED_TASK/state"
+  printf 'new-rework-outcome-nonce\n' > "$REOPEN_INTERRUPTED_TASK/outcome-nonce"
+  printf 'durable rework intent\n' > "$REOPEN_INTERRUPTED_TASK/.rework-intent.json"
+  authorize_coordinator "$REOPEN_INTERRUPTED/.orchestrator" reopen-interrupted-coordinator
+  "$ADAPTER" --manual --hub "$REOPEN_INTERRUPTED/.orchestrator" \
+    --session-id reopen-interrupted-coordinator > "$REOPEN_INTERRUPTED/manual.json"
+  check "continuation binds an interrupted reopen with no stale latest pointer" \
+    json_expr "$(request_file "$REOPEN_INTERRUPTED/.orchestrator")" \
+      '.binding.missions[0].tasks[0].lifecycle_files | any(.path | endswith("/.rework-intent.json"))'
+
+  ACCEPTED_CLEANUP_PENDING="$TMP/accepted-cleanup-pending"
+  mkdir -p "$ACCEPTED_CLEANUP_PENDING"
+  make_hub "$ACCEPTED_CLEANUP_PENDING"
+  ACCEPTED_CLEANUP_PENDING_HUB="$ACCEPTED_CLEANUP_PENDING/.orchestrator"
+  printf 'accepted\n' > "$ACCEPTED_CLEANUP_PENDING_HUB/missions/mission-a/state"
+  printf 'cleanup_pending\n' > "$ACCEPTED_CLEANUP_PENDING_HUB/control/mission-a/parent-cleanup-state"
+  printf 'cleanup_pending\n' > "$ACCEPTED_CLEANUP_PENDING_HUB/control/mission-a/tasks/task-a/state"
+  printf 'unarchived\n' > "$ACCEPTED_CLEANUP_PENDING_HUB/control/mission-a/tasks/task-a/task-window-state"
+  authorize_coordinator "$ACCEPTED_CLEANUP_PENDING_HUB" accepted-cleanup-pending-coordinator
+  check "accepted mission with cleanup pending remains continuation eligible" \
+    sh -c 'test "$("$1" classify --hub "$2" --session-id "$3")" = eligible' \
+      sh "$BINDING_HELPER" "$ACCEPTED_CLEANUP_PENDING_HUB" accepted-cleanup-pending-coordinator
+
+  ACCEPTED_PARENT_FIRST="$TMP/accepted-parent-first"
+  mkdir -p "$ACCEPTED_PARENT_FIRST"
+  make_hub "$ACCEPTED_PARENT_FIRST"
+  ACCEPTED_PARENT_FIRST_HUB="$ACCEPTED_PARENT_FIRST/.orchestrator"
+  printf 'accepted\n' > "$ACCEPTED_PARENT_FIRST_HUB/missions/mission-a/state"
+  printf 'collected\n' > "$ACCEPTED_PARENT_FIRST_HUB/control/mission-a/parent-cleanup-state"
+  printf 'cleanup_pending\n' > "$ACCEPTED_PARENT_FIRST_HUB/control/mission-a/tasks/task-a/state"
+  printf 'unarchived\n' > "$ACCEPTED_PARENT_FIRST_HUB/control/mission-a/tasks/task-a/task-window-state"
+  authorize_coordinator "$ACCEPTED_PARENT_FIRST_HUB" accepted-parent-first-coordinator
+  check "accepted mission stays eligible until every child is collected and archived" \
+    sh -c 'test "$("$1" classify --hub "$2" --session-id "$3")" = eligible' \
+      sh "$BINDING_HELPER" "$ACCEPTED_PARENT_FIRST_HUB" accepted-parent-first-coordinator
+
+  ACCEPTED_COLLECTED="$TMP/accepted-collected"
+  mkdir -p "$ACCEPTED_COLLECTED"
+  make_hub "$ACCEPTED_COLLECTED"
+  ACCEPTED_COLLECTED_HUB="$ACCEPTED_COLLECTED/.orchestrator"
+  printf 'accepted\n' > "$ACCEPTED_COLLECTED_HUB/missions/mission-a/state"
+  printf 'collected\n' > "$ACCEPTED_COLLECTED_HUB/control/mission-a/parent-cleanup-state"
+  printf 'collected\n' > "$ACCEPTED_COLLECTED_HUB/control/mission-a/tasks/task-a/state"
+  printf 'archived\n' > "$ACCEPTED_COLLECTED_HUB/control/mission-a/tasks/task-a/task-window-state"
+  authorize_coordinator "$ACCEPTED_COLLECTED_HUB" accepted-collected-coordinator
+  check "accepted mission becomes terminal only after parent and every child collect" \
+    sh -c 'test "$("$1" classify --hub "$2" --session-id "$3")" = terminal' \
+      sh "$BINDING_HELPER" "$ACCEPTED_COLLECTED_HUB" accepted-collected-coordinator
+
+  LIFECYCLE_REPO="$TMP/lifecycle-bundle"
+  mkdir -p "$LIFECYCLE_REPO"
+  make_hub "$LIFECYCLE_REPO"
+  LIFECYCLE_HUB="$LIFECYCLE_REPO/.orchestrator"
+  LIFECYCLE_CONTROL="$LIFECYCLE_HUB/control/mission-a"
+  LIFECYCLE_TASK="$LIFECYCLE_CONTROL/tasks/task-a"
+  LIFECYCLE_WORKER="$LIFECYCLE_REPO/task-state/task-a"
+  mkdir -p "$LIFECYCLE_WORKER" \
+    "$LIFECYCLE_TASK/native-health"
+  printf '%s\n' "$LIFECYCLE_WORKER" > "$LIFECYCLE_TASK/task-state-dir"
+  printf 'native request\n' > "$LIFECYCLE_TASK/native-health/request.json"
+  printf 'native first attempt\n' > "$LIFECYCLE_TASK/native-health/attempt-1.json"
+  printf 'native accepted\n' > "$LIFECYCLE_TASK/native-health/accepted.json"
+  printf 'unarchived\n' > "$LIFECYCLE_TASK/task-window-state"
+  printf 'pending archive\n' > "$LIFECYCLE_TASK/task-window-archive-pending"
+  printf 'broker request\n' > "$LIFECYCLE_WORKER/COMMIT-REQUEST-round-1.json"
+  printf 'broker intent\n' > "$LIFECYCLE_WORKER/COMMIT-INTENT-round-1.json"
+  printf 'broker done\n' > "$LIFECYCLE_WORKER/COMMIT-DONE-round-1.json"
+  printf 'broker rejected\n' > "$LIFECYCLE_WORKER/COMMIT-REJECTED-round-2.json"
+  printf '3\n' > "$LIFECYCLE_WORKER/generation"
+  printf 'running\n' > "$LIFECYCLE_WORKER/state"
+  printf 'child-thread-1\n' > "$LIFECYCLE_WORKER/accepted-thread-id"
+  printf 'worker manifest\n' > "$LIFECYCLE_WORKER/worktrees.txt"
+  printf 'worker manifest\n' > "$LIFECYCLE_TASK/worktrees.txt"
+  printf 'integration intent\n' > "$LIFECYCLE_TASK/integration-intent"
+  printf 'integrated sha\n' > "$LIFECYCLE_TASK/integrated_sha"
+  printf 'child tip\n' > "$LIFECYCLE_TASK/child_tip"
+  printf 'parent verification\n' > "$LIFECYCLE_TASK/parent-verification.sha"
+  printf 'coordinator verification\n' > "$LIFECYCLE_TASK/coordinator-verification.sha"
+  printf 'coordinator evidence\n' > "$LIFECYCLE_TASK/coordinator-verification.md"
+  printf 'rework intent\n' > "$LIFECYCLE_TASK/.rework-intent.json"
+  printf 'rework completion\n' > "$LIFECYCLE_TASK/rework-completion-2.json"
+  printf 'cleanup intent\n' > "$LIFECYCLE_TASK/cleanup-intent"
+  printf 'cleanup journal\n' > "$LIFECYCLE_TASK/cleanup-journal.log"
+  printf 'planning stage authority\n' > "$LIFECYCLE_CONTROL/planning-stage-authority.json"
+  printf 'planning import intent\n' > "$LIFECYCLE_CONTROL/planning-stage-import-intent.json"
+  printf 'planning receipt\n' > "$LIFECYCLE_CONTROL/planning-stage-receipt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json"
+  printf 'cleanup_pending\n' > "$LIFECYCLE_CONTROL/parent-cleanup-state"
+  printf 'parent cleanup intent\n' > "$LIFECYCLE_CONTROL/parent-cleanup-intent"
+  printf 'parent cleanup journal\n' > "$LIFECYCLE_CONTROL/parent-cleanup-journal.log"
+  printf 'approved design\n' > "$LIFECYCLE_CONTROL/approved-design.md"
+  printf 'approved plan\n' > "$LIFECYCLE_CONTROL/approved-plan.md"
+  printf 'approved brief\n' > "$LIFECYCLE_CONTROL/brief-exec.md"
+  printf '{"version":1,"mission":"mission-a","tasks":[{"id":"task-a","files":["feature.txt"]}]}\n' > "$LIFECYCLE_CONTROL/approved-task-dag.json"
+  (cd "$LIFECYCLE_CONTROL" && shasum -a 256 approved-design.md approved-plan.md brief-exec.md approved-task-dag.json > approved.sha256)
+  authorize_coordinator "$LIFECYCLE_HUB" lifecycle-coordinator
+  "$ADAPTER" --manual --hub "$LIFECYCLE_HUB" \
+    --session-id lifecycle-coordinator > "$LIFECYCLE_REPO/manual.json"
+  LIFECYCLE_REQUEST="$(request_file "$LIFECYCLE_HUB")"
+  check "continuation binds planning transaction authority as one sorted file-record bundle" \
+    json_expr "$LIFECYCLE_REQUEST" '.binding.missions[0].lifecycle_files as $files |
+      ($files | map(.path) == (map(.path) | sort)) and
+      ($files | map(.path | split("/")[-1]) | index("planning-stage-authority.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("planning-stage-import-intent.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("planning-stage-receipt-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.json")) != null'
+  check "continuation binds the exact frozen approval manifest and DAG" \
+    json_expr "$LIFECYCLE_REQUEST" '.binding.missions[0].lifecycle_files as $files |
+      ($files | map(.path | split("/")[-1]) | index("approved.sha256")) != null and
+      ($files | map(.path | split("/")[-1]) | index("approved-task-dag.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("approved-design.md")) != null and
+      ($files | map(.path | split("/")[-1]) | index("approved-plan.md")) != null and
+      ($files | map(.path | split("/")[-1]) | index("brief-exec.md")) != null'
+  check "continuation binds every allowlisted crash-recovery task file in one sorted bundle" \
+    json_expr "$LIFECYCLE_REQUEST" '.binding.missions[0].tasks[0].lifecycle_files as $files |
+      ($files | map(.path) == (map(.path) | sort)) and
+      ($files | map(.path | split("/")[-1]) | index("COMMIT-REQUEST-round-1.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("COMMIT-INTENT-round-1.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("COMMIT-DONE-round-1.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("COMMIT-REJECTED-round-2.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("integration-intent")) != null and
+      ($files | map(.path | split("/")[-1]) | index(".rework-intent.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("rework-completion-2.json")) != null and
+      ($files | map(.path | split("/")[-1]) | index("cleanup-intent")) != null and
+      ($files | map(.path | split("/")[-1]) | index("task-window-archive-pending")) != null and
+      ($files | map(.path | split("/")[-1]) | index("task-state-dir")) != null and
+      ($files | map(.path) | any(endswith("/native-health/request.json"))) and
+      ($files | map(.path) | any(endswith("/native-health/attempt-1.json"))) and
+      ($files | map(.path) | any(endswith("/native-health/accepted.json"))) and
+      ($files | map(.path) | any(endswith("/task-state/task-a/COMMIT-REQUEST-round-1.json")))'
+  check "lifecycle file records bind path bytes size and SHA-256" \
+    json_expr "$LIFECYCLE_REQUEST" '.binding.missions[0].tasks[0].lifecycle_files |
+      all((keys == ["bytes_b64","device","inode","path","sha256","size"]) and
+          (.path | startswith("/")) and (.bytes_b64 | type == "string") and
+          (.size | type == "number") and (.sha256 | test("^[0-9a-f]{64}$")))'
+  check "carryover summarizes every active lifecycle intent for crash recovery" bash -c \
+    'carry=$(jq -r .binding.carryover.path "$1");
+     grep -Fq "planning-stage-import-intent.json" "$carry" &&
+     grep -Fq "COMMIT-INTENT-round-1.json" "$carry" &&
+     grep -Fq "integration-intent" "$carry" &&
+     grep -Fq ".rework-intent.json" "$carry" &&
+     grep -Fq "cleanup-intent" "$carry" &&
+     grep -Fq "task-window-archive-pending" "$carry"' \
+    _ "$LIFECYCLE_REQUEST"
+  LIFECYCLE_ID="$(jq -r .request_id "$LIFECYCLE_REQUEST")"
+  cp "$LIFECYCLE_CONTROL/approved-task-dag.json" "$LIFECYCLE_REPO/approved-task-dag.saved"
+  printf '\n' >> "$LIFECYCLE_CONTROL/approved-task-dag.json"
+  check "frozen DAG drift invalidates continuation before promotion" \
+    sh -c '! "$1" --record-attempt --hub "$2" --request-id "$3" --thread-id lifecycle-next --coordinator-session-id lifecycle-coordinator >/dev/null 2>&1' \
+      sh "$ADAPTER" "$LIFECYCLE_HUB" "$LIFECYCLE_ID"
+  cp "$LIFECYCLE_REPO/approved-task-dag.saved" "$LIFECYCLE_CONTROL/approved-task-dag.json"
+  printf 'mutated broker intent\n' > "$LIFECYCLE_WORKER/COMMIT-INTENT-round-1.json"
+  check "lifecycle transaction mutation invalidates continuation authority" \
+    sh -c '! "$1" --record-attempt --hub "$2" --request-id "$3" --thread-id lifecycle-next --coordinator-session-id lifecycle-coordinator >/dev/null 2>&1' \
+      sh "$ADAPTER" "$LIFECYCLE_HUB" "$LIFECYCLE_ID"
+
+  LIFECYCLE_SYMLINK="$TMP/lifecycle-symlink"
+  mkdir -p "$LIFECYCLE_SYMLINK"
+  make_hub "$LIFECYCLE_SYMLINK"
+  authorize_coordinator "$LIFECYCLE_SYMLINK/.orchestrator" lifecycle-symlink-coordinator
+  printf 'outside\n' > "$LIFECYCLE_SYMLINK/outside-intent"
+  ln -s "$LIFECYCLE_SYMLINK/outside-intent" \
+    "$LIFECYCLE_SYMLINK/.orchestrator/control/mission-a/tasks/task-a/integration-intent"
+  check "symlinked allowlisted lifecycle authority fails closed" \
+    sh -c '! "$1" --manual --hub "$2" --session-id lifecycle-symlink-coordinator >/dev/null 2>&1' \
+      sh "$ADAPTER" "$LIFECYCLE_SYMLINK/.orchestrator"
+
+  OUTCOME_NO_NONCE="$TMP/outcome-no-nonce"
+  mkdir -p "$OUTCOME_NO_NONCE"
+  make_hub "$OUTCOME_NO_NONCE"
+  rm "$OUTCOME_NO_NONCE/.orchestrator/control/mission-a/tasks/task-a/outcome-nonce"
+  check "accepted task without outcome nonce is rejected" \
+    outcome_manual_fails "$OUTCOME_NO_NONCE" outcome-no-nonce-coordinator
+
+  OUTCOME_NO_ACCEPTED="$TMP/outcome-no-accepted"
+  mkdir -p "$OUTCOME_NO_ACCEPTED"
+  make_hub "$OUTCOME_NO_ACCEPTED"
+  write_latest_outcome "$OUTCOME_NO_ACCEPTED/.orchestrator"
+  rm "$OUTCOME_NO_ACCEPTED/.orchestrator/control/mission-a/tasks/task-a/accepted-thread-id"
+  check "latest outcome without accepted task authority is rejected" \
+    outcome_manual_fails "$OUTCOME_NO_ACCEPTED" outcome-no-accepted-coordinator
+
+  OUTCOME_NO_EVENT="$TMP/outcome-no-event"
+  mkdir -p "$OUTCOME_NO_EVENT"
+  make_hub "$OUTCOME_NO_EVENT"
+  write_latest_outcome "$OUTCOME_NO_EVENT/.orchestrator"
+  OUTCOME_NO_EVENT_DIGEST="$(cat "$OUTCOME_NO_EVENT/.orchestrator/control/mission-a/tasks/task-a/latest-outcome")"
+  rm "$OUTCOME_NO_EVENT/.orchestrator/control/mission-a/tasks/task-a/outcomes/$OUTCOME_NO_EVENT_DIGEST.json"
+  check "latest outcome without its exact event is rejected" \
+    outcome_manual_fails "$OUTCOME_NO_EVENT" outcome-no-event-coordinator
+
+  OUTCOME_BAD_DIGEST="$TMP/outcome-bad-digest"
+  mkdir -p "$OUTCOME_BAD_DIGEST"
+  make_hub "$OUTCOME_BAD_DIGEST"
+  write_latest_outcome "$OUTCOME_BAD_DIGEST/.orchestrator"
+  OUTCOME_BAD_DIGEST_VALUE="$(cat "$OUTCOME_BAD_DIGEST/.orchestrator/control/mission-a/tasks/task-a/latest-outcome")"
+  printf ' ' >> "$OUTCOME_BAD_DIGEST/.orchestrator/control/mission-a/tasks/task-a/outcomes/$OUTCOME_BAD_DIGEST_VALUE.json"
+  check "latest outcome content-address mismatch is rejected" \
+    outcome_manual_fails "$OUTCOME_BAD_DIGEST" outcome-bad-digest-coordinator
+
+  for mismatch in schema thread task generation nonce; do
+    OUTCOME_MISMATCH="$TMP/outcome-$mismatch"
+    mkdir -p "$OUTCOME_MISMATCH"
+    make_hub "$OUTCOME_MISMATCH"
+    write_latest_outcome "$OUTCOME_MISMATCH/.orchestrator"
+    case "$mismatch" in
+      schema) filter='.unexpected=true' ;;
+      thread) filter='.outcome.accepted_thread_id="other-thread"' ;;
+      task) filter='.outcome.task_id="task-b"' ;;
+      generation) filter='.outcome.generation=4' ;;
+      nonce) filter='.outcome.outcome_nonce="other-nonce"' ;;
+    esac
+    rewrite_latest_outcome "$OUTCOME_MISMATCH/.orchestrator" "$filter"
+    check "latest outcome $mismatch mismatch is rejected" \
+      outcome_manual_fails "$OUTCOME_MISMATCH" "outcome-$mismatch-coordinator"
+  done
 
   FABLE_REDIRECT="$TMP/fable-session-redirect"
   mkdir -p "$FABLE_REDIRECT"
@@ -368,7 +698,7 @@ PY
   printf 'planning-thread\n' > "$CODEX_BOUND/.orchestrator/control/mission-a/planning-thread-id"
   jq -cS -n --arg cwd "$CODEX_BOUND/planning-worktree" '{
     created:true, visible:true, title_verified:true, first_turn_exists:true,
-    startup_evidence:true, settings_recorded:true, writable_root_verified:true,
+    startup_evidence:true, settings_recorded:true, worktree_verified:true,
     status:"completed", thread_id:"planning-thread", model:"gpt-5.6-sol",
     effort:"ultra", project_id:"project-1", cwd:$cwd
   }' > "$CODEX_BOUND/.orchestrator/control/mission-a/planning-thread-health.json"
@@ -398,15 +728,17 @@ PY
     sh -c 'test ! -s "$1" && test "$(find "$2/control/continuations/requests" -type f 2>/dev/null | wc -l | tr -d " ")" = 0' \
       sh "$UNRELATED/unrelated.out" "$UNRELATED/.orchestrator"
 
-  TERMINAL="$TMP/terminal-mission"
-  mkdir -p "$TERMINAL"
-  make_hub "$TERMINAL"
-  authorize_coordinator "$TERMINAL/.orchestrator" terminal-coordinator
-  printf 'accepted\n' > "$TERMINAL/.orchestrator/missions/mission-a/state"
-  precompact_input "$TERMINAL" terminal-coordinator | "$ADAPTER" > "$TERMINAL/terminal.out"
-  check "terminal accepted mission cannot publish or emit continuation" \
-    sh -c 'test ! -s "$1" && test "$(find "$2/control/continuations/requests" -type f 2>/dev/null | wc -l | tr -d " ")" = 0' \
-      sh "$TERMINAL/terminal.out" "$TERMINAL/.orchestrator"
+  ACCEPTED_BEFORE_CLEANUP="$TMP/accepted-before-cleanup"
+  mkdir -p "$ACCEPTED_BEFORE_CLEANUP"
+  make_hub "$ACCEPTED_BEFORE_CLEANUP"
+  authorize_coordinator "$ACCEPTED_BEFORE_CLEANUP/.orchestrator" accepted-before-cleanup-coordinator
+  printf 'accepted\n' > "$ACCEPTED_BEFORE_CLEANUP/.orchestrator/missions/mission-a/state"
+  precompact_input "$ACCEPTED_BEFORE_CLEANUP" accepted-before-cleanup-coordinator \
+    | "$ADAPTER" > "$ACCEPTED_BEFORE_CLEANUP/continuation.out"
+  check "accepted mission remains eligible before durable parent and child collection" \
+    sh -c 'test -s "$1" && test "$2" = 1' \
+      sh "$ACCEPTED_BEFORE_CLEANUP/continuation.out" \
+      "$(request_count "$ACCEPTED_BEFORE_CLEANUP/.orchestrator")"
 
   DURABILITY_FAIL="$TMP/durability-failure"
   mkdir -p "$DURABILITY_FAIL"

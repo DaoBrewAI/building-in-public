@@ -11,6 +11,8 @@
 set -uo pipefail
 
 GC_SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+APPROVAL_HELPER="$GC_SCRIPT_DIR/verify-approved-authority.py"
+SHARED_LIFECYCLE_HELPER="$GC_SCRIPT_DIR/coordinator_lifecycle_lock.py"
 
 HUB=""
 CLEAN=0
@@ -26,6 +28,8 @@ GC_LOCK_TOKEN=""
 GC_GUARD_DIR=""
 GC_GUARD_TOKEN=""
 GC_GUARD_OWNED=0
+GC_SHARED_LOCK_FILE=""
+GC_SHARED_LOCK_HELD=0
 
 usage() {
   echo "usage: orchestrator-gc.sh --hub <hub dir> [--mission <slug>] [--clean]" >&2
@@ -351,6 +355,27 @@ gc_release_lifecycle_lock() {
   [[ "$ok" -eq 1 ]]
 }
 
+gc_acquire_shared_lifecycle_lock() {
+  local control="$1"
+  [[ "$GC_SHARED_LOCK_HELD" -eq 0 && -x "$SHARED_LIFECYCLE_HELPER" ]] || return 1
+  GC_SHARED_LOCK_FILE="$(python3 "$SHARED_LIFECYCLE_HELPER" prepare --control-dir "$control")" || return 1
+  exec 8< "$GC_SHARED_LOCK_FILE" || return 1
+  if ! python3 "$SHARED_LIFECYCLE_HELPER" acquire-fd \
+      --lock-file "$GC_SHARED_LOCK_FILE" --fd 8; then
+    exec 8>&-
+    GC_SHARED_LOCK_FILE=""
+    return 1
+  fi
+  GC_SHARED_LOCK_HELD=1
+}
+
+gc_release_shared_lifecycle_lock() {
+  [[ "$GC_SHARED_LOCK_HELD" -eq 1 ]] || return 0
+  exec 8>&-
+  GC_SHARED_LOCK_HELD=0
+  GC_SHARED_LOCK_FILE=""
+}
+
 gc_acquire_lifecycle_lock() {
   local control="$1" token stale_pid stale_token stale_extra stale_candidate
   local candidate_pid candidate_token candidate_extra
@@ -391,11 +416,11 @@ gc_acquire_lifecycle_lock() {
   gc_release_guard || return 1
 }
 
-trap 'gc_release_lifecycle_lock >/dev/null 2>&1 || true' EXIT
+trap 'gc_release_lifecycle_lock >/dev/null 2>&1 || true; gc_release_shared_lifecycle_lock >/dev/null 2>&1 || true' EXIT
 
 is_completed_state() {
   case "$1" in
-    accepted|done|complete|completed) return 0 ;;
+    accepted|cleanup_pending) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -618,13 +643,20 @@ child_epoch_matches() {
   case "$current_state" in integrated|cleanup_pending|collected) return 0 ;; *) return 1 ;; esac
 }
 
+CURRENT_CHILD_TASK_STATE_DIR=""
+
 child_cleanup_failure() {
-  local task_control="$1" reason="$2"
+  local task_control="$1" reason="$2" worker_failure_state
   problem "$reason"
   if [[ "$CLEAN" -eq 1 ]]; then
     append_cleanup_journal "$task_control/cleanup-journal.log" \
       "$(date -u '+%Y-%m-%dT%H:%M:%SZ') cleanup failure: $reason" 2>/dev/null || true
     write_task_value "$task_control/state" cleanup_pending 2>/dev/null || true
+    if [[ -n "$CURRENT_CHILD_TASK_STATE_DIR" ]]; then
+      worker_failure_state="$(read_task_value "$CURRENT_CHILD_TASK_STATE_DIR/state" 2>/dev/null || true)"
+      [[ "$worker_failure_state" == collected ]] || \
+        write_task_value "$CURRENT_CHILD_TASK_STATE_DIR/state" cleanup_pending 2>/dev/null || true
+    fi
   fi
   return 1
 }
@@ -637,21 +669,55 @@ clean_child_task() {
   local generation manifest_fingerprint
   local cleanup_intent cleanup_phase cleanup_integrated cleanup_child cleanup_worktree
   local cleanup_branch cleanup_repo cleanup_generation cleanup_manifest_hash cleanup_extra cleanup_record
+  local task_state_dir worker_state
 
+  CURRENT_CHILD_TASK_STATE_DIR=""
   state="$(read_task_value "$task_control/state" 2>/dev/null || true)"
   if [[ -z "$state" && ( -e "$task_control/state" || -L "$task_control/state" ) ]]; then
     child_cleanup_failure "$task_control" "$mission/$task_id task state is empty, non-regular, symlinked, or malformed"
     return 1
   fi
   case "$state" in
-    collected)
-      if [[ ! -e "$task_control/cleanup-intent" && ! -L "$task_control/cleanup-intent" ]]; then
-        return 0
-      fi
-      ;;
-    integrated|cleanup_pending) ;;
+    collected|integrated|cleanup_pending) ;;
     *) return 0 ;;
   esac
+  task_state_dir="$(read_task_value "$task_control/task-state-dir" 2>/dev/null || true)"
+  if [[ -z "$task_state_dir" || "$task_state_dir" != /* || ! -d "$task_state_dir" || -L "$task_state_dir" || \
+    "$(cd "$task_state_dir" 2>/dev/null && pwd -P 2>/dev/null || true)" != "$task_state_dir" ]]; then
+    child_cleanup_failure "$task_control" "$mission/$task_id task-state-dir authority is missing or unsafe"
+    return 1
+  fi
+  CURRENT_CHILD_TASK_STATE_DIR="$task_state_dir"
+  worker_state="$(read_task_value "$task_state_dir/state" 2>/dev/null || true)"
+  case "$state:$worker_state" in
+    integrated:integrated|integrated:collected|cleanup_pending:integrated|cleanup_pending:cleanup_pending|cleanup_pending:collected|collected:collected|collected:cleanup_pending) ;;
+    *)
+      child_cleanup_failure "$task_control" "$mission/$task_id control and task-state-dir states do not form a recoverable cleanup epoch"
+      return 1
+      ;;
+  esac
+  if [[ "$state:$worker_state" == integrated:collected ]]; then
+    [[ -f "$task_control/cleanup-intent" && ! -L "$task_control/cleanup-intent" && \
+       "$(cut -f1 "$task_control/cleanup-intent" 2>/dev/null)" == resources_collected ]] || {
+      child_cleanup_failure "$task_control" "$mission/$task_id external collected state lacks resources-collected recovery intent"
+      return 1
+    }
+  fi
+  if [[ "$state" == cleanup_pending && "$worker_state" == integrated ]]; then
+    write_task_value "$task_state_dir/state" cleanup_pending || {
+      child_cleanup_failure "$task_control" "$mission/$task_id could not converge task-state-dir cleanup_pending state"
+      return 1
+    }
+  fi
+  if [[ "$state" == collected && "$worker_state" != collected ]]; then
+    write_task_value "$task_state_dir/state" collected || {
+      child_cleanup_failure "$task_control" "$mission/$task_id could not reconcile task-state-dir collected state"
+      return 1
+    }
+  fi
+  if [[ "$state" == collected && ! -e "$task_control/cleanup-intent" && ! -L "$task_control/cleanup-intent" ]]; then
+    return 0
+  fi
 
   # cleanup_pending may belong to the task-window archive step. Git GC cannot
   # satisfy that API obligation and must leave it for coordinator reconciliation.
@@ -878,6 +944,14 @@ clean_child_task() {
     problem "$mission/$task_id lifecycle epoch changed before collected-state publication; newer authority preserved"
     return 1
   }
+  write_task_value "$task_state_dir/state" collected || {
+    child_cleanup_failure "$task_control" "$mission/$task_id could not record task-state-dir collected state"
+    return 1
+  }
+  if [[ "${ORC_GC_TEST_FAIL_AFTER_TASK_STATE_COLLECTED:-}" == 1 ]]; then
+    problem "$mission/$task_id injected interruption after task-state-dir collected publication"
+    return 1
+  fi
   write_task_value "$task_control/state" collected || {
     child_cleanup_failure "$task_control" "$mission/$task_id could not record collected state"
     return 1
@@ -1445,10 +1519,19 @@ archive_parent_artifacts() {
 
 parent_children_are_archived() {
   local control="$1" slug="$2" tasks tasks_phys control_phys
-  local task_dir task_phys task_id state thread_id window_state authority
+  local task_dir task_phys task_id state thread_id window_state authority task_state_dir worker_state
+  local expected_ids actual_ids
   control_phys="$(cd "$control" && pwd -P 2>/dev/null || true)"
   [[ -n "$control_phys" && "$control_phys" == "$control" ]] || {
     parent_cleanup_failure "$control" "$slug coordinator control path is not exact and canonical"
+    return 1
+  }
+  [[ -x "$APPROVAL_HELPER" ]] || {
+    parent_cleanup_failure "$control" "$slug frozen approval verifier is unavailable"
+    return 1
+  }
+  expected_ids="$("$APPROVAL_HELPER" --control-dir "$control" --task-ids 2>/dev/null)" || {
+    parent_cleanup_failure "$control" "$slug frozen approval authority is invalid"
     return 1
   }
   tasks="$control/tasks"
@@ -1458,12 +1541,24 @@ parent_children_are_archived() {
       return 1
     }
   else
-    return 0
+    [[ -z "$expected_ids" ]] && return 0
+    parent_cleanup_failure "$control" "$slug approved DAG tasks are missing from the registry"
+    return 1
   fi
   tasks_phys="$(cd "$tasks" && pwd -P 2>/dev/null || true)"
   [[ -n "$tasks_phys" && "$(dirname "$tasks_phys")" == "$control_phys" && \
     "$(basename "$tasks_phys")" == tasks ]] || {
     parent_cleanup_failure "$control" "$slug coordinator task registry is not a direct physical child"
+    return 1
+  }
+  actual_ids="$({
+    for task_dir in "$tasks"/* "$tasks"/.[!.]* "$tasks"/..?*; do
+      [[ -e "$task_dir" || -L "$task_dir" ]] || continue
+      basename "$task_dir"
+    done
+  } | LC_ALL=C sort)"
+  [[ "$actual_ids" == "$expected_ids" ]] || {
+    parent_cleanup_failure "$control" "$slug approved DAG and task registry identities differ"
     return 1
   }
   for task_dir in "$tasks"/* "$tasks"/.[!.]* "$tasks"/..?*; do
@@ -1488,7 +1583,8 @@ parent_children_are_archived() {
       parent_cleanup_failure "$control" "$slug/$task_id still has unresolved rework"
       return 1
     fi
-    for authority in state accepted-thread-id task-window-state; do
+    for authority in state accepted-thread-id task-window-state task-state-dir \
+      worktrees.txt integrated_sha child_tip parent-worktree; do
       [[ -f "$task_dir/$authority" && ! -L "$task_dir/$authority" ]] || {
         parent_cleanup_failure "$control" "$slug/$task_id $authority authority is missing or unsafe"
         return 1
@@ -1497,6 +1593,17 @@ parent_children_are_archived() {
     state="$(read_task_value "$task_dir/state" 2>/dev/null || true)"
     [[ "$state" == collected ]] || {
       parent_cleanup_failure "$control" "$slug/$task_id is nonterminal or not fully collected"
+      return 1
+    }
+    task_state_dir="$(read_task_value "$task_dir/task-state-dir" 2>/dev/null || true)"
+    [[ "$task_state_dir" == /* && -d "$task_state_dir" && ! -L "$task_state_dir" && \
+       "$(cd "$task_state_dir" 2>/dev/null && pwd -P 2>/dev/null || true)" == "$task_state_dir" ]] || {
+      parent_cleanup_failure "$control" "$slug/$task_id task-state-dir authority is unsafe"
+      return 1
+    }
+    worker_state="$(read_task_value "$task_state_dir/state" 2>/dev/null || true)"
+    [[ "$worker_state" == collected ]] || {
+      parent_cleanup_failure "$control" "$slug/$task_id task-state-dir is not collected"
       return 1
     }
     if [[ -e "$task_dir/task-window-archive-pending" || -L "$task_dir/task-window-archive-pending" ]]; then
@@ -1983,7 +2090,7 @@ clean_exact_parent_mission() {
 }
 
 scan_exact_parent_root() {
-  local root="$1" root_phys mission mission_phys slug control_phys lock_held lock_reason
+  local root="$1" root_phys mission mission_phys slug control_phys lock_held shared_lock_held lock_reason
   [[ -d "$root" && ! -L "$root" ]] || return 0
   root_phys="$(cd "$root" && pwd -P 2>/dev/null || true)"
   [[ -n "$root_phys" ]] || return 0
@@ -2003,12 +2110,21 @@ scan_exact_parent_root() {
     fi
     [[ -f "$mission/state" && ! -L "$mission/state" ]] || continue
     lock_held=0
+    shared_lock_held=0
     if [[ "$CLEAN" -eq 1 && -d "$HUB/control/$slug" && ! -L "$HUB/control/$slug" ]]; then
       control_phys="$(cd "$HUB/control/$slug" && pwd -P)"
+      if ! gc_acquire_shared_lifecycle_lock "$control_phys"; then
+        problem "$slug shared coordinator lifecycle lock is unsafe during parent GC"
+        gc_release_shared_lifecycle_lock >/dev/null 2>&1 || true
+        continue
+      fi
+      shared_lock_held=1
       if ! gc_acquire_lifecycle_lock "$control_phys"; then
         lock_reason="$slug coordinator lifecycle mutation lock is unsafe or busy during parent GC"
         problem "$lock_reason"
         gc_release_lifecycle_lock >/dev/null 2>&1 || true
+        gc_release_shared_lifecycle_lock >/dev/null 2>&1 || true
+        shared_lock_held=0
         record_parent_lock_pending "$mission" "$slug" "$control_phys" "$lock_reason" >/dev/null 2>&1 || true
         continue
       fi
@@ -2018,12 +2134,16 @@ scan_exact_parent_root() {
     if [[ "$lock_held" -eq 1 ]] && ! gc_release_lifecycle_lock; then
       problem "$slug coordinator lifecycle mutation lock release failed after parent GC"
     fi
+    if [[ "$shared_lock_held" -eq 1 ]] && ! gc_release_shared_lifecycle_lock; then
+      problem "$slug shared coordinator lifecycle lock release failed after parent GC"
+    fi
   done
 }
 
 child_batch_cleanup_ready() {
   local control="$1" mission="$2" mission_dir
-  local mission_state dag task_id task_state count=0 registry_count=0
+  local mission_state review_state dag_json task_id task_state thread_id window_state
+  local integrated_sha child_tip parent_worktree task_manifest task_state_dir worker_state count=0 registry_count=0
   local task_root task_root_phys task_entry task_entry_phys
   mission_dir="$HUB/missions/$mission"
   if [[ ! -d "$mission_dir" || -L "$mission_dir" ]]; then
@@ -2031,19 +2151,48 @@ child_batch_cleanup_ready() {
   fi
   [[ -d "$mission_dir" && ! -L "$mission_dir" && -f "$mission_dir/state" && ! -L "$mission_dir/state" ]] || return 1
   mission_state="$(read_task_value "$mission_dir/state" 2>/dev/null || true)"
-  case "$mission_state" in executed|review|accepted|cleanup_pending) ;; *) return 1 ;; esac
-  dag="$control/approved-task-dag.json"
-  [[ -f "$dag" && ! -L "$dag" ]] || return 1
+  case "$mission_state" in accepted|cleanup_pending) ;; *) return 1 ;; esac
+  [[ -x "$APPROVAL_HELPER" ]] || return 1
+  dag_json="$("$APPROVAL_HELPER" --control-dir "$control" --dag-json 2>/dev/null)" || return 1
+  review_state="$(read_task_value "$control/review-resolution" 2>/dev/null || true)"
+  [[ "$review_state" == resolved ]] || return 1
   jq -e '(.tasks | type == "array" and
     all(.[]; (.id | type == "string" and length > 0))) and
     ([.tasks[].id] | length == (unique | length))' \
-    "$dag" >/dev/null 2>&1 || return 1
+    <<< "$dag_json" >/dev/null 2>&1 || return 1
   while IFS= read -r task_id; do
     gc_valid_lock_token "$task_id" || return 1
     task_state="$(read_task_value "$control/tasks/$task_id/state" 2>/dev/null || true)"
     case "$task_state" in integrated|collected|cleanup_pending) ;; *) return 1 ;; esac
+    task_manifest="$control/tasks/$task_id/worktrees.txt"
+    [[ -f "$task_manifest" && ! -L "$task_manifest" && \
+       "$(wc -l < "$task_manifest" | tr -d ' ')" == 1 ]] || return 1
+    integrated_sha="$(read_task_value "$control/tasks/$task_id/integrated_sha" 2>/dev/null || true)"
+    child_tip="$(read_task_value "$control/tasks/$task_id/child_tip" 2>/dev/null || true)"
+    parent_worktree="$(read_task_value "$control/tasks/$task_id/parent-worktree" 2>/dev/null || true)"
+    case "$integrated_sha:$child_tip" in *[!0-9a-f:]*|:|*:|*::* ) return 1 ;; esac
+    [[ -n "$parent_worktree" ]] || return 1
+    task_state_dir="$(read_task_value "$control/tasks/$task_id/task-state-dir" 2>/dev/null || true)"
+    [[ "$task_state_dir" == /* && -d "$task_state_dir" && ! -L "$task_state_dir" && \
+       "$(cd "$task_state_dir" 2>/dev/null && pwd -P 2>/dev/null || true)" == "$task_state_dir" ]] || return 1
+    worker_state="$(read_task_value "$task_state_dir/state" 2>/dev/null || true)"
+    case "$task_state:$worker_state" in
+      integrated:integrated|integrated:collected|cleanup_pending:integrated|cleanup_pending:cleanup_pending|cleanup_pending:collected|collected:collected) ;;
+      *) return 1 ;;
+    esac
+    if [[ "$task_state:$worker_state" == integrated:collected ]]; then
+      [[ -f "$control/tasks/$task_id/cleanup-intent" && \
+         ! -L "$control/tasks/$task_id/cleanup-intent" && \
+         "$(cut -f1 "$control/tasks/$task_id/cleanup-intent" 2>/dev/null)" == resources_collected ]] || return 1
+    fi
+    thread_id="$(read_task_value "$control/tasks/$task_id/accepted-thread-id" 2>/dev/null || true)"
+    window_state="$(read_task_value "$control/tasks/$task_id/task-window-state" 2>/dev/null || true)"
+    gc_valid_lock_token "$thread_id" || return 1
+    [[ "$window_state" == archived ]] || return 1
+    [[ ! -e "$control/tasks/$task_id/task-window-archive-pending" && \
+       ! -L "$control/tasks/$task_id/task-window-archive-pending" ]] || return 1
     count=$((count + 1))
-  done < <(jq -r '.tasks[].id' "$dag")
+  done < <(jq -r '.tasks[].id' <<< "$dag_json")
   task_root="$control/tasks"
   [[ ! -e "$task_root" || ( -d "$task_root" && ! -L "$task_root" ) ]] || return 1
   if [[ -d "$task_root" ]]; then
@@ -2056,7 +2205,7 @@ child_batch_cleanup_ready() {
       [[ -d "$task_entry" && ! -L "$task_entry" ]] || return 1
       task_entry_phys="$(cd "$task_entry" && pwd -P 2>/dev/null || true)"
       [[ "$task_entry_phys" == "$task_entry" && "$(dirname "$task_entry_phys")" == "$task_root_phys" ]] || return 1
-      jq -e --arg task_id "$task_id" 'any(.tasks[]; .id == $task_id)' "$dag" >/dev/null 2>&1 || return 1
+      jq -e --arg task_id "$task_id" 'any(.tasks[]; .id == $task_id)' <<< "$dag_json" >/dev/null 2>&1 || return 1
       registry_count=$((registry_count + 1))
     done
   fi
@@ -2066,7 +2215,7 @@ child_batch_cleanup_ready() {
 
 scan_child_tasks() {
   local control_root="$HUB/control" control_root_phys mission_dir mission_phys
-  local mission task_root task_root_phys task_dir task_phys task_id control_phys lock_held
+  local mission task_root task_root_phys task_dir task_phys task_id control_phys lock_held shared_lock_held
   [[ -d "$control_root" && ! -L "$control_root" ]] || return 0
   control_root_phys="$(cd "$control_root" && pwd -P 2>/dev/null || true)"
   [[ -n "$control_root_phys" ]] || return 0
@@ -2099,20 +2248,33 @@ scan_child_tasks() {
       continue
     fi
     lock_held=0
+    shared_lock_held=0
     if [[ "$CLEAN" -eq 1 ]]; then
       control_phys="$(cd "$mission_dir" && pwd -P)"
+      if ! gc_acquire_shared_lifecycle_lock "$control_phys"; then
+        problem "$mission shared coordinator lifecycle lock is unsafe"
+        gc_release_shared_lifecycle_lock >/dev/null 2>&1 || true
+        continue
+      fi
+      shared_lock_held=1
       if ! gc_acquire_lifecycle_lock "$control_phys"; then
         problem "$mission coordinator lifecycle mutation lock is unsafe or busy"
         gc_release_lifecycle_lock >/dev/null 2>&1 || true
+        gc_release_shared_lifecycle_lock >/dev/null 2>&1 || true
+        shared_lock_held=0
         continue
       fi
       lock_held=1
       if ! child_batch_cleanup_ready "$control_phys" "$mission"; then
-        problem "$mission child cleanup requires exact approved-task registry, every task integrated, and parent state executed"
+        problem "$mission child cleanup requires resolved final review, accepted mission, every exact task integrated, and every accepted child window archived"
         if ! gc_release_lifecycle_lock; then
           problem "$mission coordinator lifecycle mutation lock release failed after batch-readiness refusal"
         fi
         lock_held=0
+        if ! gc_release_shared_lifecycle_lock; then
+          problem "$mission shared coordinator lifecycle lock release failed after batch-readiness refusal"
+        fi
+        shared_lock_held=0
         continue
       fi
     fi
@@ -2133,6 +2295,9 @@ scan_child_tasks() {
     done
     if [[ "$lock_held" -eq 1 ]] && ! gc_release_lifecycle_lock; then
       problem "$mission coordinator lifecycle mutation lock release failed"
+    fi
+    if [[ "$shared_lock_held" -eq 1 ]] && ! gc_release_shared_lifecycle_lock; then
+      problem "$mission shared coordinator lifecycle lock release failed"
     fi
   done
 }

@@ -90,10 +90,19 @@ setup_fixture() {
 
 add_archived_child_authority() {
   local task="$CONTROL/tasks/task-a"
+  local task_state="$(cd "$FIXTURE" && pwd -P)/task-state-a"
   mkdir -p "$task"
+  mkdir -p "$task_state"
   printf 'collected\n' > "$task/state"
+  printf 'collected\n' > "$task_state/state"
+  printf '%s\n' "$task_state" > "$task/task-state-dir"
   printf '01a0accepted-child\n' > "$task/accepted-thread-id"
   printf 'archived\n' > "$task/task-window-state"
+  printf '%s\t%s\t%s\t%s\n' "$PARENT" orc-task/mission/task-a "$PARENT_TIP" "$REPO" \
+    > "$task/worktrees.txt"
+  printf '%s\n' "$PARENT_TIP" > "$task/integrated_sha"
+  printf '%s\n' "$PARENT_TIP" > "$task/child_tip"
+  printf '%s\n' "$PARENT" > "$task/parent-worktree"
   printf '{"version":1,"mission":"mission","tasks":[{"id":"task-a","depends_on":[],"files":[],"contracts":[],"verification":["true"],"state":"ready"}]}\n' \
     > "$CONTROL/approved-task-dag.json"
   (cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md \
@@ -166,6 +175,7 @@ check "exact merged parent cleanup removes only its worktree and local and remot
 check "successful parent cleanup records collected and durable journal state" bash -c \
   '[[ "$(cat "$1/parent-cleanup-state")" = collected && -s "$1/parent-cleanup-journal.log" && -s "$2/cleanup-journal.log" ]] && grep -Fq "$3" "$2/cleanup-journal.log"' \
   _ "$CONTROL" "$ARCHIVE" "$PARENT_TIP"
+
 if ! [[ "$(cat "$ARCHIVE/design.md" 2>/dev/null)" == "design artifact" && \
   "$(cat "$ARCHIVE/plan.md" 2>/dev/null)" == "plan artifact" && \
   "$(cat "$ARCHIVE/DECISIONS.md" 2>/dev/null)" == "decision artifact" && \
@@ -181,6 +191,37 @@ $GC --hub "$HUB" --clean >/dev/null 2>&1
 check "repeated exact parent cleanup is an idempotent no-op" bash -c \
   '[[ "$1" -eq 0 && "$(cat "$2/parent-cleanup-state")" = collected && ! -e "$3" ]]' \
   _ "$?" "$CONTROL" "$PARENT"
+
+setup_fixture legacy-completed-state
+add_archived_child_authority
+printf 'completed\n' > "$MISSION/state"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+LEGACY_COMPLETED_RC=$?
+check "legacy completed mission state cannot bypass accepted cleanup authority" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" ]] && git -C "$3" show-ref --verify --quiet "refs/heads/$4" && git --git-dir "$5" show-ref --verify --quiet "refs/heads/$4"' \
+  _ "$LEGACY_COMPLETED_RC" "$PARENT" "$REPO" "$BRANCH" "$REMOTE"
+
+setup_fixture missing-approved-task-registry
+printf '{"version":1,"mission":"mission","tasks":[{"id":"task-a","files":["a.txt"]}]}\n' \
+  > "$CONTROL/approved-task-dag.json"
+(cd "$CONTROL" && shasum -a 256 approved-design.md approved-plan.md brief-exec.md approved-task-dag.json > approved.sha256)
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+MISSING_REGISTRY_RC=$?
+check "parent GC cannot vacuously pass when an approved DAG task is absent" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" ]] && git -C "$3" show-ref --verify --quiet "refs/heads/$4"' \
+  _ "$MISSING_REGISTRY_RC" "$PARENT" "$REPO" "$BRANCH"
+
+setup_fixture extra-task-registry
+add_archived_child_authority
+mkdir -p "$CONTROL/tasks/task-extra"
+printf 'collected\n' > "$CONTROL/tasks/task-extra/state"
+printf 'thread-extra\n' > "$CONTROL/tasks/task-extra/accepted-thread-id"
+printf 'archived\n' > "$CONTROL/tasks/task-extra/task-window-state"
+"$GC" --hub "$HUB" --mission mission --clean >/dev/null 2>&1
+EXTRA_REGISTRY_RC=$?
+check "parent GC cannot ignore a task registry entry outside the approved DAG" bash -c \
+  '[[ "$1" -ne 0 && -d "$2" ]] && git -C "$3" show-ref --verify --quiet "refs/heads/$4"' \
+  _ "$EXTRA_REGISTRY_RC" "$PARENT" "$REPO" "$BRANCH"
 
 setup_fixture unresolved-review
 printf 'pending\n' > "$CONTROL/review-resolution"

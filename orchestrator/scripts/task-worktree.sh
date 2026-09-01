@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create, adopt, or exactly reprovision one coordinator-owned child task worktree.
+# Create or adopt one coordinator-owned child task worktree.
 
 set -euo pipefail
 
@@ -16,10 +16,11 @@ NEW_AUTHORITY_DESTS=()
 NEW_AUTHORITY_TEMPS=()
 
 usage() {
-  echo "usage: task-worktree.sh create --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir>" >&2
-  echo "       task-worktree.sh adopt --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <native-worktree> --thread-id <id> --writable-root-token <token>" >&2
-  echo "       task-worktree.sh reprovision --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir> --expected-generation <n>" >&2
+  echo "usage: task-worktree.sh create --create-mode test-fixture --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <dir>" >&2
+  echo "       task-worktree.sh adopt --mission-dir <dir> --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --repo <repo> --parent-worktree <dir> --worktree <native-worktree> --thread-id <id>" >&2
 }
+
+NATIVE_HEALTH_HELPER="$(cd "$(dirname "$0")" && pwd -P)/native-task-health.py"
 
 fail() {
   echo "task-worktree: $1" >&2
@@ -60,58 +61,6 @@ paths_overlap() {
   [[ "$left" == "$right" || "$left" == "$right"/* || "$right" == "$left"/* ]]
 }
 
-guarded_replace_batch() {
-  python3 - "$@" <<'PY'
-import os
-import stat
-import sys
-
-values = sys.argv[1:]
-if not values or len(values) % 2:
-    raise SystemExit(1)
-pairs = list(zip(values[0::2], values[1::2]))
-snapshots = []
-source_stats = []
-restore_mode = os.environ.get("ORC_REPROVISION_RESTORE") == "1"
-limit_name = ("ORC_REPROVISION_TEST_FAIL_RESTORE_AFTER" if restore_mode
-              else "ORC_REPROVISION_TEST_FAIL_PUBLISH_AFTER")
-failure_limit = int(os.environ.get(limit_name, "0"))
-required_fsync_marker = os.environ.get("ORC_REPROVISION_REQUIRE_FSYNC_TEST_MARKER")
-if required_fsync_marker and not os.path.isfile(required_fsync_marker):
-    raise SystemExit(96)
-for source, destination in pairs:
-    source_stat = os.lstat(source)
-    destination_stat = os.lstat(destination)
-    if not stat.S_ISREG(source_stat.st_mode) or stat.S_ISLNK(source_stat.st_mode):
-        raise SystemExit(1)
-    if not stat.S_ISREG(destination_stat.st_mode) or stat.S_ISLNK(destination_stat.st_mode):
-        raise SystemExit(1)
-    source_stats.append(source_stat)
-    snapshots.append((destination_stat.st_dev, destination_stat.st_ino))
-for (_, destination), snapshot in zip(pairs, snapshots):
-    current = os.lstat(destination)
-    if (not stat.S_ISREG(current.st_mode) or stat.S_ISLNK(current.st_mode) or
-            (current.st_dev, current.st_ino) != snapshot):
-        raise SystemExit(1)
-replace_count = 0
-for (source, destination), source_stat in zip(pairs, source_stats):
-    os.replace(source, destination)
-    replace_count += 1
-    published = os.lstat(destination)
-    if (not stat.S_ISREG(published.st_mode) or stat.S_ISLNK(published.st_mode) or
-            (published.st_dev, published.st_ino) != (source_stat.st_dev, source_stat.st_ino)):
-        raise SystemExit(1)
-    if failure_limit and replace_count == failure_limit:
-        raise SystemExit(97)
-for directory in {os.path.dirname(destination) or "." for _, destination in pairs}:
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-PY
-}
-
 durable_fsync_paths() {
   python3 - "$@" <<'PY'
 import os
@@ -147,277 +96,6 @@ for directory in directories:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-marker = os.environ.get("ORC_REPROVISION_FSYNC_TEST_MARKER")
-if marker and os.environ.get("ORC_REPROVISION_FSYNC_PHASE") == "authority":
-    descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(descriptor, b"authority-fsynced\n")
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-    directory = os.path.dirname(marker) or "."
-    descriptor = os.open(directory, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-PY
-}
-
-publish_reprovision_completion() {
-  local receipt="$1" old_generation="$2" new_generation="$3" old_base="$4" new_base="$5"
-  local temporary
-  temporary="$(mktemp "$CONTROL_TASK_DIR/.reprovision-completion.XXXXXX")" || return 1
-  if ! python3 - "$temporary" "$MISSION" "$TASK_ID" "$old_generation" "$new_generation" \
-      "$PARENT_PHYS" "$REPO_PHYS" "$WORKTREE_PHYS" "$TASK_PHYS" "$BRANCH" \
-      "$old_base" "$new_base" "$CONTROL_MANIFEST" "$WORKER_MANIFEST" \
-      "$CONTROL_GENERATION" "$WORKER_GENERATION" "$CONTROL_SANDBOX" "$WORKER_SANDBOX" \
-      "$CONTROL_STATE" "$WORKER_STATE" "$CONTROL_TASK_DIR/accepted-thread-id" \
-      "$TASK_PHYS/accepted-thread-id" "$CONTROL_TASK_DIR/task-window-state" <<'PY'
-import hashlib
-import json
-import os
-import re
-import stat
-import sys
-
-(output, mission, task, old_generation, new_generation, parent, repo, worktree,
- task_dir, branch, old_base, new_base, control_manifest_path, worker_manifest_path,
- control_generation_path, worker_generation_path, control_sandbox_path,
- worker_sandbox_path, control_state_path, worker_state_path, control_thread_path,
- worker_thread_path, task_window_state_path) = sys.argv[1:]
-
-def regular_bytes(path):
-    path_stat = os.lstat(path)
-    if not stat.S_ISREG(path_stat.st_mode) or stat.S_ISLNK(path_stat.st_mode):
-        raise SystemExit(1)
-    with open(path, "rb") as handle:
-        return handle.read()
-
-def scalar(path):
-    data = regular_bytes(path)
-    if not data.endswith(b"\n") or data.count(b"\n") != 1 or b"\r" in data or b"\x00" in data:
-        raise SystemExit(1)
-    value = data[:-1].decode("utf-8")
-    if not value or "\t" in value:
-        raise SystemExit(1)
-    return value, data
-
-def manifest(path):
-    data = regular_bytes(path)
-    if not data.endswith(b"\n") or data.count(b"\n") != 1 or b"\r" in data or b"\x00" in data:
-        raise SystemExit(1)
-    text = data.decode("utf-8")
-    if len(text[:-1].split("\t")) != 4 or any(not item for item in text[:-1].split("\t")):
-        raise SystemExit(1)
-    return text, data
-
-control_manifest, control_manifest_bytes = manifest(control_manifest_path)
-worker_manifest, worker_manifest_bytes = manifest(worker_manifest_path)
-if control_manifest_bytes != worker_manifest_bytes:
-    raise SystemExit(1)
-control_generation, control_generation_bytes = scalar(control_generation_path)
-worker_generation, worker_generation_bytes = scalar(worker_generation_path)
-control_sandbox, control_sandbox_bytes = scalar(control_sandbox_path)
-worker_sandbox, worker_sandbox_bytes = scalar(worker_sandbox_path)
-control_state, control_state_bytes = scalar(control_state_path)
-worker_state, worker_state_bytes = scalar(worker_state_path)
-control_thread, control_thread_bytes = scalar(control_thread_path)
-worker_thread, worker_thread_bytes = scalar(worker_thread_path)
-task_window_state, task_window_state_bytes = scalar(task_window_state_path)
-if (control_generation != new_generation or worker_generation != new_generation or
-        control_sandbox != worktree or worker_sandbox != worktree or
-        control_state != "ready" or worker_state != "ready" or
-        control_thread != worker_thread or task_window_state != "unarchived"):
-    raise SystemExit(1)
-if not re.fullmatch(r"[0-9a-f]{40,64}", old_base) or not re.fullmatch(r"[0-9a-f]{40,64}", new_base):
-    raise SystemExit(1)
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-authority_hashes = {
-    "control_generation": digest(control_generation_bytes),
-    "worker_generation": digest(worker_generation_bytes),
-    "control_sandbox": digest(control_sandbox_bytes),
-    "worker_sandbox": digest(worker_sandbox_bytes),
-    "control_state": digest(control_state_bytes),
-    "worker_state": digest(worker_state_bytes),
-    "control_thread": digest(control_thread_bytes),
-    "worker_thread": digest(worker_thread_bytes),
-    "task_window_state": digest(task_window_state_bytes),
-}
-receipt = {
-    "version": 1,
-    "mission": mission,
-    "task": task,
-    "old_generation": int(old_generation),
-    "new_generation": int(new_generation),
-    "parent_worktree": parent,
-    "repo": repo,
-    "worktree": worktree,
-    "task_dir": task_dir,
-    "branch": branch,
-    "old_base": old_base,
-    "new_base": new_base,
-    "parent_tip": new_base,
-    "accepted_thread_id": control_thread,
-    "sandbox_root": worktree,
-    "control_manifest_content": control_manifest,
-    "control_manifest_sha256": digest(control_manifest_bytes),
-    "worker_manifest_content": worker_manifest,
-    "worker_manifest_sha256": digest(worker_manifest_bytes),
-    "authority_sha256": authority_hashes,
-    "branch_tip": new_base,
-    "worktree_tip": new_base,
-}
-encoded = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-descriptor = os.open(output, os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0))
-try:
-    os.write(descriptor, encoded)
-    os.fsync(descriptor)
-finally:
-    os.close(descriptor)
-PY
-  then
-    rm -f -- "$temporary"
-    return 1
-  fi
-  chmod 0600 "$temporary" || { rm -f -- "$temporary"; return 1; }
-  durable_fsync_paths "$temporary" || { rm -f -- "$temporary"; return 1; }
-  if [[ -e "$receipt" || -L "$receipt" ]]; then
-    [[ -f "$receipt" && ! -L "$receipt" ]] || { rm -f -- "$temporary"; return 1; }
-    guarded_replace_batch "$temporary" "$receipt" || { rm -f -- "$temporary"; return 1; }
-  else
-    if ! ln "$temporary" "$receipt" 2>/dev/null; then
-      rm -f -- "$temporary"
-      return 1
-    fi
-    [[ "$temporary" -ef "$receipt" ]] || { rm -f -- "$temporary"; return 1; }
-    rm -f -- "$temporary"
-  fi
-  durable_fsync_paths "$receipt" "$CONTROL_TASK_DIR" || return 1
-}
-
-validate_reprovision_completion() {
-  local receipt="$1" expected_old_generation="$2" expected_new_generation="$3"
-  local branch_tip worktree_tip
-  branch_tip="$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)"
-  worktree_tip="$(git -C "$WORKTREE_PHYS" rev-parse HEAD 2>/dev/null || true)"
-  python3 - "$receipt" "$MISSION" "$TASK_ID" "$expected_old_generation" "$expected_new_generation" \
-    "$PARENT_PHYS" "$REPO_PHYS" "$WORKTREE_PHYS" "$TASK_PHYS" "$BRANCH" "$PARENT_TIP" \
-    "$branch_tip" "$worktree_tip" "$CONTROL_MANIFEST" "$WORKER_MANIFEST" \
-    "$CONTROL_GENERATION" "$WORKER_GENERATION" "$CONTROL_SANDBOX" "$WORKER_SANDBOX" \
-    "$CONTROL_STATE" "$WORKER_STATE" "$CONTROL_TASK_DIR/accepted-thread-id" \
-    "$TASK_PHYS/accepted-thread-id" "$CONTROL_TASK_DIR/task-window-state" <<'PY'
-import hashlib
-import json
-import os
-import re
-import stat
-import sys
-
-(receipt_path, mission, task, expected_old_generation, expected_new_generation,
- parent, repo, worktree, task_dir, branch, parent_tip, branch_tip, worktree_tip,
- control_manifest_path, worker_manifest_path, control_generation_path,
- worker_generation_path, control_sandbox_path, worker_sandbox_path,
- control_state_path, worker_state_path, control_thread_path, worker_thread_path,
- task_window_state_path) = sys.argv[1:]
-
-def regular_bytes(path):
-    path_stat = os.lstat(path)
-    if not stat.S_ISREG(path_stat.st_mode) or stat.S_ISLNK(path_stat.st_mode):
-        raise SystemExit(1)
-    with open(path, "rb") as handle:
-        return handle.read()
-
-def scalar(path):
-    data = regular_bytes(path)
-    if not data.endswith(b"\n") or data.count(b"\n") != 1 or b"\r" in data or b"\x00" in data:
-        raise SystemExit(1)
-    value = data[:-1].decode("utf-8")
-    if not value or "\t" in value:
-        raise SystemExit(1)
-    return value, data
-
-def manifest(path):
-    data = regular_bytes(path)
-    if not data.endswith(b"\n") or data.count(b"\n") != 1 or b"\r" in data or b"\x00" in data:
-        raise SystemExit(1)
-    text = data.decode("utf-8")
-    if len(text[:-1].split("\t")) != 4 or any(not item for item in text[:-1].split("\t")):
-        raise SystemExit(1)
-    return text, data
-
-raw = regular_bytes(receipt_path)
-if not raw.endswith(b"\n") or raw.count(b"\n") != 1:
-    raise SystemExit(1)
-try:
-    receipt = json.loads(raw.decode("utf-8"))
-except (UnicodeDecodeError, json.JSONDecodeError):
-    raise SystemExit(1)
-canonical = (json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-if raw != canonical:
-    raise SystemExit(1)
-expected_keys = {
-    "version", "mission", "task", "old_generation", "new_generation",
-    "parent_worktree", "repo", "worktree", "task_dir", "branch", "old_base",
-    "new_base", "parent_tip", "accepted_thread_id", "sandbox_root",
-    "control_manifest_content", "control_manifest_sha256", "worker_manifest_content",
-    "worker_manifest_sha256", "authority_sha256", "branch_tip", "worktree_tip",
-}
-if set(receipt) != expected_keys or receipt.get("version") != 1:
-    raise SystemExit(1)
-if (receipt["mission"] != mission or receipt["task"] != task or
-        receipt["old_generation"] != int(expected_old_generation) or
-        receipt["new_generation"] != int(expected_new_generation) or
-        receipt["parent_worktree"] != parent or receipt["repo"] != repo or
-        receipt["worktree"] != worktree or receipt["task_dir"] != task_dir or
-        receipt["branch"] != branch or receipt["new_base"] != parent_tip or
-        receipt["parent_tip"] != parent_tip or receipt["branch_tip"] != branch_tip or
-        receipt["worktree_tip"] != worktree_tip or receipt["sandbox_root"] != worktree):
-    raise SystemExit(1)
-if not isinstance(receipt["old_base"], str) or not re.fullmatch(r"[0-9a-f]{40,64}", receipt["old_base"]):
-    raise SystemExit(1)
-
-control_manifest, control_manifest_bytes = manifest(control_manifest_path)
-worker_manifest, worker_manifest_bytes = manifest(worker_manifest_path)
-control_generation, control_generation_bytes = scalar(control_generation_path)
-worker_generation, worker_generation_bytes = scalar(worker_generation_path)
-control_sandbox, control_sandbox_bytes = scalar(control_sandbox_path)
-worker_sandbox, worker_sandbox_bytes = scalar(worker_sandbox_path)
-control_state, control_state_bytes = scalar(control_state_path)
-worker_state, worker_state_bytes = scalar(worker_state_path)
-control_thread, control_thread_bytes = scalar(control_thread_path)
-worker_thread, worker_thread_bytes = scalar(worker_thread_path)
-task_window_state, task_window_state_bytes = scalar(task_window_state_path)
-if (control_manifest_bytes != worker_manifest_bytes or control_generation != expected_new_generation or
-        worker_generation != expected_new_generation or control_sandbox != worktree or
-        worker_sandbox != worktree or control_state != "ready" or worker_state != "ready" or
-        control_thread != worker_thread or control_thread != receipt["accepted_thread_id"] or
-        task_window_state != "unarchived"):
-    raise SystemExit(1)
-
-def digest(data):
-    return hashlib.sha256(data).hexdigest()
-
-expected_hashes = {
-    "control_generation": digest(control_generation_bytes),
-    "worker_generation": digest(worker_generation_bytes),
-    "control_sandbox": digest(control_sandbox_bytes),
-    "worker_sandbox": digest(worker_sandbox_bytes),
-    "control_state": digest(control_state_bytes),
-    "worker_state": digest(worker_state_bytes),
-    "control_thread": digest(control_thread_bytes),
-    "worker_thread": digest(worker_thread_bytes),
-    "task_window_state": digest(task_window_state_bytes),
-}
-if (receipt["control_manifest_content"] != control_manifest or
-        receipt["worker_manifest_content"] != worker_manifest or
-        receipt["control_manifest_sha256"] != digest(control_manifest_bytes) or
-        receipt["worker_manifest_sha256"] != digest(worker_manifest_bytes) or
-        receipt["authority_sha256"] != expected_hashes):
-    raise SystemExit(1)
 PY
 }
 
@@ -733,28 +411,19 @@ PY
 }
 
 verify_native_create_ready() {
-  local validator classifier classification tasks_initialized=0
-  validator="$(cd "$(dirname "$0")" && pwd -P)/validate-task-dag.sh"
+  local classifier approval_helper classification tasks_initialized=0 dag_json
   classifier="$(cd "$(dirname "$0")" && pwd -P)/classify-mission-version.sh"
-  [[ -x "$validator" && -x "$classifier" ]] || fail "native scheduling helpers are unavailable"
-  "$validator" "$CONTROL_PHYS/approved-task-dag.json" >/dev/null || fail "approved task DAG is invalid"
+  approval_helper="$(cd "$(dirname "$0")" && pwd -P)/verify-approved-authority.py"
+  [[ -x "$approval_helper" && -x "$classifier" ]] || fail "native scheduling helpers are unavailable"
+  dag_json="$("$approval_helper" --control-dir "$CONTROL_PHYS" --dag-json)" || fail "frozen approval authority is invalid"
 
-  python3 - "$MISSION_DIR_PHYS" "$CONTROL_PHYS" "$TASK_ID" <<'PY'
-import hashlib
+  python3 - "$MISSION_DIR_PHYS" "$CONTROL_PHYS" "$TASK_ID" "$dag_json" <<'PY'
 import json
 import os
-import re
 import stat
 import sys
 
-mission, control, task_id = sys.argv[1:]
-approved = os.path.join(control, "approved.sha256")
-expected = [
-    (os.path.join(control, "approved-design.md"), "approved-design.md"),
-    (os.path.join(control, "approved-plan.md"), "approved-plan.md"),
-    (os.path.join(control, "brief-exec.md"), "brief-exec.md"),
-    (os.path.join(control, "approved-task-dag.json"), "approved-task-dag.json"),
-]
+mission, control, task_id, dag_raw = sys.argv[1:]
 
 def regular(path):
     value = os.lstat(path)
@@ -762,24 +431,7 @@ def regular(path):
         raise ValueError(path)
     return value
 
-regular(approved)
-with open(approved, "r", encoding="utf-8", newline="") as handle:
-    lines = handle.read().splitlines()
-if len(lines) != 4:
-    raise SystemExit("approved manifest must contain exactly four entries")
-for line, (path, basename) in zip(lines, expected):
-    match = re.fullmatch(r"([0-9a-f]{64})  ([A-Za-z0-9._-]+)", line)
-    if not match or match.group(2) != basename:
-        raise SystemExit("approved manifest entries are not canonical")
-    regular(path)
-    with open(path, "rb") as handle:
-        digest = hashlib.sha256(handle.read()).hexdigest()
-    if digest != match.group(1):
-        raise SystemExit("approved authority hash mismatch")
-
-dag_path = os.path.join(control, "approved-task-dag.json")
-with open(dag_path, "r", encoding="utf-8") as handle:
-    dag = json.load(handle)
+dag = json.loads(dag_raw)
 nodes = {node["id"]: node for node in dag["tasks"]}
 if task_id not in nodes:
     raise SystemExit("requested task is not an exact approved DAG node")
@@ -823,7 +475,10 @@ for blocker in ("accepted-thread-id", "user-approval-blocker", "unresolved-rewor
 
 requested_files = set(node.get("files", []))
 requested_contracts = set(node.get("contracts", []))
-active_states = {"pending", "ready", "running", "review", "rework", "completed", "cleanup_pending"}
+active_states = {
+    "pending", "ready", "running", "ready_for_commit", "blocked", "failed",
+    "review", "rework", "completed", "cleanup_pending",
+}
 for other_id, other in nodes.items():
     if other_id == task_id:
         continue
@@ -919,7 +574,7 @@ lock_exit() {
 
 MODE="${1:-}"
 case "$MODE" in
-  create|adopt|reprovision) ;;
+  create|adopt) ;;
   *) usage; exit 1 ;;
 esac
 shift
@@ -931,11 +586,9 @@ TASK_ID=""
 REPO=""
 PARENT_WORKTREE=""
 WORKTREE=""
-EXPECTED_GENERATION=""
 MISSION_DIR=""
 CREATE_MODE=""
 THREAD_ID=""
-WRITABLE_ROOT_TOKEN=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -946,30 +599,20 @@ while [[ $# -gt 0 ]]; do
     --repo) [[ $# -ge 2 ]] || { usage; exit 1; }; REPO="$2"; shift 2 ;;
     --parent-worktree) [[ $# -ge 2 ]] || { usage; exit 1; }; PARENT_WORKTREE="$2"; shift 2 ;;
     --worktree) [[ $# -ge 2 ]] || { usage; exit 1; }; WORKTREE="$2"; shift 2 ;;
-    --expected-generation) [[ $# -ge 2 ]] || { usage; exit 1; }; EXPECTED_GENERATION="$2"; shift 2 ;;
     --mission-dir) [[ $# -ge 2 ]] || { usage; exit 1; }; MISSION_DIR="$2"; shift 2 ;;
     --create-mode) [[ $# -ge 2 ]] || { usage; exit 1; }; CREATE_MODE="$2"; shift 2 ;;
     --thread-id) [[ $# -ge 2 ]] || { usage; exit 1; }; THREAD_ID="$2"; shift 2 ;;
-    --writable-root-token) [[ $# -ge 2 ]] || { usage; exit 1; }; WRITABLE_ROOT_TOKEN="$2"; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
 
-if [[ "$MODE" == create || "$MODE" == adopt ]]; then
-  [[ -z "$EXPECTED_GENERATION" ]] || fail "$MODE does not accept an expected generation"
-  [[ -n "$MISSION_DIR" ]] || fail "$MODE requires a mission directory"
-  case "$CREATE_MODE" in ''|test-fixture) ;; *) fail "unsupported create mode: $CREATE_MODE" ;; esac
-  if [[ "$MODE" == adopt ]]; then
-    valid_identity "$THREAD_ID" || fail "adopt requires a valid native thread id"
-    valid_identity "$WRITABLE_ROOT_TOKEN" || fail "adopt requires a valid writable-root token"
-  else
-    [[ -z "$THREAD_ID" && -z "$WRITABLE_ROOT_TOKEN" ]] || fail "create does not accept native adoption authority"
-  fi
+[[ -n "$MISSION_DIR" ]] || fail "$MODE requires a mission directory"
+if [[ "$MODE" == create ]]; then
+  [[ "$CREATE_MODE" == test-fixture ]] || fail "direct child creation is test-fixture only; production requires app-native health plus adopt"
+  [[ -z "$THREAD_ID" ]] || fail "create does not accept native adoption authority"
 else
-  [[ -z "$MISSION_DIR" && -z "$CREATE_MODE" && -z "$THREAD_ID" && -z "$WRITABLE_ROOT_TOKEN" ]] || fail "reprovision does not accept create or adoption arguments"
-  case "$EXPECTED_GENERATION" in
-    ''|*[!0-9]*|0) fail "reprovision requires a positive expected generation" ;;
-  esac
+  case "$CREATE_MODE" in ''|test-fixture) ;; *) fail "unsupported adopt mode: $CREATE_MODE" ;; esac
+  valid_identity "$THREAD_ID" || fail "adopt requires a valid native thread id"
 fi
 
 for VALUE in "$CONTROL_DIR" "$TASK_DIR" "$MISSION" "$TASK_ID" "$REPO" "$PARENT_WORKTREE" "$WORKTREE"; do
@@ -993,18 +636,8 @@ if [[ "$MODE" == create || "$MODE" == adopt ]]; then
 fi
 [[ -d "$REPO" && ! -L "$REPO" ]] || fail "repository missing or symlinked: $REPO"
 [[ -d "$PARENT_WORKTREE" && ! -L "$PARENT_WORKTREE" ]] || fail "parent worktree missing or symlinked: $PARENT_WORKTREE"
-REPROVISION_RECOVERY=0
-REPROVISION_COMPLETION_CANDIDATE=0
-if [[ "$MODE" == reprovision && -f "$CONTROL_DIR/tasks/$TASK_ID/reprovision-intent" && \
-  ! -L "$CONTROL_DIR/tasks/$TASK_ID/reprovision-intent" ]]; then
-  REPROVISION_RECOVERY=1
-fi
-if [[ "$MODE" == reprovision && "$REPROVISION_RECOVERY" -eq 0 && -d "$WORKTREE" && ! -L "$WORKTREE" ]]; then
-  REPROVISION_COMPLETION_CANDIDATE=1
-fi
 if [[ -e "$WORKTREE" || -L "$WORKTREE" ]]; then
-  [[ ( "$MODE" == adopt || "$REPROVISION_RECOVERY" -eq 1 || "$REPROVISION_COMPLETION_CANDIDATE" -eq 1 ) && \
-    -d "$WORKTREE" && ! -L "$WORKTREE" ]] || fail "child worktree already exists: $WORKTREE"
+  [[ "$MODE" == adopt && -d "$WORKTREE" && ! -L "$WORKTREE" ]] || fail "child worktree already exists: $WORKTREE"
 fi
 [[ -d "$(dirname "$WORKTREE")" ]] || fail "child worktree parent directory missing: $(dirname "$WORKTREE")"
 [[ ! -L "$TASK_DIR" ]] || fail "task directory is symlinked: $TASK_DIR"
@@ -1017,6 +650,7 @@ PARENT_COMMON="$(cd "$PARENT_WORKTREE" && cd "$(git rev-parse --git-common-dir)"
 PARENT_BRANCH="$(git -C "$PARENT_WORKTREE" symbolic-ref --quiet --short HEAD)" || fail "parent worktree is detached"
 [[ "$PARENT_BRANCH" == "orc/$MISSION" ]] || fail "parent worktree is not on orc/$MISSION"
 PARENT_TIP="$(git -C "$PARENT_WORKTREE" rev-parse --verify 'HEAD^{commit}')" || fail "cannot resolve parent tip"
+LIVE_PARENT_TIP="$PARENT_TIP"
 BRANCH="orc-task/$MISSION/$TASK_ID"
 git -C "$REPO" check-ref-format "refs/heads/$BRANCH" >/dev/null 2>&1 || fail "invalid child branch"
 
@@ -1058,6 +692,15 @@ if [[ "$MODE" == create || "$MODE" == adopt ]]; then
   fi
 fi
 
+if [[ "$MODE" == adopt ]]; then
+  [[ -x "$NATIVE_HEALTH_HELPER" ]] || fail "native child health helper is unavailable"
+  PARENT_TIP="$("$NATIVE_HEALTH_HELPER" verify-adoption \
+    --control-dir "$CONTROL_PHYS" --task-dir "$TASK_PHYS" --task-id "$TASK_ID" \
+    --thread-id "$THREAD_ID" --repo "$REPO_PHYS" --worktree "$WORKTREE_PHYS" \
+    --live-parent-tip "$LIVE_PARENT_TIP")" || fail "accepted native child health cannot be consumed"
+  [[ "$PARENT_TIP" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || fail "native child health returned an invalid schedule base"
+fi
+
 CONTROL_TASKS_DIR="$CONTROL_PHYS/tasks"
 CONTROL_TASK_DIR="$CONTROL_TASKS_DIR/$TASK_ID"
 CONTROL_MANIFEST="$CONTROL_TASK_DIR/worktrees.txt"
@@ -1073,8 +716,8 @@ WORKER_STATE="$TASK_PHYS/state"
 CONTROL_THREAD="$CONTROL_TASK_DIR/accepted-thread-id"
 WORKER_THREAD="$TASK_PHYS/accepted-thread-id"
 TASK_WINDOW_STATE="$CONTROL_TASK_DIR/task-window-state"
-CONTROL_ROOT_RECEIPT="$CONTROL_TASK_DIR/native-writable-root-receipt"
-WORKER_ROOT_RECEIPT="$TASK_PHYS/native-writable-root-receipt"
+CONTROL_OUTCOME_NONCE="$CONTROL_TASK_DIR/outcome-nonce"
+WORKER_OUTCOME_NONCE="$TASK_PHYS/outcome-nonce"
 
 [[ ! -L "$CONTROL_TASKS_DIR" ]] || fail "coordinator tasks directory is symlinked"
 [[ ! -e "$CONTROL_TASKS_DIR" || -d "$CONTROL_TASKS_DIR" ]] || fail "coordinator tasks path is not a directory"
@@ -1103,314 +746,11 @@ while IFS= read -r GIT_WORKTREE; do
   [[ -n "$GIT_WORKTREE" ]] || continue
   GIT_WORKTREE_PHYS="$(physical_path "$GIT_WORKTREE")" || fail "cannot canonicalize registered Git worktree: $GIT_WORKTREE"
   if paths_overlap "$WORKTREE_PHYS" "$GIT_WORKTREE_PHYS"; then
-    [[ ( "$MODE" == adopt || "$REPROVISION_RECOVERY" -eq 1 || "$REPROVISION_COMPLETION_CANDIDATE" -eq 1 ) && \
-      "$WORKTREE_PHYS" == "$GIT_WORKTREE_PHYS" ]] || fail "child worktree overlaps a registered Git worktree"
+    [[ "$MODE" == adopt && "$WORKTREE_PHYS" == "$GIT_WORKTREE_PHYS" ]] || fail "child worktree overlaps a registered Git worktree"
   fi
   paths_overlap "$TASK_PHYS" "$GIT_WORKTREE_PHYS" && fail "task directory overlaps a registered Git worktree"
   paths_overlap "$CONTROL_MANIFEST_PHYS" "$GIT_WORKTREE_PHYS" && fail "coordinator manifest overlaps a registered Git worktree"
 done < <(git -C "$REPO" worktree list --porcelain | sed -n 's/^worktree //p')
-
-if [[ "$MODE" == reprovision ]]; then
-  [[ -f "$CONTROL_MANIFEST" && ! -L "$CONTROL_MANIFEST" ]] || fail "retained coordinator manifest is missing or unsafe"
-  [[ -f "$WORKER_MANIFEST" && ! -L "$WORKER_MANIFEST" ]] || fail "retained worker manifest is missing or unsafe"
-  [[ ! "$CONTROL_MANIFEST" -ef "$WORKER_MANIFEST" ]] || fail "worker manifest must remain a separate copy"
-  REPROVISION_INTENT="$CONTROL_TASK_DIR/reprovision-intent"
-  REPROVISION_COMPLETION="$CONTROL_TASK_DIR/reprovision-completion.json"
-  if [[ "$REPROVISION_COMPLETION_CANDIDATE" -eq 1 && ! -e "$REPROVISION_INTENT" && ! -L "$REPROVISION_INTENT" ]]; then
-    COMPLETED_GENERATION=$((EXPECTED_GENERATION + 1))
-    COMPLETED_EXPECTED_ROW="$(printf '%s\t%s\t%s\t%s' "$WORKTREE_PHYS" "$BRANCH" "$PARENT_TIP" "$REPO_PHYS")"
-    COMPLETION_MATCH=1
-    for COMPLETION_AUTHORITY in "$CONTROL_GENERATION" "$WORKER_GENERATION" "$CONTROL_SANDBOX" \
-      "$WORKER_SANDBOX" "$CONTROL_STATE" "$WORKER_STATE" \
-      "$CONTROL_TASK_DIR/accepted-thread-id" "$TASK_PHYS/accepted-thread-id" \
-      "$CONTROL_TASK_DIR/task-window-state"; do
-      [[ -f "$COMPLETION_AUTHORITY" && ! -L "$COMPLETION_AUTHORITY" ]] || COMPLETION_MATCH=0
-    done
-    if [[ "$COMPLETION_MATCH" -eq 1 ]]; then
-      [[ "$(tr -d '[:space:]' < "$CONTROL_GENERATION")" == "$COMPLETED_GENERATION" && \
-        "$(tr -d '[:space:]' < "$WORKER_GENERATION")" == "$COMPLETED_GENERATION" && \
-        "$(tr -d '[:space:]' < "$CONTROL_STATE")" == ready && \
-        "$(tr -d '[:space:]' < "$WORKER_STATE")" == ready && \
-        "$(tr -d '\n' < "$CONTROL_SANDBOX")" == "$WORKTREE_PHYS" && \
-        "$(tr -d '\n' < "$WORKER_SANDBOX")" == "$WORKTREE_PHYS" && \
-        "$(tr -d '\n' < "$CONTROL_MANIFEST")" == "$COMPLETED_EXPECTED_ROW" && \
-        "$(tr -d '[:space:]' < "$CONTROL_TASK_DIR/task-window-state")" == unarchived && \
-        -n "$(tr -d '\n' < "$CONTROL_TASK_DIR/accepted-thread-id")" ]] || COMPLETION_MATCH=0
-      cmp -s "$CONTROL_MANIFEST" "$WORKER_MANIFEST" || COMPLETION_MATCH=0
-      git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxq "worktree $WORKTREE_PHYS" || COMPLETION_MATCH=0
-      [[ "$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" == "$BRANCH" && \
-        "$(git -C "$WORKTREE_PHYS" rev-parse HEAD 2>/dev/null || true)" == "$PARENT_TIP" && \
-        -z "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all 2>/dev/null || true)" && \
-        "$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)" == "$PARENT_TIP" ]] || COMPLETION_MATCH=0
-      validate_reprovision_completion "$CONTROL_TASK_DIR/reprovision-completion.json" \
-        "$EXPECTED_GENERATION" "$COMPLETED_GENERATION" || COMPLETION_MATCH=0
-    fi
-    [[ "$COMPLETION_MATCH" -eq 1 ]] || fail "existing child resources do not match an exact completed reprovision epoch"
-    for COMPLETION_DIR in "$CONTROL_TASK_DIR"/.reprovision-stage.* \
-      "$CONTROL_TASK_DIR"/.reprovision-backup.* "$TASK_PHYS"/.reprovision-stage.*; do
-      [[ -e "$COMPLETION_DIR" || -L "$COMPLETION_DIR" ]] || continue
-      [[ -d "$COMPLETION_DIR" && ! -L "$COMPLETION_DIR" ]] || fail "completed reprovision artifact is unsafe: $COMPLETION_DIR"
-      rm -rf -- "$COMPLETION_DIR"
-    done
-    durable_fsync_paths "$CONTROL_TASK_DIR" "$TASK_PHYS" || fail "could not sync completed reprovision cleanup"
-    release_lock || fail "could not release coordinator mutation lock"
-    trap - EXIT HUP INT TERM
-    echo "already reprovisioned $BRANCH generation $COMPLETED_GENERATION at $PARENT_TIP in $WORKTREE_PHYS"
-    exit 0
-  fi
-  if [[ -e "$REPROVISION_INTENT" || -L "$REPROVISION_INTENT" ]]; then
-    [[ -f "$REPROVISION_INTENT" && ! -L "$REPROVISION_INTENT" ]] || fail "reprovision recovery intent is unsafe"
-    INTENT_OLD_GENERATION=""; INTENT_NEW_GENERATION=""; INTENT_OLD_BASE=""; INTENT_NEW_BASE=""
-    INTENT_WORKTREE=""; INTENT_BRANCH=""; INTENT_THREAD=""; INTENT_EXTRA=""
-    IFS=$'\t' read -r INTENT_OLD_GENERATION INTENT_NEW_GENERATION INTENT_OLD_BASE INTENT_NEW_BASE \
-      INTENT_WORKTREE INTENT_BRANCH INTENT_THREAD INTENT_EXTRA < "$REPROVISION_INTENT" || fail "reprovision recovery intent cannot be read"
-    [[ -z "$INTENT_EXTRA" && "$(wc -l < "$REPROVISION_INTENT" | tr -d ' ')" == 1 ]] || fail "reprovision recovery intent is malformed"
-    [[ "$INTENT_OLD_GENERATION" == "$EXPECTED_GENERATION" && \
-      "$INTENT_NEW_GENERATION" -eq $((EXPECTED_GENERATION + 1)) ]] || fail "reprovision recovery generation differs from the request"
-    [[ "$(git -C "$REPO_PHYS" rev-parse --verify "${INTENT_OLD_BASE}^{commit}" 2>/dev/null || true)" == "$INTENT_OLD_BASE" ]] || fail "reprovision recovery old base is invalid"
-    git -C "$REPO_PHYS" merge-base --is-ancestor "$INTENT_OLD_BASE" "$INTENT_NEW_BASE" || fail "reprovision recovery base ancestry changed"
-    [[ "$INTENT_NEW_BASE" == "$PARENT_TIP" && "$INTENT_WORKTREE" == "$WORKTREE_PHYS" && \
-      "$INTENT_BRANCH" == "$BRANCH" ]] || fail "reprovision recovery intent differs from exact arguments"
-    [[ -f "$CONTROL_TASK_DIR/accepted-thread-id" && ! -L "$CONTROL_TASK_DIR/accepted-thread-id" && \
-      "$(tr -d '\n' < "$CONTROL_TASK_DIR/accepted-thread-id")" == "$INTENT_THREAD" ]] || fail "reprovision recovery thread identity changed"
-    [[ -f "$TASK_PHYS/accepted-thread-id" && ! -L "$TASK_PHYS/accepted-thread-id" && \
-      "$(tr -d '\n' < "$TASK_PHYS/accepted-thread-id")" == "$INTENT_THREAD" ]] || fail "worker reprovision recovery thread identity changed"
-    [[ -f "$CONTROL_TASK_DIR/task-window-state" && ! -L "$CONTROL_TASK_DIR/task-window-state" && \
-      "$(tr -d '[:space:]' < "$CONTROL_TASK_DIR/task-window-state")" == unarchived ]] || fail "reprovision recovery thread is not unarchived"
-    [[ -d "$WORKTREE_PHYS" && ! -L "$WORKTREE_PHYS" ]] || fail "reprovision recovery worktree is missing or unsafe"
-    git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxq "worktree $WORKTREE_PHYS" || fail "reprovision recovery worktree is not registered"
-    [[ "$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" == "$BRANCH" && \
-      "$(git -C "$WORKTREE_PHYS" rev-parse HEAD 2>/dev/null || true)" == "$INTENT_NEW_BASE" && \
-      -z "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all 2>/dev/null || true)" ]] || fail "reprovision recovery worktree changed"
-    [[ "$(git -C "$REPO_PHYS" rev-parse --verify "refs/heads/${BRANCH}^{commit}" 2>/dev/null || true)" == "$INTENT_NEW_BASE" ]] || fail "reprovision recovery branch changed"
-    for RECOVERY_AUTHORITY in "$CONTROL_MANIFEST" "$WORKER_MANIFEST" "$CONTROL_GENERATION" \
-      "$WORKER_GENERATION" "$CONTROL_SANDBOX" "$WORKER_SANDBOX" "$CONTROL_STATE" "$WORKER_STATE"; do
-      [[ -f "$RECOVERY_AUTHORITY" && ! -L "$RECOVERY_AUTHORITY" ]] || fail "mixed reprovision authority is unsafe: $RECOVERY_AUTHORITY"
-    done
-    RECOVERY_EXPECTED_ROW="$(printf '%s\t%s\t%s\t%s' "$WORKTREE_PHYS" "$BRANCH" "$INTENT_NEW_BASE" "$REPO_PHYS")"
-    RECOVERY_CONVERGED=0
-    if [[ "$(tr -d '[:space:]' < "$CONTROL_GENERATION")" == "$INTENT_NEW_GENERATION" && \
-      "$(tr -d '[:space:]' < "$WORKER_GENERATION")" == "$INTENT_NEW_GENERATION" && \
-      "$(tr -d '[:space:]' < "$CONTROL_STATE")" == ready && \
-      "$(tr -d '[:space:]' < "$WORKER_STATE")" == ready && \
-      "$(tr -d '\n' < "$CONTROL_SANDBOX")" == "$WORKTREE_PHYS" && \
-      "$(tr -d '\n' < "$WORKER_SANDBOX")" == "$WORKTREE_PHYS" && \
-      "$(tr -d '\n' < "$CONTROL_MANIFEST")" == "$RECOVERY_EXPECTED_ROW" ]] && \
-      cmp -s "$CONTROL_MANIFEST" "$WORKER_MANIFEST"; then
-      RECOVERY_CONVERGED=1
-    fi
-    if [[ "$RECOVERY_CONVERGED" -eq 1 ]]; then
-      publish_reprovision_completion "$REPROVISION_COMPLETION" "$INTENT_OLD_GENERATION" \
-        "$INTENT_NEW_GENERATION" "$INTENT_OLD_BASE" "$INTENT_NEW_BASE" || \
-        fail "could not publish recovered reprovision completion receipt"
-      for RECOVERY_DIR in "$CONTROL_TASK_DIR"/.reprovision-stage.* \
-        "$CONTROL_TASK_DIR"/.reprovision-backup.* "$TASK_PHYS"/.reprovision-stage.*; do
-        [[ -e "$RECOVERY_DIR" || -L "$RECOVERY_DIR" ]] || continue
-        [[ -d "$RECOVERY_DIR" && ! -L "$RECOVERY_DIR" ]] || fail "reprovision recovery artifact is unsafe: $RECOVERY_DIR"
-        rm -rf -- "$RECOVERY_DIR"
-      done
-      rm -f -- "$REPROVISION_INTENT"
-      durable_fsync_paths "$CONTROL_TASK_DIR" "$TASK_PHYS" || fail "could not sync reconciled reprovision completion"
-      if [[ "${ORC_REPROVISION_TEST_FAIL_AFTER_INTENT_REMOVAL_RECOVERY:-}" == 1 ]]; then
-        fail "injected interruption after recovered reprovision intent removal"
-      fi
-      release_lock || fail "could not release coordinator mutation lock"
-      trap - EXIT HUP INT TERM
-      echo "reconciled existing $BRANCH generation $INTENT_NEW_GENERATION at $INTENT_NEW_BASE in $WORKTREE_PHYS"
-      exit 0
-    fi
-    [[ -n "$(find "$CONTROL_TASK_DIR" -maxdepth 1 -name '.reprovision-stage.*' -type d -print -quit)" && \
-      -n "$(find "$CONTROL_TASK_DIR" -maxdepth 1 -name '.reprovision-backup.*' -type d -print -quit)" && \
-      -n "$(find "$TASK_PHYS" -maxdepth 1 -name '.reprovision-stage.*' -type d -print -quit)" ]] || fail "reprovision recovery staging or backups are missing"
-
-    RECOVERY_CONTROL_STAGE="$(mktemp -d "$CONTROL_TASK_DIR/.reprovision-stage.XXXXXX")" || fail "cannot stage reprovision recovery"
-    RECOVERY_WORKER_STAGE="$(mktemp -d "$TASK_PHYS/.reprovision-stage.XXXXXX")" || fail "cannot stage worker reprovision recovery"
-    printf '%s\t%s\t%s\t%s\n' "$WORKTREE_PHYS" "$BRANCH" "$INTENT_NEW_BASE" "$REPO_PHYS" > "$RECOVERY_CONTROL_STAGE/worktrees.txt"
-    cp "$RECOVERY_CONTROL_STAGE/worktrees.txt" "$RECOVERY_WORKER_STAGE/worktrees.txt"
-    printf '%s\n' "$INTENT_NEW_GENERATION" > "$RECOVERY_CONTROL_STAGE/generation"
-    cp "$RECOVERY_CONTROL_STAGE/generation" "$RECOVERY_WORKER_STAGE/generation"
-    printf '%s\n' "$WORKTREE_PHYS" > "$RECOVERY_CONTROL_STAGE/sandbox-root"
-    cp "$RECOVERY_CONTROL_STAGE/sandbox-root" "$RECOVERY_WORKER_STAGE/sandbox-root"
-    printf 'ready\n' > "$RECOVERY_CONTROL_STAGE/state"
-    cp "$RECOVERY_CONTROL_STAGE/state" "$RECOVERY_WORKER_STAGE/state"
-    chmod 0600 "$RECOVERY_CONTROL_STAGE"/* "$RECOVERY_WORKER_STAGE"/*
-    ORC_REPROVISION_FSYNC_PHASE=authority durable_fsync_paths \
-      "$RECOVERY_CONTROL_STAGE"/* "$RECOVERY_WORKER_STAGE"/* \
-      "$RECOVERY_CONTROL_STAGE" "$RECOVERY_WORKER_STAGE" || \
-      fail "could not sync reprovision recovery staging"
-    if ! guarded_replace_batch \
-        "$RECOVERY_CONTROL_STAGE/worktrees.txt" "$CONTROL_MANIFEST" \
-        "$RECOVERY_WORKER_STAGE/worktrees.txt" "$WORKER_MANIFEST" \
-        "$RECOVERY_CONTROL_STAGE/generation" "$CONTROL_GENERATION" \
-        "$RECOVERY_WORKER_STAGE/generation" "$WORKER_GENERATION" \
-        "$RECOVERY_CONTROL_STAGE/sandbox-root" "$CONTROL_SANDBOX" \
-        "$RECOVERY_WORKER_STAGE/sandbox-root" "$WORKER_SANDBOX" \
-        "$RECOVERY_CONTROL_STAGE/state" "$CONTROL_STATE" \
-        "$RECOVERY_WORKER_STAGE/state" "$WORKER_STATE"; then
-      fail "reprovision recovery publication failed; durable evidence preserved"
-    fi
-    [[ "$(tr -d '[:space:]' < "$CONTROL_GENERATION")" == "$INTENT_NEW_GENERATION" && \
-      "$(tr -d '[:space:]' < "$WORKER_GENERATION")" == "$INTENT_NEW_GENERATION" && \
-      "$(tr -d '[:space:]' < "$CONTROL_STATE")" == ready && \
-      "$(tr -d '[:space:]' < "$WORKER_STATE")" == ready ]] || fail "reprovision recovery authority did not converge"
-    cmp -s "$CONTROL_MANIFEST" "$WORKER_MANIFEST" || fail "reprovision recovery manifests did not converge"
-    if [[ "${ORC_REPROVISION_TEST_FAIL_AFTER_CONVERGE:-}" == 1 ]]; then
-      fail "injected interruption after reprovision authority convergence"
-    fi
-    publish_reprovision_completion "$REPROVISION_COMPLETION" "$INTENT_OLD_GENERATION" \
-      "$INTENT_NEW_GENERATION" "$INTENT_OLD_BASE" "$INTENT_NEW_BASE" || \
-      fail "could not publish reprovision recovery completion receipt"
-    for RECOVERY_DIR in "$CONTROL_TASK_DIR"/.reprovision-stage.* \
-      "$CONTROL_TASK_DIR"/.reprovision-backup.* "$TASK_PHYS"/.reprovision-stage.*; do
-      [[ -e "$RECOVERY_DIR" || -L "$RECOVERY_DIR" ]] || continue
-      [[ -d "$RECOVERY_DIR" && ! -L "$RECOVERY_DIR" ]] || fail "reprovision recovery artifact is unsafe: $RECOVERY_DIR"
-      rm -rf -- "$RECOVERY_DIR"
-    done
-    rm -f -- "$REPROVISION_INTENT"
-    durable_fsync_paths "$CONTROL_TASK_DIR" "$TASK_PHYS" || fail "could not sync recovered reprovision completion"
-    if [[ "${ORC_REPROVISION_TEST_FAIL_AFTER_INTENT_REMOVAL_RECOVERY:-}" == 1 ]]; then
-      fail "injected interruption after recovered reprovision intent removal"
-    fi
-    release_lock || fail "could not release coordinator mutation lock"
-    trap - EXIT HUP INT TERM
-    echo "reconciled $BRANCH generation $INTENT_NEW_GENERATION at $INTENT_NEW_BASE in $WORKTREE_PHYS"
-    exit 0
-  fi
-  cmp -s "$CONTROL_MANIFEST" "$WORKER_MANIFEST" || fail "retained coordinator and worker manifests differ"
-
-  OLD_WORKTREE=""; OLD_BRANCH=""; OLD_BASE=""; OLD_REPO=""; OLD_EXTRA=""
-  IFS=$'\t' read -r OLD_WORKTREE OLD_BRANCH OLD_BASE OLD_REPO OLD_EXTRA < "$CONTROL_MANIFEST" || fail "retained coordinator manifest cannot be read"
-  [[ -n "$OLD_WORKTREE" && -n "$OLD_BRANCH" && -n "$OLD_BASE" && -n "$OLD_REPO" && -z "$OLD_EXTRA" && \
-    "$(wc -l < "$CONTROL_MANIFEST" | tr -d ' ')" == 1 ]] || fail "retained coordinator manifest is malformed"
-  [[ "$OLD_WORKTREE" == "$WORKTREE_PHYS" && "$OLD_BRANCH" == "$BRANCH" && "$OLD_REPO" == "$REPO_PHYS" ]] || fail "reprovision arguments differ from retained exact authority"
-  [[ "$PARENT_TIP" != "$OLD_BASE" ]] || fail "reprovision requires an updated parent tip"
-  git -C "$REPO_PHYS" rev-parse --verify "${OLD_BASE}^{commit}" >/dev/null 2>&1 || fail "retained base does not resolve"
-  git -C "$REPO_PHYS" merge-base --is-ancestor "$OLD_BASE" "$PARENT_TIP" || fail "updated parent does not descend from retained base"
-  [[ ! -e "$WORKTREE_PHYS" && ! -L "$WORKTREE_PHYS" ]] || fail "old child worktree still exists"
-  ! git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxq "worktree $WORKTREE_PHYS" || fail "old child worktree remains registered"
-  ! git -C "$REPO_PHYS" show-ref --verify --quiet "refs/heads/$BRANCH" || fail "old child local branch still exists"
-
-  THREAD_ID_FILE="$CONTROL_TASK_DIR/accepted-thread-id"
-  WORKER_THREAD_ID_FILE="$TASK_PHYS/accepted-thread-id"
-  THREAD_STATE_FILE="$CONTROL_TASK_DIR/task-window-state"
-  for AUTHORITY_FILE in "$CONTROL_GENERATION" "$WORKER_GENERATION" "$CONTROL_SANDBOX" \
-    "$WORKER_SANDBOX" "$CONTROL_STATE" "$WORKER_STATE" "$THREAD_ID_FILE" \
-    "$WORKER_THREAD_ID_FILE" "$THREAD_STATE_FILE"; do
-    [[ -f "$AUTHORITY_FILE" && ! -L "$AUTHORITY_FILE" ]] || fail "retained authority file is missing or unsafe: $AUTHORITY_FILE"
-    [[ "$(wc -l < "$AUTHORITY_FILE" | tr -d ' ')" == 1 ]] || fail "retained authority file is malformed: $AUTHORITY_FILE"
-  done
-  CURRENT_GENERATION="$(tr -d '[:space:]' < "$CONTROL_GENERATION")"
-  WORKER_CURRENT_GENERATION="$(tr -d '[:space:]' < "$WORKER_GENERATION")"
-  [[ "$CURRENT_GENERATION" == "$EXPECTED_GENERATION" && "$WORKER_CURRENT_GENERATION" == "$EXPECTED_GENERATION" ]] || fail "expected generation does not match retained authority"
-  case "$CURRENT_GENERATION" in ''|*[!0-9]*|0) fail "retained generation is invalid" ;; esac
-  CONTROL_SANDBOX_VALUE="$(tr -d '\n' < "$CONTROL_SANDBOX")"
-  WORKER_SANDBOX_VALUE="$(tr -d '\n' < "$WORKER_SANDBOX")"
-  [[ "$CONTROL_SANDBOX_VALUE" == "$WORKTREE_PHYS" && "$WORKER_SANDBOX_VALUE" == "$WORKTREE_PHYS" ]] || fail "reprovision sandbox root differs from retained authority"
-  CONTROL_STATE_VALUE="$(tr -d '[:space:]' < "$CONTROL_STATE")"
-  WORKER_STATE_VALUE="$(tr -d '[:space:]' < "$WORKER_STATE")"
-  case "$CONTROL_STATE_VALUE" in integrated|collected) ;; *) fail "reprovision requires terminal integrated or collected state" ;; esac
-  case "$WORKER_STATE_VALUE" in integrated|collected) ;; *) fail "worker task state is not terminal integrated or collected" ;; esac
-  ACCEPTED_THREAD_ID="$(tr -d '\n' < "$THREAD_ID_FILE")"
-  WORKER_ACCEPTED_THREAD_ID="$(tr -d '\n' < "$WORKER_THREAD_ID_FILE")"
-  [[ -n "$ACCEPTED_THREAD_ID" ]] || fail "accepted child thread identity is empty"
-  [[ "$WORKER_ACCEPTED_THREAD_ID" == "$ACCEPTED_THREAD_ID" ]] || fail "worker accepted child thread identity differs"
-  case "$ACCEPTED_THREAD_ID" in *$'\t'*|*$'\r'*) fail "accepted child thread identity is malformed" ;; esac
-  [[ "$(tr -d '[:space:]' < "$THREAD_STATE_FILE")" == unarchived ]] || fail "accepted child thread must be unarchived before reprovision"
-
-  NEXT_GENERATION=$((CURRENT_GENERATION + 1))
-  [[ ! -e "$REPROVISION_INTENT" && ! -L "$REPROVISION_INTENT" ]] || fail "reprovision intent already exists"
-  REPROVISION_INTENT_TMP="$(mktemp "$CONTROL_TASK_DIR/.reprovision-intent.XXXXXX")" || fail "cannot stage reprovision intent"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$CURRENT_GENERATION" "$NEXT_GENERATION" \
-    "$OLD_BASE" "$PARENT_TIP" "$WORKTREE_PHYS" "$BRANCH" "$ACCEPTED_THREAD_ID" > "$REPROVISION_INTENT_TMP"
-  chmod 0600 "$REPROVISION_INTENT_TMP"
-  durable_fsync_paths "$REPROVISION_INTENT_TMP" || fail "could not sync reprovision intent contents"
-  if ! ln "$REPROVISION_INTENT_TMP" "$REPROVISION_INTENT" 2>/dev/null; then
-    rm -f -- "$REPROVISION_INTENT_TMP"
-    fail "reprovision intent publication raced"
-  fi
-  durable_fsync_paths "$CONTROL_TASK_DIR" || fail "could not sync reprovision intent publication"
-  rm -f -- "$REPROVISION_INTENT_TMP"
-
-  REPROVISION_STAGE_DIR="$(mktemp -d "$CONTROL_TASK_DIR/.reprovision-stage.XXXXXX")" || fail "cannot stage reprovision authority"
-  REPROVISION_WORKER_STAGE_DIR="$(mktemp -d "$TASK_PHYS/.reprovision-stage.XXXXXX")" || fail "cannot stage worker authority"
-  REPROVISION_BACKUP_DIR="$(mktemp -d "$CONTROL_TASK_DIR/.reprovision-backup.XXXXXX")" || fail "cannot stage authority backup"
-  printf '%s\t%s\t%s\t%s\n' "$WORKTREE_PHYS" "$BRANCH" "$PARENT_TIP" "$REPO_PHYS" > "$REPROVISION_STAGE_DIR/worktrees.txt"
-  cp "$REPROVISION_STAGE_DIR/worktrees.txt" "$REPROVISION_WORKER_STAGE_DIR/worktrees.txt"
-  printf '%s\n' "$NEXT_GENERATION" > "$REPROVISION_STAGE_DIR/generation"
-  cp "$REPROVISION_STAGE_DIR/generation" "$REPROVISION_WORKER_STAGE_DIR/generation"
-  printf '%s\n' "$WORKTREE_PHYS" > "$REPROVISION_STAGE_DIR/sandbox-root"
-  cp "$REPROVISION_STAGE_DIR/sandbox-root" "$REPROVISION_WORKER_STAGE_DIR/sandbox-root"
-  printf 'ready\n' > "$REPROVISION_STAGE_DIR/state"
-  cp "$REPROVISION_STAGE_DIR/state" "$REPROVISION_WORKER_STAGE_DIR/state"
-  chmod 0600 "$REPROVISION_STAGE_DIR"/* "$REPROVISION_WORKER_STAGE_DIR"/*
-  cp "$CONTROL_MANIFEST" "$REPROVISION_BACKUP_DIR/control-worktrees.txt"
-  cp "$WORKER_MANIFEST" "$REPROVISION_BACKUP_DIR/worker-worktrees.txt"
-  cp "$CONTROL_GENERATION" "$REPROVISION_BACKUP_DIR/control-generation"
-  cp "$WORKER_GENERATION" "$REPROVISION_BACKUP_DIR/worker-generation"
-  cp "$CONTROL_SANDBOX" "$REPROVISION_BACKUP_DIR/control-sandbox-root"
-  cp "$WORKER_SANDBOX" "$REPROVISION_BACKUP_DIR/worker-sandbox-root"
-  cp "$CONTROL_STATE" "$REPROVISION_BACKUP_DIR/control-state"
-  cp "$WORKER_STATE" "$REPROVISION_BACKUP_DIR/worker-state"
-  chmod 0600 "$REPROVISION_BACKUP_DIR"/*
-  ORC_REPROVISION_FSYNC_PHASE=authority durable_fsync_paths \
-    "$REPROVISION_STAGE_DIR"/* "$REPROVISION_WORKER_STAGE_DIR"/* \
-    "$REPROVISION_BACKUP_DIR"/* "$REPROVISION_STAGE_DIR" \
-    "$REPROVISION_WORKER_STAGE_DIR" "$REPROVISION_BACKUP_DIR" || \
-    fail "could not sync reprovision staging and backups"
-
-  if ! git -C "$REPO_PHYS" worktree add -q -b "$BRANCH" "$WORKTREE_PHYS" "$PARENT_TIP"; then
-    rm -f -- "$REPROVISION_INTENT"
-    rm -rf -- "$REPROVISION_STAGE_DIR" "$REPROVISION_WORKER_STAGE_DIR" "$REPROVISION_BACKUP_DIR"
-    fail "reprovision could not create the exact child worktree"
-  fi
-  if ! guarded_replace_batch \
-      "$REPROVISION_STAGE_DIR/worktrees.txt" "$CONTROL_MANIFEST" \
-      "$REPROVISION_WORKER_STAGE_DIR/worktrees.txt" "$WORKER_MANIFEST" \
-      "$REPROVISION_STAGE_DIR/generation" "$CONTROL_GENERATION" \
-      "$REPROVISION_WORKER_STAGE_DIR/generation" "$WORKER_GENERATION" \
-      "$REPROVISION_STAGE_DIR/sandbox-root" "$CONTROL_SANDBOX" \
-      "$REPROVISION_WORKER_STAGE_DIR/sandbox-root" "$WORKER_SANDBOX" \
-      "$REPROVISION_STAGE_DIR/state" "$CONTROL_STATE" \
-      "$REPROVISION_WORKER_STAGE_DIR/state" "$WORKER_STATE"; then
-    RESTORE_SUCCEEDED=0
-    if ORC_REPROVISION_RESTORE=1 guarded_replace_batch \
-      "$REPROVISION_BACKUP_DIR/control-worktrees.txt" "$CONTROL_MANIFEST" \
-      "$REPROVISION_BACKUP_DIR/worker-worktrees.txt" "$WORKER_MANIFEST" \
-      "$REPROVISION_BACKUP_DIR/control-generation" "$CONTROL_GENERATION" \
-      "$REPROVISION_BACKUP_DIR/worker-generation" "$WORKER_GENERATION" \
-      "$REPROVISION_BACKUP_DIR/control-sandbox-root" "$CONTROL_SANDBOX" \
-      "$REPROVISION_BACKUP_DIR/worker-sandbox-root" "$WORKER_SANDBOX" \
-      "$REPROVISION_BACKUP_DIR/control-state" "$CONTROL_STATE" \
-      "$REPROVISION_BACKUP_DIR/worker-state" "$WORKER_STATE" >/dev/null 2>&1; then
-      RESTORE_SUCCEEDED=1
-    fi
-    if [[ "$RESTORE_SUCCEEDED" -eq 1 ]]; then
-      if [[ -d "$WORKTREE_PHYS" && -z "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all 2>/dev/null || true)" && \
-        "$(git -C "$WORKTREE_PHYS" rev-parse HEAD 2>/dev/null || true)" == "$PARENT_TIP" ]]; then
-        git -C "$REPO_PHYS" worktree remove --force "$WORKTREE_PHYS" >/dev/null 2>&1 || true
-        git -C "$REPO_PHYS" update-ref -d "refs/heads/$BRANCH" "$PARENT_TIP" >/dev/null 2>&1 || true
-      fi
-      rm -f -- "$REPROVISION_INTENT"
-      rm -rf -- "$REPROVISION_STAGE_DIR" "$REPROVISION_WORKER_STAGE_DIR" "$REPROVISION_BACKUP_DIR"
-      fail "reprovision authority publication failed and was rolled back"
-    fi
-    fail "reprovision authority publication and rollback were incomplete; durable recovery evidence preserved"
-  fi
-  publish_reprovision_completion "$REPROVISION_COMPLETION" "$CURRENT_GENERATION" \
-    "$NEXT_GENERATION" "$OLD_BASE" "$PARENT_TIP" || \
-    fail "could not publish reprovision completion receipt"
-  rm -f -- "$REPROVISION_INTENT"
-  durable_fsync_paths "$CONTROL_TASK_DIR" || fail "could not sync reprovision completion acknowledgement"
-  if [[ "${ORC_REPROVISION_TEST_FAIL_AFTER_INTENT_REMOVAL_NORMAL:-}" == 1 ]]; then
-    fail "injected interruption after normal reprovision intent removal"
-  fi
-  rm -rf -- "$REPROVISION_STAGE_DIR" "$REPROVISION_WORKER_STAGE_DIR" "$REPROVISION_BACKUP_DIR"
-  durable_fsync_paths "$CONTROL_TASK_DIR" "$TASK_PHYS" || fail "could not sync reprovision artifact cleanup"
-  release_lock || fail "could not release coordinator mutation lock"
-  trap - EXIT HUP INT TERM
-  echo "reprovisioned $BRANCH generation $NEXT_GENERATION at $PARENT_TIP in $WORKTREE_PHYS"
-  exit 0
-fi
 
 if [[ "$MODE" == adopt ]]; then
   ADOPT_REGISTRATIONS="$(git -C "$REPO_PHYS" worktree list --porcelain | grep -Fxc "worktree $WORKTREE_PHYS" || true)"
@@ -1420,20 +760,6 @@ if [[ "$MODE" == adopt ]]; then
   [[ -z "$(git -C "$WORKTREE_PHYS" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" ]] || fail "native child worktree must be detached before adoption"
   [[ "$(git -C "$WORKTREE_PHYS" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)" == "$PARENT_TIP" ]] || fail "native child worktree is not at the exact parent tip"
   [[ -z "$(git -C "$WORKTREE_PHYS" status --porcelain --untracked-files=all)" ]] || fail "native child worktree is dirty before adoption"
-  python3 - "$WORKER_ROOT_RECEIPT" "$WRITABLE_ROOT_TOKEN" <<'PY' || fail "native task did not prove the exact writable task-state root"
-import os
-import stat
-import sys
-
-path, token = sys.argv[1:]
-metadata = os.lstat(path)
-if not stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
-    raise SystemExit(1)
-with open(path, "rb") as handle:
-    data = handle.read()
-if data != (token + "\n").encode("utf-8"):
-    raise SystemExit(1)
-PY
 fi
 
 [[ ! -e "$CONTROL_MANIFEST" ]] || fail "task already has a coordinator manifest: $TASK_ID"
@@ -1443,9 +769,10 @@ for NEW_AUTHORITY_PATH in "$CONTROL_GENERATION" "$WORKER_GENERATION" "$CONTROL_S
   [[ ! -e "$NEW_AUTHORITY_PATH" && ! -L "$NEW_AUTHORITY_PATH" ]] || fail "task already has retained authority: $NEW_AUTHORITY_PATH"
 done
 if [[ "$MODE" == adopt ]]; then
-  for NEW_ADOPTION_AUTHORITY in "$CONTROL_THREAD" "$WORKER_THREAD" "$TASK_WINDOW_STATE" "$CONTROL_ROOT_RECEIPT"; do
+  for NEW_ADOPTION_AUTHORITY in "$CONTROL_THREAD" "$WORKER_THREAD" "$TASK_WINDOW_STATE" "$CONTROL_OUTCOME_NONCE"; do
     [[ ! -e "$NEW_ADOPTION_AUTHORITY" && ! -L "$NEW_ADOPTION_AUTHORITY" ]] || fail "task already has retained adoption authority: $NEW_ADOPTION_AUTHORITY"
   done
+  [[ ! -e "$WORKER_OUTCOME_NONCE" && ! -L "$WORKER_OUTCOME_NONCE" ]] || fail "worker task directory must not contain outcome nonce authority"
 fi
 git -C "$REPO" show-ref --verify --quiet "refs/heads/$BRANCH" && fail "child branch already exists: $BRANCH"
 
@@ -1629,10 +956,16 @@ publish_new_authority "$WORKER_SANDBOX" "$WORKTREE_PHYS" || fail "could not publ
 publish_new_authority "$CONTROL_STATE" ready || fail "could not publish coordinator task state"
 publish_new_authority "$WORKER_STATE" ready || fail "could not publish worker task state"
 if [[ "$MODE" == adopt ]]; then
+  OUTCOME_NONCE="$(python3 - <<'PY'
+import secrets
+print(secrets.token_hex(32))
+PY
+)" || fail "could not generate native task outcome nonce"
+  [[ "$OUTCOME_NONCE" =~ ^[0-9a-f]{64}$ ]] || fail "generated native task outcome nonce is invalid"
   publish_new_authority "$CONTROL_THREAD" "$THREAD_ID" || fail "could not publish coordinator native thread authority"
   publish_new_authority "$WORKER_THREAD" "$THREAD_ID" || fail "could not publish worker native thread authority"
   publish_new_authority "$TASK_WINDOW_STATE" unarchived || fail "could not publish native task window authority"
-  publish_new_authority "$CONTROL_ROOT_RECEIPT" "$WRITABLE_ROOT_TOKEN" || fail "could not publish native writable-root authority"
+  publish_new_authority "$CONTROL_OUTCOME_NONCE" "$OUTCOME_NONCE" || fail "could not publish native task outcome nonce"
 fi
 WORKTREE_CREATE_INTENT=1
 if [[ "$MODE" == adopt && "${ORC_TASK_WORKTREE_TEST_FAIL_BEFORE_ADOPT:-}" == "1" ]]; then

@@ -131,9 +131,10 @@ class AppServer:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="operation", required=True)
-    for operation in ("inspect", "archive", "unarchive", "stop"):
+    for operation in ("inspect", "outcome", "archive", "unarchive", "stop"):
         lifecycle = subparsers.add_parser(operation)
         lifecycle.add_argument("--thread-id", required=True)
+    subparsers.choices["outcome"].add_argument("--turn-id", required=True)
     subparsers.choices["stop"].add_argument("--turn-id", required=True)
     return parser
 
@@ -145,13 +146,13 @@ def main() -> int:
         server.request(
             "initialize",
             {
-                "clientInfo": {"name": "orchestrator", "title": "Orchestrator", "version": "0.5.3"},
+                "clientInfo": {"name": "orchestrator", "title": "Orchestrator", "version": "0.5.4"},
                 "capabilities": {"experimentalApi": True},
             },
         )
         server.notify("initialized")
 
-        if args.operation == "inspect":
+        if args.operation in ("inspect", "outcome"):
             cursor: Optional[str] = None
             seen_cursors = set()
             found = False
@@ -183,19 +184,69 @@ def main() -> int:
             if not found:
                 raise ProtocolError("thread/list did not contain the exact thread id")
             read = server.request(
-                "thread/read", {"threadId": args.thread_id, "includeTurns": False}
+                "thread/read",
+                {
+                    "threadId": args.thread_id,
+                    "includeTurns": args.operation == "outcome",
+                },
             )
             thread = read.get("thread")
             if not isinstance(thread, dict) or thread.get("id") != args.thread_id:
                 raise ProtocolError("thread/read returned a different thread")
+            if args.operation == "inspect":
+                emit(
+                    {
+                        "type": "thread.inspected",
+                        "thread_id": args.thread_id,
+                        "title": thread.get("name") or thread.get("title"),
+                        "cwd": thread.get("cwd"),
+                        "status": thread.get("status"),
+                        "project_id": thread.get("projectId"),
+                    }
+                )
+                return 0
+            status = thread.get("status")
+            status_type = status.get("type") if isinstance(status, dict) else status
+            if status_type != "idle":
+                raise ProtocolError("thread is not idle at the requested outcome wake")
+            turns = thread.get("turns")
+            if not isinstance(turns, list) or not turns:
+                raise ProtocolError("thread/read returned no terminal task outcome")
+            latest = turns[-1]
+            if (
+                not isinstance(latest, dict)
+                or latest.get("id") != args.turn_id
+                or latest.get("status") != "completed"
+                or not isinstance(latest.get("items"), list)
+            ):
+                raise ProtocolError("requested outcome is not the exact latest completed turn")
+            candidates: List[Dict[str, Any]] = []
+            for item in latest["items"]:
+                if not isinstance(item, dict) or item.get("type") not in (
+                    "agentMessage",
+                    "agent_message",
+                ):
+                    continue
+                value = item.get("text")
+                prefix = "ORC_TASK_OUTCOME_V1\n"
+                if not isinstance(value, str) or not value.startswith(prefix):
+                    continue
+                try:
+                    payload = json.loads(value[len(prefix) :])
+                except json.JSONDecodeError as exc:
+                    raise ProtocolError("terminal task outcome is invalid JSON") from exc
+                if not isinstance(payload, dict):
+                    raise ProtocolError("terminal task outcome is not an object")
+                candidates.append(payload)
+            if len(candidates) != 1:
+                raise ProtocolError("thread/read returned no exact terminal task outcome")
+            selected_outcome = candidates[0]
             emit(
                 {
-                    "type": "thread.inspected",
+                    "type": "task.outcome",
                     "thread_id": args.thread_id,
-                    "title": thread.get("name") or thread.get("title"),
-                    "cwd": thread.get("cwd"),
-                    "status": thread.get("status"),
-                    "project_id": thread.get("projectId"),
+                    "turn_id": args.turn_id,
+                    "outcome": selected_outcome,
                 }
             )
             return 0

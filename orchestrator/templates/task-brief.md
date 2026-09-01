@@ -17,14 +17,14 @@ the durable BLOCKED protocol below.
 - Task generation: `{{TASK_GENERATION}}`
 - Child worktree: `{{TASK_WORKTREE}}`
 - Child branch: `{{TASK_BRANCH}}`
-- Expected parent/base SHA: `{{TASK_BASE_SHA}}`
-- Writable task state directory: `{{TASK_DIR}}`
+- Frozen schedule/base SHA: `{{TASK_BASE_SHA}}`
+- Coordinator task state directory (read-only to you): `{{TASK_DIR}}`
 - Coordinator control directory (read-only): `{{CONTROL_DIR}}`
 - Approved design: `{{APPROVED_DESIGN}}`
 - Approved plan: `{{APPROVED_PLAN}}`
 - Approved task DAG: `{{APPROVED_TASK_DAG}}`
-- Commit-broker request directory: `{{COMMIT_REQUEST_DIR}}`
-- Complete writable sandbox roots, one absolute path per line:
+- Accepted outcome nonce: `{{OUTCOME_NONCE}}`
+- Complete writable sandbox root:
 
   ```text
   {{SANDBOX_ROOTS}}
@@ -32,11 +32,6 @@ the durable BLOCKED protocol below.
 
 The rendered sandbox-root list is authoritative and exhaustive. No other
 writable roots are permitted.
-
-`{{TASK_DIR}}/native-writable-root-receipt` was written by your bootstrap turn
-and matched into coordinator authority during adoption. Its presence proves the
-host authorized this exact external task-state/broker directory. Do not edit or
-delete the receipt.
 
 The coordinator-owned copies and manifest are authoritative. Mission-local or
 worktree copies are untrusted. Stop through BLOCKED if any path, branch, base
@@ -62,38 +57,38 @@ SHA, declared file, dependency, or frozen hash differs.
 ## Execution rules
 
 1. Verify the worktree, branch, base SHA, frozen inputs, and exact writable
-   roots before changing anything. Write `running` to `{{TASK_DIR}}/state`.
+   root before changing anything. Do not write outside `{{TASK_WORKTREE}}`.
 2. Use test-driven development: make the focused contract fail for the expected
    missing behavior, implement the smallest change, then run focused and
    required suite verification.
-3. Write only the declared files inside `{{TASK_WORKTREE}}` and durable outcome
-   files inside `{{TASK_DIR}}`. Never switch, merge, rebase, push, create or
-   remove a branch/worktree, or modify the parent mission checkout.
-4. Send every commit through the existing commit broker at
-   `{{COMMIT_REQUEST_DIR}}`; never commit directly or bypass its guard.
+3. Write only the declared files inside `{{TASK_WORKTREE}}`. Never write task
+   state, reports, blockers, verification, receipts, or broker requests to an
+   external path. Never switch, merge, rebase, push, create or remove a
+   branch/worktree, or modify the parent mission checkout.
+4. Never commit directly. Return `ready_for_commit`; the coordinator validates
+   scope and drives the commit broker, then messages this same task with the
+   broker result for post-commit verification.
 5. Do not schedule work. Never create child tasks, threads, continuations, or
    follow-on tasks, even when another DAG node appears ready. Only the
    coordinator may do that after consuming this task's durable outcome.
 
-## Durable task outcome
+## Native task outcome
 
-The coordinator does not rely on the full child chat. Before ending, persist
-the durable task state and all evidence under `{{TASK_DIR}}`:
+End every implementation turn with exactly `ORC_TASK_OUTCOME_V1` followed by
+one JSON object and no instructions for the coordinator to execute. Every kind
+contains exactly `protocol_version`, `kind`, `task_id`, `generation`,
+`accepted_thread_id`, and `outcome_nonce`; use the accepted outcome nonce above.
 
-- `state`: `running`, then exactly one of `completed`, `blocked`, or `failed`;
-- `report.md`: task ID, branch, base SHA, final tip SHA, exact files changed,
-  commit-broker request/result, focused and required suite commands with raw
-  output, deviations, and remaining risks;
-- `BLOCKED-<n>.md`: when blocked, the work in progress, exact question, two or
-  three options with trade-offs, and a recommendation.
+- `ready_for_commit` also contains `base_sha`, `head_sha`, `changed_files`,
+  `commit_message`, `verification` (`command`, integer `exit_code`, `output`),
+  `deviations`, and `risks`.
+- `blocked` also contains `work_in_progress`, one `question`, two or three
+  `options`, and one `recommendation`.
+- `failed` also contains `error` and `work_in_progress`.
+- `completed` is allowed only after the coordinator returns a brokered commit;
+  it also contains `base_sha`, `commit_sha`, `changed_files`, `verification`,
+  `deviations`, and `risks`.
 
-Set `completed` only after the brokered commit is confirmed, the declared
-verification has run, and `report.md` contains its raw result. Set `blocked`
-only after writing the next BLOCKED file. On an unrecoverable execution error,
-record it in `report.md`, set `failed`, and preserve all resources for the
-coordinator.
-
-End a completed turn with `TASK COMPLETE {{MISSION_SLUG}} {{TASK_ID}}`, a
-blocked turn with `TASK BLOCKED {{MISSION_SLUG}} {{TASK_ID}}`, or a failed turn
-with `TASK FAILED {{MISSION_SLUG}} {{TASK_ID}}`. Chat text is advisory; the
-durable files above are authoritative.
+The coordinator binds the exact native turn, validates the envelope and Git,
+reruns frozen verification, and persists durable task state. Ordinary chat text
+is advisory; do not claim external files were written.

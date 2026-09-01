@@ -74,10 +74,10 @@ check "mission records cross-device URLs" contains "$MISSION" \
 check "README documents Sites-first HTML" compact "$README" \
   'Every user-facing HTML handoff uses an owner-only OpenAI Sites HTTPS URL'
 
-check "Codex release is 0.5.3" bash -c \
-  'version=$(jq -r .version "$1"); [[ "${version%%+*}" = 0.5.3 ]]' _ "$CODEX_MANIFEST"
-check "Claude release is 0.5.3" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.5.3 ]]' _ "$CLAUDE_MANIFEST"
+check "Codex release is 0.5.4" bash -c \
+  'version=$(jq -r .version "$1"); [[ "${version%%+*}" = 0.5.4 ]]' _ "$CODEX_MANIFEST"
+check "Claude release is 0.5.4" bash -c \
+  '[[ "$(jq -r .version "$1")" = 0.5.4 ]]' _ "$CLAUDE_MANIFEST"
 
 echo "  html-sites-delivery-contract: $OK/$N"
 [[ "$OK" -eq "$N" ]]

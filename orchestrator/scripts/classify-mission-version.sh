@@ -308,7 +308,7 @@ def classify(mission_path, control_path):
         valid_states = {
             "pending", "running", "planned", "executed", "rework",
             "blocked", "review", "accepted", "failed", "cleanup_pending",
-            "collected", "complete", "completed", "done",
+            "collected",
         }
         if not has_request or mission is None or state is None:
             reject("native mission authority is incomplete")
@@ -395,14 +395,14 @@ def classify(mission_path, control_path):
                     reject("Codex planning health authority is invalid JSON")
                 expected_health_keys = {
                     "created", "visible", "title_verified", "first_turn_exists",
-                    "startup_evidence", "settings_recorded", "writable_root_verified",
+                    "startup_evidence", "settings_recorded", "worktree_verified",
                     "status", "thread_id", "model", "effort", "project_id", "cwd",
                 }
                 if not isinstance(health, dict) or set(health) != expected_health_keys:
                     reject("Codex planning health authority has an invalid schema")
                 for key in (
                     "created", "visible", "title_verified", "first_turn_exists",
-                    "startup_evidence", "settings_recorded", "writable_root_verified",
+                    "startup_evidence", "settings_recorded", "worktree_verified",
                 ):
                     if health[key] is not True:
                         reject("Codex planning health check is incomplete")

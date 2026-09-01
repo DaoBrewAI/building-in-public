@@ -7,8 +7,12 @@ continuation, provisional continuation health checks, or coordinator promotion.
 
 Only an exact authorized coordinator session with an eligible nonterminal
 mission may publish continuation state. Completed, collected, failed, unrelated,
-and accepted child sessions emit nothing. Flush every mission/task state,
-registry, decision, BLOCKED answer, report, and carryover before recording.
+and accepted child sessions emit nothing. An `accepted` mission remains eligible
+through `cleanup_pending`; it becomes terminal only when
+`parent-cleanup-state=collected` and every child is both `collected` and
+`task-window-state=archived`, with no window archival pending. Flush every
+mission/task state, registry, decision, BLOCKED answer, report, and carryover
+before recording.
 
 ## Immutable request
 
@@ -16,6 +20,11 @@ The hook writes request-scoped carryover under coordinator control;
 `CARRYOVER.md` is only a human pointer. The request binds physical hub and
 mission/task paths, coordinator authority, every relevant state/generation and
 accepted child ID, exact bytes/hashes/device/inode/size, and carryover epoch.
+It also binds sorted allowlisted file-record bundles for planning-stage
+authority/import intent/receipts and for active broker, integration,
+task-outcome, cleanup, task-window, and task-state-dir crash evidence. The
+carryover prints a compact `active-intent` summary so the next coordinator can
+resume an incomplete transaction before scheduling new work.
 The request ID is the SHA-256 of that canonical binding.
 
 Use private modes, no-follow component traversal, bounded same-fd reads,

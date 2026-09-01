@@ -19,9 +19,10 @@ authority, scheduling, integration, mediation, cleanup, and continuation.
   with app-native task APIs, then adopts that task's native worktree through
   `scripts/task-worktree.sh`. Never use hidden `codex exec` sessions or App
   Server execution.
-- The selected planning/review session is read-only on product worktrees. Codex
-  implementation children write only their declared task files and task-state
-  directory. Commits pass through `scripts/commit-broker.sh`.
+- The selected planning/review session is read-only on tracked product files.
+  Codex implementation children write only their declared product files inside
+  their native worktree. The coordinator owns external task state and broker
+  authority; commits pass through `scripts/commit-broker.sh`.
 - Branches are `orc/<mission>` and `orc-task/<mission>/<task-id>`. Independent
   missions may share a repository because each has isolated worktrees.
 
@@ -35,7 +36,7 @@ Read only the reference needed for the current stage, completely, before acting:
   read [references/planning-and-review.md](references/planning-and-review.md).
 - Before presenting any HTML for preview, confirmation, approval, or status,
   read [references/html-sites-delivery.md](references/html-sites-delivery.md).
-- Before child/parent collection, task-window archival, rework reprovision, or a
+- Before child/parent collection, task-window archival, retained rework reopen, or a
   cleanup retry, read
   [references/cleanup-and-rework.md](references/cleanup-and-rework.md).
 - At `PreCompact`, compact `SessionStart`, manual continuation, or coordinator
@@ -51,8 +52,10 @@ Resolve `PLUGIN_DIR` by moving up two directories from this file. Require:
 - `scripts/spawn-worker.sh`, `provision-preflight.sh`, `pipeline-gate.sh`,
   `worker-guard.sh`, and `install-worker-settings.sh`;
 - `scripts/validate-task-dag.sh`, `task-worktree.sh`, `integrate-task.sh`,
-  `commit-broker.sh`, `orchestrator-gc.sh`, `classify-mission-version.sh`, and
-  `codex-task-client.py`;
+  `commit-broker.sh`, `orchestrator-gc.sh`, `classify-mission-version.sh`,
+  `verify-approved-authority.py`, `coordinator_lifecycle_lock.py`, and
+  `codex-task-client.py`, `native-task-health.py`, `task-outcome.py`, and
+  `planning-output.py`;
 - `skills/orchestrating/references/planning-and-review.md`, `task-execution.md`,
   `html-sites-delivery.md`, `cleanup-and-rework.md`, and `continuation.md`;
 - `templates/MISSION.md`, `brief-codex.md`, `brief-exec.md`, `task-brief.md`,
@@ -177,6 +180,14 @@ session invokes `10x-engineer:brainstorming` and may return `blocked` with
 same accepted session. It then writes `design.md`, `plan.md`,
 `plan-review.html`, and `task-dag.json`, sets `planned`, and exits.
 
+For `codex-ultra`, those files first exist only in its native staging directory;
+before each planning/review turn run `planning-output.py begin` with the explicit
+current mission state and send its returned nonce as turn authority. When the
+stage exits, run `planning-output.py import` and accept the derived mission state
+before any human gate. Retry that same import after a post-publication cleanup
+interruption; never issue a new nonce for recovery. Never treat the native
+task's chat as the artifact.
+
 After the planning stage exits, read `html-sites-delivery.md` and publish the
 current plan review through OpenAI Sites before entering the founder go gate.
 
@@ -206,10 +217,9 @@ On go:
   do not duplicate healthy work.
 - `planned`: enter the founder go gate.
 - `executed`: verify frozen authority, generate coordinator-owned review diffs,
-  read `cleanup-and-rework.md`, batch-collect every integrated child, archive
-  every child window, then write `running`, read `planning-and-review.md`, and
-  resume the same selected planning/review session for review. Do not collect an
-  individual child earlier.
+  write `running`, read `planning-and-review.md`, and resume the same selected
+  planning/review session for review. Retain every integrated child worktree and
+  window until final review is resolved so rework returns to its original owner.
 - `rework`: read `cleanup-and-rework.md`; route every finding to its owning
   child task and reuse that task's accepted thread.
 - `blocked`: use mediation, persist `ANSWER-<n>.md` and the decision, then resume
@@ -245,7 +255,8 @@ a replacement task merely to mediate a question.
    `/status` Sites HTTPS URL as the primary result.
 5. Publish exact parent cleanup authority, resolved review, decisions, and
    verification. Write mission state/phase `accepted`, then read the cleanup
-   reference and run mission-scoped GC. Never run hub-wide destructive cleanup.
+   reference, batch-archive every accepted child, and run mission-scoped GC.
+   Never run hub-wide destructive cleanup.
 6. Archive the mission directory only after `parent-cleanup-state=collected`.
    Otherwise preserve it for exact retry. Regenerate `board.html` on every state
    transition. If the board is presented, deploy the current `/board` route
@@ -264,7 +275,10 @@ a context percentage or duplicate active child work.
 - Only the coordinator writes shared `DECISIONS.md`, `MEMORY.md`, and board.
 - Decision/memory IDs are host-prefixed and never renumbered.
 - Never bypass sandbox, guard, pipeline gate, lifecycle locks, or commit broker.
-- Never read or steer a healthy child mid-run; consume durable outcomes at wake.
+- Every coordinator mutation acquires the mission's shared lifecycle lock
+  before any helper-specific lock.
+- Never read or steer a healthy child mid-run; consume only a bound native
+  outcome at wake and persist it through `task-outcome.py`.
 - Never integrate completion without exact tip, ancestry, clean-worktree, and
   verification evidence.
 - Never delete target/default branches or resources outside exact authority.

@@ -8,6 +8,11 @@ MANIFEST="$ROOT/.codex-plugin/plugin.json"
 CLASSIFIER="$ROOT/scripts/classify-mission-version.sh"
 LIFECYCLE="$ROOT/scripts/task-worktree.sh"
 SPAWN="$ROOT/scripts/spawn-worker.sh"
+TASK_OUTCOME="$ROOT/scripts/task-outcome.py"
+PLANNING_OUTPUT="$ROOT/scripts/planning-output.py"
+NATIVE_HEALTH="$ROOT/scripts/native-task-health.py"
+APPROVAL_HELPER="$ROOT/scripts/verify-approved-authority.py"
+LIFECYCLE_LOCK="$ROOT/scripts/coordinator_lifecycle_lock.py"
 
 N=0
 OK=0
@@ -22,8 +27,8 @@ check() {
   fi
 }
 
-check "manifest declares native-only cache-busted 0.5.3" bash -c \
-  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.3\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$MANIFEST"
+check "manifest declares native-only cache-busted 0.5.4" bash -c \
+  '[[ "$(jq -r .version "$1")" =~ ^0\.5\.4\+codex\.[A-Za-z0-9._-]+$ ]]' _ "$MANIFEST"
 
 for removed in \
   "$ROOT/claude-skills" \
@@ -49,7 +54,7 @@ check "Codex marketplace still advertises Orchestrator" bash -c \
   'jq -e '\''.plugins[] | select(.name == "orchestrator")'\'' "$1" >/dev/null' \
   _ "$REPO_ROOT/.agents/plugins/marketplace.json"
 check "Claude manifest shares the same native skill tree" bash -c \
-  '[[ "$(jq -r .version "$1")" = 0.5.3 && "$(jq -r '\''.skills | join(" ")'\'' "$1")" = "./skills/" ]]' \
+  '[[ "$(jq -r .version "$1")" = 0.5.4 && "$(jq -r '\''.skills | join(" ")'\'' "$1")" = "./skills/" ]]' \
   _ "$ROOT/.claude-plugin/plugin.json"
 check "Claude slash command routes to the shared native skill" grep -Fq \
   'orchestrator:orchestrating' "$ROOT/commands/orchestrate.md"
@@ -75,6 +80,11 @@ check "task lifecycle has no legacy create mode" bash -c \
 check "Fable launcher has no hidden Codex exec stage" bash -c \
   '! grep -Eqi '\''--stage exec|codex_thread_id|codex exec|commit-broker'\'' "$1"' \
   _ "$SPAWN"
+check "coordinator task outcome helper is packaged" test -x "$TASK_OUTCOME"
+check "shared frozen approval verifier is packaged" test -x "$APPROVAL_HELPER"
+check "shared coordinator lifecycle lock is packaged" test -x "$LIFECYCLE_LOCK"
+check "coordinator planning output importer is packaged" test -x "$PLANNING_OUTPUT"
+check "coordinator native task health helper is packaged" test -x "$NATIVE_HEALTH"
 
 for ref in planning-and-review.md task-execution.md cleanup-and-rework.md continuation.md; do
   check "required progressive-disclosure reference exists: $ref" \
