@@ -24,7 +24,7 @@ Each guide, skill, or plugin lives in its own folder with a short README. Codex 
 | 🔁 &nbsp;[**codex-loop-engineering**](./codex-loop-engineering) | Codex skill and installer for repo-local goal/tracker/constraints/handoff loops, checkpoint verification, and verified auto-chain continuation sessions. |
 | 🎨 &nbsp;[**design-language-translator**](./design-language-translator) | Translates plain-language design intent (EN / 中文) into professional designer vocabulary. With an image attached, also runs an independent design audit and flags 1–3 high-impact issues you didn't mention. |
 | ☯️ &nbsp;[**bazi-reader**](./bazi-reader) | Generates a personalized Bazi (八字) reading from a birth datetime. Useful for reading the energy around a specific date — e.g. the Meta 5/20 layoff window — or as a reference layer for long-horizon planning like fundraising and key launches. |
-
+| 📬 &nbsp;[**inbox-baseline-audit**](./inbox-baseline-audit) | First-meeting skill for AI delivery teams: connect a customer's last 30/60 days of Gmail + Drive, produce three verifiable fact cards + a workflow catch + a baseline draft, and run a three-act demo that ends with a signed baseline — not applause. Validated on a real inbox before publishing. |
 <!-- Add new skills above this line. Format: | emoji [**name**](./folder) | one-line description | -->
 
 ---
