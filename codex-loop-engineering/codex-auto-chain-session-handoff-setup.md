@@ -15,7 +15,8 @@ PROJECT_NAME="my-project" LOOP_DIR="docs/loop/my-experiment" \
 The default writes goal/tracker/constraints/handoff. `DAG_TEMPLATE=true` also
 copies an optional `execution.json` starting in plan mode. Existing files are
 preserved unless `OVERWRITE=true` is explicitly supplied; do not use overwrite
-to refresh an active loop. The installer never grants execution authority.
+to refresh an active loop. Auto-chain defaults false and must be enabled from the
+current loop authorization. The installer never grants execution authority.
 
 Fill in the actual outcome, non-goals, input/source versions, acceptance, write
 ownership, resources and budget. Set the authorized phase set only from the
@@ -42,6 +43,9 @@ evidence and launch-policy verification.
    supervisor's user-selected reasoning without spreading it to workers.
 4. Keep a linear tracker if it fits. For a DAG, declare dependencies, write roots,
    exclusive resources and acceptance before launching independent workers.
+   Add `execution_authority_ref` when execute mode is authorized. Every node needs
+   `owner`, `outcome`, `acceptance_criteria`, `verifier`, positive `max_attempts`
+   and explicit `read_only`; no write paths means `read_only: true`.
 5. Reconcile active/provisional task IDs before creating anything. Do not replace
    a still-running worker just because a local transcript is stale.
 6. Update handoff, run the checker and verify the actual next launch. Do not

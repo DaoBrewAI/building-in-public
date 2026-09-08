@@ -63,6 +63,8 @@ def inspect_manifest(data):
         errors.append("mode must be plan, review or execute")
     if type(data.get("execution_authorized")) is not bool:
         errors.append("execution_authorized must be explicit boolean")
+    elif mode == "execute" and data["execution_authorized"] and not _reference(data.get("execution_authority_ref")):
+        errors.append("authorized execution requires a current user authority reference")
     if type(limit) is not int or limit < 1:
         errors.append("max_parallelism must be a positive integer")
     if type(data.get("fast_authorized")) is not bool:
@@ -82,6 +84,16 @@ def inspect_manifest(data):
             errors.append(f"duplicate node: {key}")
             continue
         nodes[key] = item
+        for field in ("owner", "outcome", "verifier"):
+            if not _reference(item.get(field)):
+                errors.append(f"{key}: {field} must be a nonempty string")
+        criteria = item.get("acceptance_criteria")
+        if not _strings(criteria) or not criteria:
+            errors.append(f"{key}: acceptance_criteria must be a nonempty string list")
+        if type(item.get("max_attempts")) is not int or item["max_attempts"] < 1:
+            errors.append(f"{key}: max_attempts must be a positive integer")
+        if type(item.get("read_only")) is not bool:
+            errors.append(f"{key}: read_only must be explicit boolean")
         state = item.get("status")
         if not isinstance(state, str) or state not in STATES:
             errors.append(f"{key}: invalid status")
@@ -95,6 +107,10 @@ def inspect_manifest(data):
         if _strings(item.get("write_paths")):
             if not all(_path_valid(p) for p in item["write_paths"]):
                 errors.append(f"{key}: write_paths must be canonical repo-relative paths, without globs or escapes")
+            elif not item["write_paths"] and item.get("read_only") is not True:
+                errors.append(f"{key}: nodes without write_paths must declare read_only true")
+            elif item["write_paths"] and item.get("read_only") is True:
+                errors.append(f"{key}: read_only nodes cannot declare write_paths")
         if item.get("status") == "complete":
             if item.get("acceptance") != "passed" or not _strings(item.get("evidence")) or not item.get("evidence"):
                 errors.append(f"{key}: complete requires passed acceptance and evidence references")

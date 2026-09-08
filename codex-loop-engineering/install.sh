@@ -4,7 +4,7 @@ set -euo pipefail
 skill_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_NAME="${PROJECT_NAME:-$(basename "$PWD")}"
 LOOP_DIR="${LOOP_DIR:-docs/loop}"
-AUTO_CHAIN="${AUTO_CHAIN:-true}"
+AUTO_CHAIN="${AUTO_CHAIN:-false}"
 OVERWRITE="${OVERWRITE:-false}"
 DAG_TEMPLATE="${DAG_TEMPLATE:-false}"
 
@@ -20,7 +20,20 @@ from pathlib import Path
 import sys
 
 skill, project, loop, auto_chain, overwrite, dag = sys.argv[1:]
-target = Path(loop)
+raw_target = Path(loop)
+if not loop or loop != str(raw_target) or ".." in raw_target.parts:
+    raise SystemExit(f"LOOP_DIR must be a canonical path without escapes: {loop!r}")
+
+repo_root = Path.cwd().resolve(strict=True)
+target = raw_target if raw_target.is_absolute() else repo_root / raw_target
+resolved_target = target.resolve(strict=False)
+if resolved_target != target:
+    raise SystemExit(f"Refusing LOOP_DIR with symlink ancestry or a noncanonical target: {loop}")
+try:
+    target.relative_to(repo_root)
+except ValueError:
+    raise SystemExit(f"LOOP_DIR must stay inside the current repository: {loop}") from None
+
 names = ["goal.md", "tracker.md", "constraints.md", "handoff.md"]
 if dag == "true":
     names.append("execution.json")

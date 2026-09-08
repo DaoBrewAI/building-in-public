@@ -7,10 +7,12 @@ shape, not an authorized job. Linear loops do not need a manifest.
 
 ## One node, one outcome and owner
 
-Declare ID/phase/dependencies; base/worktree/input refs; repo-relative write files
-or directory roots; exclusive browser/port/state/account resources; session
-model/effort/tier; acceptance/verifier; attempts and approved budgets; lifecycle,
-launch reservation/runtime reference and evidence.
+Declare ID, owner, outcome and dependencies; base/worktree/input refs;
+acceptance criteria and verifier; positive `max_attempts`; repo-relative write
+files or directory roots; any exclusive browser/port/state/account resources;
+session model/effort/tier; lifecycle, launch reservation/runtime reference and
+evidence. Set `read_only: true` only when `write_paths` is empty. An empty
+`exclusive_resources` list is valid when the node has no exclusive resource.
 
 `max_parallelism` counts launching/running execution nodes; start with two.
 Disjoint files can still share a mutable runtime. Common frozen reads are fine;
@@ -83,6 +85,11 @@ especially when the installed skill is a symlink to an old checkout.
 
 - `schema_version`: `codex-loop-execution.v1`.
 - `mode`: plan/review/execute; `execution_authorized` and `fast_authorized`: booleans.
+- `execution_authority_ref`: current scoped user instruction; required when mode
+  is execute and execution is authorized.
+- Each node requires nonempty `owner`, `outcome`, `acceptance_criteria` and
+  `verifier`, positive `max_attempts`, and explicit `read_only`. A node without
+  write paths must be read-only; a read-only node cannot declare write paths.
 - `fast_authority_ref`: current scoped user instruction, verified by Supervisor.
 - `session`: model, reasoning_effort, service_tier (`default` normally; `priority`
   only for explicitly authorized Fast), fast_mode.
@@ -93,3 +100,6 @@ especially when the installed skill is a symlink to an old checkout.
 
 Rerun the checker after edits. It never changes files, starts a process, accesses
 credentials or fixes policy for you.
+
+Manifests created before this contract must add the fields above before they can
+be released. Four-Markdown linear loops remain readable without `execution.json`.

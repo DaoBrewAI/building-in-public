@@ -20,6 +20,9 @@ CHECKBOX_RE = re.compile(r"^\s*-\s+\[(?P<status>[ xX~!])\]\s+(?P<text>.+?)\s*$")
 KEY_LINE_RE = re.compile(
     r"(?i)(current checkpoint|current next action|next checkpoint|last checkpoint|auto_chain_next_session|created continuation thread|next checkpoint thread)\s*:?\s*(?P<value>.*)"
 )
+ACTIVE_METADATA_RE = re.compile(
+    r"^(mode|execution_authorized|auto_chain_next_session):\s*(?P<value>[^\n]+?)\s*$"
+)
 
 
 def read(path: Path) -> str:
@@ -41,6 +44,42 @@ def find_checkboxes(text: str) -> list[dict[str, str]]:
         if match:
             items.append({"status": match.group("status"), "text": match.group("text")})
     return items
+
+
+def active_preamble(text: str) -> str:
+    return re.split(r"(?m)^##\s", text, maxsplit=1)[0]
+
+
+def active_metadata(text: str) -> tuple[dict[str, str], set[str]]:
+    values: dict[str, str] = {}
+    conflicts: set[str] = set()
+    fence: str | None = None
+    for line in active_preamble(text).splitlines():
+        stripped = line.lstrip()
+        marker = "```" if stripped.startswith("```") else "~~~" if stripped.startswith("~~~") else None
+        if marker:
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        match = ACTIVE_METADATA_RE.fullmatch(line)
+        if not match:
+            continue
+        key = match.group(1)
+        value = match.group("value").strip().strip("\"'")
+        if key in values and values[key] != value:
+            conflicts.add(key)
+        else:
+            values[key] = value
+    return values, conflicts
+
+
+def active_auto_chain_enabled(handoff: str) -> bool:
+    metadata, conflicts = active_metadata(handoff)
+    return "auto_chain_next_session" not in conflicts and metadata.get("auto_chain_next_session", "").lower() == "true"
 
 
 def summarize(loop_dir: Path) -> dict:
@@ -73,7 +112,7 @@ def summarize(loop_dir: Path) -> dict:
         },
         "next_unchecked": unchecked[0]["text"] if unchecked else None,
         "blocked_items": [item["text"] for item in blocked],
-        "auto_chain_enabled": "auto_chain_next_session: true" in all_text.lower(),
+        "auto_chain_enabled": active_auto_chain_enabled(contents["handoff"]),
         "thread_ids": sorted(set(THREAD_ID_RE.findall(all_text))),
         "stale_markers": [
             line.strip()
@@ -87,9 +126,14 @@ def summarize(loop_dir: Path) -> dict:
         execution = result["execution"]
         for name in ("goal", "handoff"):
             # Only active preamble metadata, not historical sections/examples.
-            preamble = re.split(r"(?m)^##\s", contents[name], maxsplit=1)[0]
-            for key, raw in re.findall(r"(?m)^(mode|execution_authorized):\s*([^\n]+)$", preamble):
-                value = raw.strip().strip("\"'")
+            metadata, conflicts = active_metadata(contents[name])
+            for key in sorted(conflicts & {"mode", "execution_authorized"}):
+                execution["errors"].append(f"{name}.md has conflicting active {key} values")
+                execution["ok"] = False
+                execution["dispatchable"] = []
+            for key, value in metadata.items():
+                if key not in {"mode", "execution_authorized"} or key in conflicts:
+                    continue
                 expected = execution.get(key)
                 if key == "execution_authorized":
                     value = {"true": True, "false": False}.get(value.lower(), value)

@@ -10,7 +10,9 @@ evidence, `[!]` blocked. An execution finishing is not automatically acceptance.
 ## Dependencies and ownership
 
 Default: linear. For concurrent lanes, fill execution.json and declare each
-node's dependencies, write paths, exclusive resources and verifier before launch.
+node's outcome, owner, dependencies, acceptance/verifier, attempt limit, write
+paths and any exclusive resources before launch. A node with no write paths must
+declare `read_only: true`; an empty resource list is valid when nothing is exclusive.
 
 | Node | Depends on | Owner | Write paths/resources | Model/effort/tier | Acceptance/evidence |
 |---|---|---|---|---|---|

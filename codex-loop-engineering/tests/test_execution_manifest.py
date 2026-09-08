@@ -16,6 +16,12 @@ SPEC.loader.exec_module(DOCTOR)
 def node(key, deps=(), paths=(), resources=()):
     return {
         "id": key,
+        "owner": f"worker:{key}",
+        "outcome": f"Complete {key}",
+        "acceptance_criteria": [f"Observable evidence for {key}"],
+        "verifier": "Supervisor",
+        "max_attempts": 1,
+        "read_only": not paths,
         "status": "planned",
         "depends_on": list(deps),
         "write_paths": list(paths),
@@ -34,6 +40,7 @@ def manifest(nodes):
         "schema_version": "codex-loop-execution.v1",
         "mode": "execute",
         "execution_authorized": True,
+        "execution_authority_ref": "current-user-request",
         "max_parallelism": 2,
         "fast_authorized": False,
         "nodes": nodes,
@@ -77,6 +84,29 @@ class ExecutionManifestTests(unittest.TestCase):
             data = manifest([node("A")])
             data.update(mode=mode, execution_authorized=authorized)
             self.assertEqual(self.execution(data)["dispatchable"], [])
+
+    def test_authorized_execution_requires_current_authority_reference(self):
+        data = manifest([node("A")])
+        del data["execution_authority_ref"]
+        self.assertFalse(self.inspect(data)["ok"])
+
+    def test_dispatch_contract_fields_are_required(self):
+        for field in ("owner", "outcome", "acceptance_criteria", "verifier", "max_attempts", "read_only"):
+            a = node("A")
+            del a[field]
+            with self.subTest(field=field):
+                self.assertFalse(self.inspect(manifest([a]))["ok"])
+
+    def test_nodes_without_write_paths_must_be_explicitly_read_only(self):
+        a = node("A")
+        a["read_only"] = False
+        self.assertFalse(self.inspect(manifest([a]))["ok"])
+
+        writer = node("writer", paths=["src/writer.py"])
+        writer["read_only"] = True
+        self.assertFalse(self.inspect(manifest([writer]))["ok"])
+
+        self.assertTrue(self.inspect(manifest([node("reader")]))["ok"])
 
     def test_fast_requires_explicit_authority(self):
         for tier, fast in (("priority", False), ("default", True)):
@@ -162,6 +192,37 @@ class ExecutionManifestTests(unittest.TestCase):
             for name in ("goal", "tracker", "constraints", "handoff"):
                 (root / f"{name}.md").write_text(f"# {name}\n")
             self.assertTrue(DOCTOR.summarize(root)["ok"])
+
+    def test_auto_chain_uses_only_active_handoff_preamble(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("goal", "tracker", "constraints", "handoff"):
+                (root / f"{name}.md").write_text(f"# {name}\n")
+            (root / "handoff.md").write_text(
+                "# Handoff\n\n## History\n\n"
+                "Prior value: auto_chain_next_session: true\n"
+            )
+            result = DOCTOR.summarize(root)
+            self.assertFalse(result["auto_chain_enabled"])
+            self.assertTrue(any("auto_chain_next_session" in line for line in result["key_lines"]["handoff"]))
+
+            (root / "handoff.md").write_text(
+                "# Handoff\nauto_chain_next_session: true\n\n## History\n"
+            )
+            self.assertTrue(DOCTOR.summarize(root)["auto_chain_enabled"])
+
+    def test_auto_chain_rejects_fenced_or_conflicting_preamble_values(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("goal", "tracker", "constraints", "handoff"):
+                (root / f"{name}.md").write_text(f"# {name}\n")
+            for preamble in (
+                "# Handoff\n```yaml\nauto_chain_next_session: true\n```\n",
+                "# Handoff\nauto_chain_next_session: false\nauto_chain_next_session: true\n",
+            ):
+                with self.subTest(preamble=preamble):
+                    (root / "handoff.md").write_text(f"{preamble}\n## Current state\n")
+                    self.assertFalse(DOCTOR.summarize(root)["auto_chain_enabled"])
 
     def test_human_contract_cannot_conflict_with_execution_manifest(self):
         for header in ("mode: plan", "mode: execute\nexecution_authorized: false"):

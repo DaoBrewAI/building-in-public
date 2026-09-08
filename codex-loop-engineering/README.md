@@ -18,7 +18,8 @@ PROJECT_NAME="my-project" LOOP_DIR="docs/loop/my-experiment" \
 
 Fill in the objective, scope, acceptance and authorized phases. Installing files
 does not authorize implementation. For planning only, keep `mode: plan` and
-`execution_authorized: false`.
+`execution_authorized: false`. Auto-chain defaults off; set `AUTO_CHAIN=true`
+only when the current loop is authorized to create continuation tasks.
 
 For a concurrent DAG, add `DAG_TEMPLATE=true` to install the optional execution
 manifest. Run the read-only checker:
@@ -84,3 +85,6 @@ python -m unittest discover -s codex-loop-engineering/tests -v
 
 The checker never starts sessions or changes files. It validates declared policy;
 the supervisor still verifies authority, evidence and actual runtime settings.
+An older execution manifest must add `execution_authority_ref` for authorized
+execute mode and each node's `owner`, `outcome`, `acceptance_criteria`, `verifier`,
+`max_attempts` and `read_only` fields before dispatch.
