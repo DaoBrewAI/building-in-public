@@ -1,202 +1,86 @@
 # Codex Loop Engineering
 
-> A Codex skill plus installable setup for running repo-first loop engineering.
+Run multi-step Codex work from an inspectable execution contract: a user outcome,
+coherent checkpoints, dependency-aware workers, evidence and verified handoffs.
 
-This folder is both:
+The 2026-09-08 update adapts this starter to GPT-6: strong planning/review in the
+supervisor, task-sized reasoning for workers, **Standard/non-Fast by default**,
+and tool/computer-use rules that preserve the user's real environment.
 
-- an installable Codex skill: `SKILL.md`
-- a loop-file installer: `install.sh`
+## Start small
 
-It gives you a simple way to turn a project repo into a Codex loop:
-
-```text
-goal -> tracker -> constraints -> handoff -> verify -> commit -> continue or stop
-```
-
-The loop can be linear, or a dependency graph when independent lanes can run in
-parallel. It is for long-running work where Codex should keep state in files
-instead of relying on a giant chat prompt.
-
-## Install The Skill
-
-Clone this repo:
+From the project root:
 
 ```bash
-git clone git@github.com:DaoBrewAI/building-in-public.git
+PROJECT_NAME="my-project" LOOP_DIR="docs/loop/my-experiment" \
+  bash /path/to/codex-loop-engineering/install.sh
 ```
 
-Recommended for active use:
+Fill in the objective, scope, acceptance and authorized phases. Installing files
+does not authorize implementation. For planning only, keep `mode: plan` and
+`execution_authorized: false`.
+
+For a concurrent DAG, add `DAG_TEMPLATE=true` to install the optional execution
+manifest. Run the read-only checker:
 
 ```bash
-cd /path/to/building-in-public/codex-loop-engineering
-bash install-codex-skill.sh
+python /path/to/codex-loop-engineering/scripts/loop_doctor.py \
+  --loop-dir docs/loop/my-experiment --json
 ```
 
-Portable copy install:
+After authorizing execution, ask Codex to continue that named loop. The skill
+reads the current contract and releases only eligible work. Do not use it as an
+excuse to turn a one-off edit into a multi-session project.
+
+## Session defaults
+
+| Work | Starting choice |
+|---|---|
+| Supervisor planning and acceptance | User-selected model/effort, including supported GPT-6 Ultra |
+| Ambiguous runtime, identity, recovery, integration | GPT-6 Astra medium |
+| Clear interfaces, bounded adapters/UI/tests | GPT-5.6 Sol high |
+| Speed for every new session | Standard, Fast off unless explicitly requested |
+
+These are routing defaults, not benchmark claims. Verify model/effort/tier in the
+actual launch before mutations. Never inherit Ultra or Fast just because the
+parent used them. No automatic daytime or overnight Fast transition.
+
+## What stays, what changed
+
+- Keep goal/tracker/constraints/handoff, scoped checkpoints, meaningful tests,
+  product alignment and verified continuation.
+- Keep linear work when dependent; use a DAG when independent lanes are declared.
+- Replace all-workers-Ultra/Fast and day/night model rules with explicit per-node
+  policy and Standard defaults.
+- Replace unchecked-box-only parallel dispatch with acceptance dependencies,
+  file ownership, resource reservations and launch IDs.
+- Distinguish plan/review from execution and source/tests from current live work.
+- Respect browser-profile constraints across computer use, CLI, QA and rendering.
+
+## Install the reusable skill
 
 ```bash
-cd /path/to/building-in-public/codex-loop-engineering
-bash install-codex-skill.sh copy
+bash /path/to/codex-loop-engineering/install-codex-skill.sh symlink
 ```
 
-Restart or reload Codex after installing.
+The installed target must point to the version you intend to use. Check symlinks
+when source and installed behavior differ. Publishing the source does not
+automatically update an older local checkout.
 
-Use it with:
+## Reference
 
-```text
-Use $codex-loop-engineering to continue the loop.
-```
+- [Skill entry point](SKILL.md)
+- [Session policy](references/session-policy.md)
+- [DAG contract](references/dag-contract.md)
+- [Tool and computer use](references/tool-use.md)
+- [Setup and migration](codex-auto-chain-session-handoff-setup.md)
+- [Templates](templates/)
 
-## Install Loop Files
-
-Clone this repo:
+Validate helpers locally with:
 
 ```bash
-git clone git@github.com:DaoBrewAI/building-in-public.git
+python -m unittest discover -s codex-loop-engineering/tests -v
 ```
 
-From the repo you want Codex to work on, run:
-
-```bash
-bash /path/to/building-in-public/codex-loop-engineering/install.sh
-```
-
-Optional settings:
-
-```bash
-PROJECT_NAME="My Project" \
-LOOP_DIR="docs/loop" \
-AUTO_CHAIN=true \
-bash /path/to/building-in-public/codex-loop-engineering/install.sh
-```
-
-`AUTO_CHAIN=true` is the default for multi-phase loop work. Set
-`AUTO_CHAIN=false` only when you explicitly want a one-shot loop that must not
-create a follow-on Codex session.
-
-The installer creates:
-
-| File | Purpose |
-| --- | --- |
-| `docs/loop/goal.md` | The durable objective, done criteria, non-goals, and read-first context. |
-| `docs/loop/tracker.md` | The multi-phase plan or DAG Codex updates after each checkpoint. |
-| `docs/loop/constraints.md` | Product, engineering, safety, budget, and git boundaries. |
-| `docs/loop/handoff.md` | The current state, last verification, blockers, continuation policy, and verified next-session record. |
-
-## Quick Health Check
-
-From a project repo with loop files:
-
-```bash
-python ~/.codex/skills/codex-loop-engineering/scripts/loop_doctor.py \
-  --loop-dir docs/loop --json
-```
-
-The doctor is read-only. It summarizes missing files, current/next checkpoint clues, auto-chain state, recorded thread IDs, and stale-thread markers.
-
-## Start Codex
-
-After filling in `docs/loop/goal.md`, start Codex with a goal like this:
-
-```text
-/goal Complete the objective in docs/loop/goal.md.
-
-First read:
-- docs/loop/goal.md
-- docs/loop/tracker.md
-- docs/loop/constraints.md
-- docs/loop/handoff.md
-
-Then execute the next unchecked tracker item. Work in coherent checkpoints.
-After each checkpoint, run verification, update tracker and handoff, inspect the
-diff, commit only when allowed or required, and create a verified continuation
-session when unchecked work remains and no stop condition fired.
-
-Stop when the goal is verified, a blocker needs human input, or the budget is reached.
-```
-
-## Source Of Truth Stack
-
-Loop engineering works best as three layers:
-
-| Layer | Role | Source of truth |
-| --- | --- | --- |
-| Project loop files | The actual execution contract for the current project. | `docs/loop/{goal,tracker,constraints,handoff}.md` |
-| Loop engineering starter | The reusable installer and operating manual. | `codex-loop-engineering/` |
-| Memory | Personal preference recall only. | Codex memory may remind the agent of this pattern, but it must not be the only place the policy lives. |
-
-If a future Codex skill exists, it should only automate this stack: read the repo loop files, validate them, create/verify continuation sessions, and update the files. The repo files still stay authoritative.
-
-## Smoothest Setup
-
-The smooth target is:
-
-```text
-repo loop files + this installer + one thin Codex skill
-```
-
-The skill should do the boring ceremony:
-
-- detect the loop directory;
-- read `goal.md`, `tracker.md`, `constraints.md`, and `handoff.md`;
-- execute only the next unchecked checkpoint;
-- switch to a DAG only when the context clearly shows independent lanes, and
-  ask the user when dependency direction is uncertain;
-- run the verification named in the tracker;
-- update tracker and handoff;
-- create the next verified continuation when unchecked work remains and
-  auto-chain is not disabled, or create all currently ready DAG lanes when they
-  are independent and ungated;
-- verify the new thread before reporting it.
-
-That keeps the project state inspectable in the repo while making the day-to-day user command as small as:
-
-```text
-Continue the loop.
-```
-
-## Continuation Session Verification
-
-For multi-phase loop work, creating the next Codex session is part of the close
-out when unchecked work remains, unless the loop or user explicitly disables it.
-A returned thread ID is not enough. Treat session creation as successful only
-after all of these pass:
-
-1. `create_thread` returns a thread ID.
-2. `list_threads` or `read_thread` can find that exact ID or exact title.
-3. `set_thread_title` succeeds, or a follow-up `read_thread` confirms the title is already correct.
-4. `read_thread` shows the first turn exists and is either `inProgress` or completed normally.
-5. Any explicit user-required session settings were applied and recorded. For
-   example, if the loop requires GPT-5.5 and extra high thinking, call
-   `create_thread` with `model: "gpt-5.5"` and `thinking: "xhigh"` rather than
-   relying on defaults.
-6. Only then write the thread ID into `tracker.md`, `handoff.md`, and the final response.
-
-If the ID cannot be found, the title update fails repeatedly, or the thread is visible but never starts work, do not record it as the next session. Mark it as stale in the handoff, create one replacement session, verify the replacement, and record only the verified thread ID.
-
-## Complete Markdown Setup
-
-Read or download the full setup file here:
-
-- [`codex-auto-chain-session-handoff-setup.md`](./codex-auto-chain-session-handoff-setup.md)
-
-It includes the full loop engineering model, file templates, auto-chain handoff rules, session closing checklist, and troubleshooting notes.
-
-## When To Use This
-
-Use this for:
-
-- multi-phase implementation work
-- refactors and migrations
-- flaky-test or bug investigations
-- prototype hardening
-- launch asset cleanup
-- work that needs verification after each checkpoint
-
-Do not use this for a one-off edit. A normal Codex prompt is better for small tasks.
-
-## Further Reading
-
-- [Loop Engineering - Addy Osmani](https://addyosmani.com/blog/loop-engineering/)
-- [Follow a goal - OpenAI Codex docs](https://developers.openai.com/codex/use-cases/follow-goals)
-- [Using Goals in Codex - OpenAI Cookbook](https://developers.openai.com/cookbook/examples/codex/using_goals_in_codex)
+The checker never starts sessions or changes files. It validates declared policy;
+the supervisor still verifies authority, evidence and actual runtime settings.

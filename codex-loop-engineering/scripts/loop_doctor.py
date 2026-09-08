@@ -12,6 +12,8 @@ import json
 import re
 from pathlib import Path
 
+from execution_manifest import inspect_file
+
 
 THREAD_ID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 CHECKBOX_RE = re.compile(r"^\s*-\s+\[(?P<status>[ xX~!])\]\s+(?P<text>.+?)\s*$")
@@ -55,7 +57,7 @@ def summarize(loop_dir: Path) -> dict:
     unchecked = [item for item in checkboxes if item["status"] == " "]
     blocked = [item for item in checkboxes if item["status"] == "!"]
 
-    return {
+    result = {
         "loop_dir": str(loop_dir),
         "ok": not missing,
         "missing_files": missing,
@@ -79,6 +81,24 @@ def summarize(loop_dir: Path) -> dict:
             if re.search(r"(?i)\b(stale|pending re-creation|unreadable|unopenable|not visible|not found)\b", line)
         ],
     }
+    manifest = loop_dir / "execution.json"
+    if manifest.exists():
+        result["execution"] = inspect_file(manifest)
+        execution = result["execution"]
+        for name in ("goal", "handoff"):
+            # Only active preamble metadata, not historical sections/examples.
+            preamble = re.split(r"(?m)^##\s", contents[name], maxsplit=1)[0]
+            for key, raw in re.findall(r"(?m)^(mode|execution_authorized):\s*([^\n]+)$", preamble):
+                value = raw.strip().strip("\"'")
+                expected = execution.get(key)
+                if key == "execution_authorized":
+                    value = {"true": True, "false": False}.get(value.lower(), value)
+                if value != expected:
+                    execution["errors"].append(f"{name}.md {key} conflicts with execution.json")
+                    execution["ok"] = False
+                    execution["dispatchable"] = []
+        result["ok"] = result["ok"] and result["execution"]["ok"]
+    return result
 
 
 def main() -> int:
@@ -99,6 +119,10 @@ def main() -> int:
                 print(f"- {item}")
         print(f"Next unchecked: {result['next_unchecked']}")
         print(f"Auto-chain: {result['auto_chain_enabled']}")
+        if "execution" in result:
+            print(f"DAG dispatch candidates: {', '.join(result['execution']['dispatchable']) or '(none)'}")
+            for error in result["execution"]["errors"]:
+                print(f"Policy error: {error}")
         print(f"Thread IDs: {', '.join(result['thread_ids']) or '(none)'}")
         if result["stale_markers"]:
             print("Stale markers:")

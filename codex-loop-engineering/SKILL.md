@@ -1,233 +1,146 @@
 ---
 name: codex-loop-engineering
-description: Repo-first Codex loop execution and continuation management. Use when the user asks Codex to continue a loop, run the next checkpoint, install or repair docs/loop goal/tracker/constraints/handoff files, auto-chain the next Codex session, coordinate DAG/parallel checkpoint lanes, diagnose stuck/dead continuation threads, or make long-running Codex work smoother with verified handoff and thread health checks.
+description: Plan, execute, review and continue repo-local Codex checkpoints from durable goal, tracker, constraints and handoff files. Use for multi-session work, dependency-aware parallel lanes, verified handoffs and stuck continuation diagnosis; not for a one-off edit or as permission to execute a plan.
 ---
 
 # Codex Loop Engineering
 
-Use this skill to run a repo-local Codex loop from durable files instead of a giant chat prompt.
+Version: 2026-09-08. The user sets the outcome and authority; the loop makes
+execution, evidence and continuation inspectable. Announce use briefly.
 
-## Core Model
+## Establish the current contract
 
-Treat the current project files as authoritative:
+Read the named loop, otherwise inspect `docs/loop/`, in this order:
 
-```text
-docs/loop/goal.md
-docs/loop/tracker.md
-docs/loop/constraints.md
-docs/loop/handoff.md
-```
+1. `goal.md`: user outcome, acceptance and non-goals.
+2. `tracker.md`: checkpoint, dependencies and evidence.
+3. `constraints.md`: scope, environment, tools, budgets and Git policy.
+4. `handoff.md`: source/runtime, completed work and next action.
+5. The exact product/source authority named by those files.
 
-Memory can remind you of Neo's preferences, and this skill can automate the ritual, but the repo loop files are the execution contract.
+Use `python <skill>/scripts/loop_doctor.py --loop-dir <loop> --json` for
+orientation, then read the relevant source. It does not prove acceptance or
+grant permission. With `execution.json`, it also checks the DAG, ownership,
+resource reservations and session policy.
 
-## First Move
+Determine the mode explicitly: **plan**, **review**, or **execute**. Plan/review
+does not authorize code changes, provider runs, app actions or new execution
+sessions. A historical GO or quoted auto-chain flag cannot override a current
+stop. Do not create a Codex Goal unless the user requested one.
 
-Announce briefly that you are using this skill.
+Install a missing loop only when asked to set one up. For a superseding
+experiment, preserve the old history and establish a fresh scoped contract when
+authorized; do not restart stale controllers or wholesale-overwrite a handoff.
 
-Then discover the loop:
+## Use GPT-6 for judgment, not repeated ceremony
 
-1. Prefer the loop directory named by the user.
-2. Otherwise check `docs/loop/`.
-3. If no loop exists and the user asked to set one up, run this skill package's `install.sh` from the target repo.
-4. If no loop exists and the user asked to continue, stop and ask for the intended loop docs or install permission.
+Read [session policy](references/session-policy.md) when selecting or launching
+sessions. Defaults:
 
-For quick inspection, run:
+- Preserve the user's selected supervisor model/effort. A GPT-6 Ultra supervisor
+  can plan and arbitrate without making all workers Ultra. UI labels are not
+  automatically valid API parameters.
+- Use `gpt-6-astra` **medium** for uncertain cross-module diagnosis, identity,
+  recovery and integration; use `gpt-5.6-sol` **high** for bounded work after its
+  interface and acceptance are clear. Honor user overrides and host support.
+- **Fast is off by default at every hour**, for all new continuations/workers.
+  Request `service_tier: default` and Fast false where exposed. Only an explicit
+  user instruction enables Fast; there is no daytime automatic return to Fast.
+- Inspect relevant context once and pass scoped evidence to workers. Do not
+  copy whole repos/conversations into every worker or repeat broad audits
+  without a new question.
+- Ask only when the missing answer changes scope, authority, architecture or an
+  irreversible choice; resolve routine details within current authorization.
+- Mid-turn input steers the active outcome. Stop an affected lane when its
+  authority changes and cancel abandoned successors.
 
-```bash
-python <skill-dir>/scripts/loop_doctor.py --loop-dir docs/loop --json
-```
+GPT-6 model features do not automatically appear in every host. Use only exposed
+tools/arguments. Async orchestration allows other **independent** work while a
+tool runs; it does not remove dependencies or turn a pending call into success.
 
-Use the output as orientation only. Still read the actual loop files before editing.
+## Choose linear work or a DAG
 
-## Read Order
+One coherent checkpoint is the execution unit. Use a linear loop for dependent
+steps; use a DAG when independent work can save time or improve evidence.
+For multiple lanes/sessions, read [the execution contract](references/dag-contract.md).
 
-Read these before doing task work:
+Before dispatch, fix each node's outcome, inputs, write paths, exclusive
+resources, dependencies, acceptance, model/effort/tier, attempt limits and owner.
 
-1. `goal.md`
-2. `tracker.md`
-3. `constraints.md`
-4. `handoff.md`
-5. Any project-specific source-of-truth files named by those docs
+- One Supervisor releases work; one integrator owns common interfaces and
+  acceptance. Workers do not each create another controller.
+- Start with at most two execution workers unless otherwise chosen. File-disjoint
+  work can still conflict on a browser, port, state root or external account.
+- Only accepted predecessors release successors. A returned task, passing test
+  or existing artifact does not by itself satisfy user/business acceptance.
+- Split a checkpoint before escalating effort when it spans multiple outcomes,
+  roughly 12+ production files or 2,000+ production lines, or combines a storage
+  authority change with an unrelated feature.
+- Repairs are bounded attempts inside a node. Keep the dependency graph acyclic;
+  repeated failure needs a scoped repair/replan, not infinite retries or duplicate
+  sessions.
 
-If the user prompt conflicts with loop files, inspect current artifacts before deciding. Prefer the freshest verified repo state over memory or stale prompt text. Note any correction in the handoff.
+The checker outputs scheduling candidates, not permission. Verify the actual
+evidence, user authority and effective settings before releasing them.
 
-## Checkpoint Execution
+## Execute and verify one slice
 
-Run exactly one coherent checkpoint unless the loop files explicitly say otherwise.
-This means one implementation/checkpoint slice in the current session. It does
-not mean the project should stop after the checkpoint when unchecked work
-remains.
+1. Record checkout/branch/SHA and relevant running build/configuration. A worktree
+   is another checkout, not automatically a new branch. Use isolated development
+   when appropriate; respect explicit direct-branch rules and unrelated work.
+2. Reproduce a behavior change with a meaningful focused test/probe; make the
+   smallest coherent change on owned files using relevant skills.
+3. Batch independent reads/calls; keep mutations, dependencies, approvals and
+   waits ordered. Do not replay completed external work.
+4. Run declared checks. Broaden only for changed risk, failures or unresolved
+   evidence; do not repeatedly run a full suite for a small edit.
+5. Get an independent changed-slice review for material work. Check requirements
+   against source/evidence, not the worker's success label.
+6. Run a compact alignment gate against exact product authority, local derivations,
+   authorized scope and result. Classify material commitments as aligned, partial,
+   conflicting or not implemented. Resolve conflicts before successors; don't
+   reinterpret the goal to match the output.
+7. Update tracker/handoff with changes, commands, evidence, limitations and the
+   exact next checkpoint. Commit/push only when authorized; push is not deployment.
 
-Default sequence:
+For connectors, browser/native apps or media tools, read
+[tool and computer use](references/tool-use.md). Existing-profile requirements
+apply across CLI, QA and rendering; stronger computer use grants no new access.
 
-1. Confirm the current checkpoint and stop conditions.
-2. Implement only the next unchecked tracker item.
-3. Run the verification named in the tracker or handoff.
-4. Update tracker and handoff with evidence paths, commands, and remaining work.
-5. Inspect local changes.
-6. Commit/push only if the project constraints or user request require it.
-7. If unchecked work remains and no stop condition applies, create the next
-   verified continuation session. Do not leave the user to start it manually.
+## Continue within authorized work
 
-Stop on blockers that need credentials, external data, destructive action, production deploys, or user approval.
+Auto-chain applies when the user requested multi-session continuation or approved
+it in the current loop, not to every ordinary task. Use internal subagents for
+bounded subtasks; create visible app tasks only when requested or covered by that
+loop's session authorization.
 
-## Linear vs DAG Execution
+Persist a launch reservation and the ready node, source/skill version, settings
+and scope before creation. A returned ID is provisional: verify the task exists,
+started normally, read the intended contract and has the intended cwd/model/effort
+and non-Fast launch state. Workers hold production mutations until that gate
+passes. Session policy covers hosts that do not expose every field. Stop a wrong
+launch; do not silently accept it or create unlimited replacements.
 
-Default to a linear checkpoint loop when the tracker presents one next
-unchecked item and the later work depends on its result.
+Use bounded event waits with cursors, not repeated full transcripts. Keep user
+communication responsive. Release successors after recorded acceptance, not
+merely a completion event.
 
-Use a dependency graph / DAG model when the user context, tracker, or handoff
-shows independent lanes. Common signals:
+Name the exact blocker and continue independent authorized lanes where possible.
+Stop dependent work on user stop, missing authority/credentials/data, a disallowed
+runtime, destructive/out-of-scope action or exhausted budget. A permission failure
+is not a reason to try another access path. Already-authorized routine actions
+do not need another approval.
 
-- the user explicitly says phases can run in parallel or are not linearly
-  dependent;
-- multiple unchecked checkpoints are research, audit, QA, or file-disjoint
-  implementation lanes that can produce evidence without waiting on each other;
-- one lane is a product/strategy verdict while another is a source audit,
-  competitor scan, test sweep, or cleanup that does not need that verdict;
-- the tracker already contains dependency language such as "waits for",
-  "depends on", "parallel-safe", "ready", or "blocked by".
+For unattended/overnight work, first freeze the allowed phase set, limits,
+notifications and review points. Use at most one authorized supervisor monitor;
+never schedule one without a user request. Standard/non-Fast remains the default.
 
-When the DAG shape is clear, update `tracker.md` and `handoff.md` before
-creating sessions:
+## Close with observable results
 
-1. Add an explicit dependency graph or "Auto-Chain Rules" section.
-2. Mark active lanes and predecessor-gated lanes separately.
-3. Record that a lane may create a successor only when all predecessor lanes are
-   complete and no verified thread already exists for that successor.
-4. Create verified continuation sessions for every currently ready independent
-   lane, not for gated lanes.
+Report what actually ran, what changed, evidence and the remaining gate. Keep
+authored source, tests, current live behavior, external action and business
+outcome separate. Preserve the last good artifact and actionable state on failure.
 
-When the DAG shape is not clear, ask the user before opening parallel sessions.
-Do not guess dependency direction for product, billing, deployment, data
-migration, or user-approval steps.
-
-## Auto-Chain Protocol
-
-For a loop continuation, delegated loop run, or any session where the user has
-asked Codex to continue a multi-phase repo loop, auto-chain is the default close
-out when unchecked work remains. Do not interpret "one checkpoint only" as "do
-not create the next session."
-
-Create the next session unless one of these is true:
-
-- the tracker has no unchecked work left;
-- the user explicitly says not to create the next session, stop here, or only
-  update the handoff;
-- `constraints.md` or `handoff.md` explicitly disables auto-chain for this loop;
-- the checkpoint is blocked on credentials, external data, destructive action,
-  production deploy, or user approval;
-- required thread-management tools are unavailable after discovery.
-
-If a loop file has `auto_chain_next_session: false`, treat it as a disable only
-when it is fresh and explicit for the current loop. If the user prompt says to
-continue or create the next session, the user prompt wins and the handoff should
-be corrected.
-
-If thread-management tools are not already available, discover them before
-stopping. In Codex Desktop, search for the thread tools first: `create_thread`,
-`set_thread_title`, `list_threads`, and `read_thread`. If discovery or a backend
-handler fails, record the tool/backend failure in the handoff and final answer
-instead of silently ending without a next session.
-
-Before creating the next session:
-
-1. Update tracker and handoff first.
-2. Ensure the next checkpoint is specific and scoped.
-3. For a linear loop, build a short continuation prompt that points at the loop
-   files and names the exact next unchecked tracker item.
-4. For a DAG loop, compute the ready set: unchecked lanes whose dependencies
-   are complete and that do not already have verified active/completed threads.
-   Build one scoped prompt per ready lane and do not create gated successors.
-5. Preserve any explicit user-required session settings from the current loop
-   contract, such as model, reasoning effort, service tier, or mode. If the
-   user requires a specific Codex model/thinking setting, pass it explicitly to
-   `create_thread`; do not rely on defaults.
-6. Use a fresh project-local Codex thread, not a fork, unless the user explicitly asks for a fork.
-
-If a DAG lane completes but its successors are still waiting on other lanes,
-update the tracker/handoff with the artifact and stop or continue monitoring
-active lanes. Do not create a duplicate thread for an active lane just because
-unchecked work remains.
-
-## Required Tracking
-
-The repo files are the durable source of truth. Track both the completed
-checkpoint and the next session.
-
-Before `create_thread`, write:
-
-- in `tracker.md`: the completed checkbox, the next unchecked item, and any
-  verification evidence the tracker is expected to carry;
-- in `handoff.md`: files changed, commands run, verification result, blockers,
-  current branch/path, next unchecked item, and the exact continuation prompt.
-
-After the new session passes the health check, write in both `tracker.md` and
-`handoff.md` when useful:
-
-- verified continuation thread ID and title;
-- creation date/time if known;
-- requested settings, especially `model`, `thinking`, service tier, and fast
-  mode;
-- health-check evidence: created, titled, found by list/read, first turn exists,
-  status/progress, and whether the next agent started reading loop files;
-- any settings that the tool could not expose or verify.
-
-Never write a returned thread ID as the real next session until health check
-passes. Until then it is provisional.
-
-After `create_thread`, treat the returned ID as provisional. Do not record or report it as successful until it passes the health check.
-
-## Continuation Health Check
-
-A continuation thread is accepted only after all of these pass:
-
-1. `create_thread` returns a thread ID.
-2. `list_threads` or `read_thread` can find that exact ID or exact title.
-3. `set_thread_title` succeeds, or `read_thread` confirms the title is already correct.
-4. `read_thread` shows the first turn exists.
-5. The first turn status is `inProgress` or completed normally.
-6. Recent items show the agent started reading the handoff, skill docs, or project files.
-7. Any explicit user-required session settings were applied and recorded, such
-   as `model=gpt-5.5` and `thinking=xhigh` for extra high thinking. If the tool
-   does not expose a requested setting, write that limitation in the handoff and
-   do not claim the setting was verified.
-
-Only then write the ID into `tracker.md`, `handoff.md`, and the final response.
-
-If the ID cannot be found, title updates fail repeatedly, or the thread becomes unreadable/unopenable:
-
-- do not report it as the next session;
-- remove or mark stale any already-written ID;
-- create at most one replacement from the current handoff;
-- verify the replacement before recording it.
-
-If a visible continuation appears stuck, inspect it with `read_thread` first. If there are recent progress items, let it continue. If there are no new items for an unusual amount of time and it cannot be opened or read, replace it from the current handoff.
-
-## Install Loop Files
-
-When the user asks to install loop engineering into a project, run from the target repo:
-
-```bash
-PROJECT_NAME="<name>" LOOP_DIR="docs/loop" AUTO_CHAIN=true \
-  bash <skill-dir>/install.sh
-```
-
-Use `AUTO_CHAIN=false` only when the user explicitly wants a one-shot loop that
-must not create follow-on sessions.
-
-## Install This Skill
-
-For Codex users, install this whole folder as:
-
-```bash
-cp -R codex-loop-engineering ~/.codex/skills/codex-loop-engineering
-```
-
-For local development, a symlink is better:
-
-```bash
-ln -sfn /path/to/building-in-public/codex-loop-engineering ~/.codex/skills/codex-loop-engineering
-```
-
-Restart or reload Codex after installing.
+The [setup guide](codex-auto-chain-session-handoff-setup.md), installer and
+[templates](templates/) support this contract. Existing four-file loops remain
+readable. Migrate stale settings explicitly and validate changes before publishing.

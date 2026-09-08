@@ -1,0 +1,22 @@
+{
+  "schema_version": "codex-loop-execution.v1",
+  "mode": "plan",
+  "execution_authorized": false,
+  "max_parallelism": 2,
+  "fast_authorized": false,
+  "nodes": [
+    {
+      "id": "CP1",
+      "status": "planned",
+      "depends_on": [],
+      "write_paths": [],
+      "exclusive_resources": [],
+      "session": {
+        "model": "gpt-6-astra",
+        "reasoning_effort": "medium",
+        "service_tier": "default",
+        "fast_mode": false
+      }
+    }
+  ]
+}
