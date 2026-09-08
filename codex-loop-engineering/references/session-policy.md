@@ -34,10 +34,17 @@ If the launch API lacks a tier argument:
 1. Inspect supported per-thread/default controls.
 2. Preserve unrelated config; change only an authorized launch default if needed.
    Do not restart the desktop app or disturb active tasks casually.
-3. Capture the config/version used for launch, then verify the actual task/rollout
-   before allowing implementation.
-4. If effective tier cannot be established, mark it unverified and hold the worker
-   before mutations. Intent alone is not proof of Standard mode.
+3. Capture the launch-default configuration and relevant overrides immediately
+   before creation; have the child recheck that same configuration and its actual
+   model/effort before implementation. Confirm no task/project override enables Fast.
+4. Distinguish verified launch policy from provider telemetry. An explicit Standard
+   launch option, or a verified Standard launch-default path with no Fast override,
+   establishes the non-Fast launch policy. If the task API omits the backend billing
+   tier, record that field as unavailable; do not call it directly observed or invent
+   a tier argument. Missing backend telemetry alone does not invalidate an otherwise
+   verified non-Fast launch policy.
+5. If neither an explicit launch option nor the actual launch-default path can be
+   verified, hold mutations and report the blocker. Intent alone is not enough.
 
 Fast requires an explicit scoped user instruction. Do not spread it to unrelated
 future sessions or confuse it with reasoning, task urgency or response latency.

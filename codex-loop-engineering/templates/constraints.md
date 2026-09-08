@@ -13,8 +13,9 @@
 - Default cross-module diagnosis/integration to gpt-6-astra medium; bounded,
   frozen-interface implementation may use gpt-5.6-sol high.
 - Standard/non-Fast is the default for all new sessions, day and night.
-- Request service_tier=default and Fast=false where supported. Verify actual
-  launch state; if unobservable, hold mutations and report the limitation.
+- Request service_tier=default and Fast=false where supported. Otherwise verify
+  the launch-default path and absence of overrides. An omitted backend tier is
+  reported unavailable; hold mutations if the launch policy itself is unverified.
 - Ultra/max workers and Fast require explicit scoped user overrides. Do not
   inherit them from the parent or an old template.
 - Start with at most two execution workers; split oversized checkpoints.
