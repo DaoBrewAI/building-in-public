@@ -1,0 +1,9 @@
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "^(Bash|apply_patch)$",
+                      "hooks": [{ "type": "command", "command": "/opt/northstar/hooks/guard.sh" },
+                                { "type": "command", "command": "/opt/northstar/hooks/align.sh" }] }],
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "/opt/northstar/hooks/inject.sh" }] }],
+    "Stop": [{ "hooks": [{ "type": "command", "command": "/opt/northstar/hooks/stop-gate.sh" }] }]
+  }
+}
