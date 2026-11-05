@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# /opt/northstar/bin/northstar
+# agent 可以用：init、verify、verify-mission
+# 只有你能用：seal、start、finish、approve-mission（guard 会拦截 agent 调用）
+set -euo pipefail
+ROOT=/opt/northstar; NS=.northstar; DR=drafts; PRINCIPAL=linhan
+SIGNERS="$ROOT/allowed_signers"
+KEY="$ROOT/northstar_signing.pub"
+export SSH_AUTH_SOCK="$HOME/Library/Containers/com.maxgoedjen.Secretive.SecretAgent/Data/socket.ssh"
+
+case "${1:-}" in
+  approve-mission|verify-mission) ;;     # 这两个命令接收 control 目录路径，不切换目录
+  *) cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" ;;
+esac
+
+manifest() {
+  find "$NS" -type f ! -name MANIFEST ! -name MANIFEST.sig -print0 \
+    | LC_ALL=C sort -z | xargs -0 shasum -a 256
+}
+
+interactive() { [ -t 0 ] && [ -t 1 ] || { echo "这个命令只能在你自己的终端里交互运行" >&2; exit 1; }; }
+
+seal() {   # 草稿搬进 .northstar → 显示完整改动 → 你确认 → Touch ID 签名
+  interactive
+  if [ -d "$DR" ]; then rsync -a "$DR"/ "$NS"/; fi
+  git add -N "$NS" 2>/dev/null || true
+  git --no-pager diff -- "$NS"
+  read -r -p "以上是本次要签名的全部改动。输入 SEAL 确认：" ans
+  [ "$ans" = SEAL ] || { echo "已取消。改动还在工作区，可用 git checkout -- $NS 撤回"; exit 1; }
+  manifest > "$NS/MANIFEST"; rm -f "$NS/MANIFEST.sig"
+  ssh-keygen -Y sign -n northstar -f "$KEY" "$NS/MANIFEST"        # 这里弹 Touch ID
+  if [ -d "$DR" ]; then find "$DR" -type f -delete; fi
+  echo "已签名。让 agent 提交：[NS] ..."
+}
+
+case "${1:-}" in
+  init)     # agent 可执行：建目录，把模板放进 drafts/ 供起草
+    mkdir -p "$NS/checks" "$NS/missions/archive" "$DR/missions" "$DR/checks" proposals
+    [ -f "$NS/NORTHSTAR.md" ] || [ -f "$DR/NORTHSTAR.md" ] || cp "$ROOT/templates/NORTHSTAR.md" "$DR/"
+    [ -f "$NS/checks/run_all.sh" ] || [ -f "$DR/checks/run_all.sh" ] \
+      || printf '#!/usr/bin/env bash\nset -e\n' > "$DR/checks/run_all.sh"
+    echo "已初始化。草稿在 $DR/，写好后由用户运行 northstar seal" ;;
+  seal)
+    seal ;;
+  start)    # 你：启动 mission，草稿必须已在 drafts/missions/<名字>.md
+    [ -n "${2:-}" ] || { echo "用法：northstar start <名字>"; exit 1; }
+    [ -f "$DR/missions/$2.md" ] || [ -f "$NS/missions/$2.md" ] \
+      || { echo "先让 agent 起草 $DR/missions/$2.md" >&2; exit 1; }
+    mkdir -p "$DR/missions"; echo "$2" > "$DR/missions/ACTIVE"
+    GD=$(git rev-parse --git-dir); rm -f "$GD/northstar-drift-count" "$GD/northstar-drift-last"
+    seal ;;
+  finish)   # 你：先看进度报告，再归档当前 mission
+    if [ -f "$NS/architecture.json" ]; then
+      "$ROOT/bin/northstar-status" || { echo "进度报告未通过校验，先让 agent 修正" >&2; exit 1; }
+      open status/STATUS.md 2>/dev/null || cat status/STATUS.md
+    fi
+    m=$(cat "$NS/missions/ACTIVE")
+    mv "$NS/missions/$m.md" "$NS/missions/archive/"; rm "$NS/missions/ACTIVE"
+    seal ;;
+  verify)
+    [ -d "$NS" ] || exit 0
+    [ -f "$NS/MANIFEST.sig" ] || { echo "缺少签名，请运行 northstar seal" >&2; exit 1; }
+    ssh-keygen -Y verify -f "$SIGNERS" -I "$PRINCIPAL" -n northstar \
+      -s "$NS/MANIFEST.sig" < "$NS/MANIFEST" >/dev/null
+    diff <(manifest) "$NS/MANIFEST" >/dev/null || { echo "受保护文件与签名不一致" >&2; exit 1; }
+    echo "northstar verify: OK" ;;
+  approve-mission)   # 你：签署 orchestrator mission 的冻结设计（在 /plan 页面说 go 之后）
+    C="${2:?用法：northstar approve-mission <control 目录>}"
+    interactive
+    for f in approved-design.md approved-plan.md; do echo "=== $f ==="; head -n 25 "$C/$f"; done
+    cat "$C/approved.sha256"
+    read -r -p "这是你在 /plan 页面上说 go 的那一版吗？输入 SEAL 确认：" a
+    [ "$a" = SEAL ] || { echo "已取消"; exit 1; }
+    rm -f "$C/approved.sha256.sig"
+    ssh-keygen -Y sign -n northstar-mission -f "$KEY" "$C/approved.sha256" ;;   # 弹 Touch ID
+  verify-mission)    # 任何人可调用：校验冻结设计确实由你签署
+    C="${2:?用法：northstar verify-mission <control 目录>}"
+    ssh-keygen -Y verify -f "$SIGNERS" -I "$PRINCIPAL" -n northstar-mission \
+      -s "$C/approved.sha256.sig" < "$C/approved.sha256" >/dev/null ;;
+  *)
+    echo "用法：northstar init | seal | start <名字> | finish | verify | approve-mission <dir> | verify-mission <dir>"; exit 1 ;;
+esac

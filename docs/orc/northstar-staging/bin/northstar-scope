@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+# /opt/northstar/bin/northstar-scope <文件...>
+# 返回 0：全部在范围内；1：越界；3：触发停止条件
+import fnmatch, json, os, re, sys
+root = os.popen("git rev-parse --show-toplevel").read().strip() or os.getcwd(); os.chdir(root)
+NS = ".northstar"
+try:
+    m = open(f"{NS}/missions/ACTIVE").read().strip()
+except FileNotFoundError:
+    sys.exit(0)                                   # 没有进行中的 mission，不设围栏
+text = open(f"{NS}/missions/{m}.md").read()
+def field(k):
+    h = re.search(rf"^{k}:\s*(.+)$", text, re.M)
+    return [s.strip() for s in h.group(1).split("#")[0].split(",") if s.strip()] if h else []
+files = [os.path.relpath(os.path.abspath(p), root) for p in sys.argv[1:] if p]
+stop = [f for f in files if any(fnmatch.fnmatch(f, g) for g in field("forbid"))]
+if stop:
+    print(f"触发停止条件：{', '.join(stop)}", file=sys.stderr); sys.exit(3)
+ids = field("scope")
+if not ids or not os.path.exists(f"{NS}/architecture.json"): sys.exit(0)
+arch = json.load(open(f"{NS}/architecture.json"))
+globs = [p for c in arch["components"] if c["id"] in ids for p in c["paths"]]
+globs += ["status/narrative.md", "proposals/*", "drafts/*"]
+bad = [f for f in files if not any(fnmatch.fnmatch(f, g) for g in globs)]
+if bad:
+    print(f"越界：{', '.join(bad)}。当前 mission「{m}」只允许改：{', '.join(ids)}", file=sys.stderr); sys.exit(1)

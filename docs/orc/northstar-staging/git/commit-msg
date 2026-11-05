@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# /opt/northstar/git/commit-msg
+[ -d .northstar ] || { [ -x .git/hooks/commit-msg ] && exec .git/hooks/commit-msg "$1"; exit 0; }
+if ! head -1 "$1" | grep -qE '^\[(N[0-9]+(,N[0-9]+)*|NS)\]'; then
+  echo "commit 首行必须以 [N#] 开头（如 [N2] ...）；North Star 自身变更用 [NS]" >&2; exit 1
+fi
+[ -x .git/hooks/commit-msg ] && exec .git/hooks/commit-msg "$1"   # 保留项目自己的 hook
+exit 0

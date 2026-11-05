@@ -1,0 +1,32 @@
+name: northstar
+on: pull_request
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      # 在这里补上本项目安装依赖的步骤，否则 CI 跑不通检查
+      - name: 签名校验
+        env: { SIGNERS: "${{ vars.NORTHSTAR_ALLOWED_SIGNERS }}" }
+        run: |
+          [ -d .northstar ] || exit 0
+          printf '%s\n' "$SIGNERS" > /tmp/allowed_signers
+          ssh-keygen -Y verify -f /tmp/allowed_signers -I linhan -n northstar \
+            -s .northstar/MANIFEST.sig < .northstar/MANIFEST
+          diff <(find .northstar -type f ! -name MANIFEST ! -name MANIFEST.sig -print0 \
+            | LC_ALL=C sort -z | xargs -0 shasum -a 256) .northstar/MANIFEST
+      - name: 验收检查
+        run: "[ ! -f .northstar/checks/run_all.sh ] || bash .northstar/checks/run_all.sh"
+      - name: 进度报告与代码一致
+        run: |
+          [ -f .northstar/architecture.json ] || exit 0
+          cp status/status.json /tmp/claimed.json
+          python3 .github/workflows/northstar_status.py
+          diff <(jq -S . /tmp/claimed.json) <(jq -S . status/status.json)
+      - name: commit 必须带 [N#]
+        run: |
+          [ -d .northstar ] || exit 0
+          bad=$(git log --format=%s origin/${{ github.base_ref }}..HEAD \
+            | grep -vE '^\[(N[0-9]+(,N[0-9]+)*|NS)\]' || true)
+          [ -z "$bad" ] || { echo "缺少 [N#] 的 commit："; echo "$bad"; exit 1; }
