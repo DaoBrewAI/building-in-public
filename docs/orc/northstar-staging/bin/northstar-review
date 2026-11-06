@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# /opt/northstar/bin/northstar-review —— 对齐评审的唯一入口
+# 提交前的 hook（hooks/align.sh）和 orc 的 commit broker 都调用它，输入相同：
+#   NORTHSTAR（方向 + 少数关键设计约束 N#）、签名的设计文件、本节点条目（声明文件、验收标准、条款）、diff，可选检查结果
+# 用法：<diff> | northstar-review --entry <节点条目或 mission 文件> [--design <签名的设计文件>]... \
+#         [--checks <检查结果文件>] [--prev <上次偏离原因>] --reviewer claude|codex [--model <模型>]
+# 退出码：0 ALIGNED；1 DRIFT（stdout 是评审原文：DRIFT / 违反项 / 证据）；2 不能评审（stderr 写明原因和该怎么做）
+MAXC=60000                                # 评审输入里 diff 的上限（字节）；超过就拒绝，不截断
+NSF=.northstar/NORTHSTAR.md
+entry=; designs=(); checks=; prev=; reviewer=; model=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --entry) entry="$2" ;; --design) designs+=("$2") ;; --checks) checks="$2" ;;
+    --prev) prev="$2" ;; --reviewer) reviewer="$2" ;; --model) model="$2" ;;
+    *) echo "northstar-review：未知参数 $1" >&2; exit 2 ;;
+  esac
+  shift 2
+done
+[ -f "$NSF" ] || { echo "northstar-review：缺少 $NSF" >&2; exit 2; }
+[ -f "$entry" ] || { echo "northstar-review：缺少节点条目 --entry $entry" >&2; exit 2; }
+for f in ${designs[@]+"${designs[@]}"} ${checks:+"$checks"}; do
+  [ -f "$f" ] || { echo "northstar-review：缺少 $f" >&2; exit 2; }
+done
+case "$reviewer" in
+  claude) cmd=(claude -p); [ -n "$model" ] && cmd+=(--model "$model") ;;
+  codex)  cmd=(codex exec --sandbox read-only); [ -n "$model" ] && cmd+=(-m "$model") ;;
+  *) echo "northstar-review：--reviewer 只能是 claude 或 codex" >&2; exit 2 ;;
+esac
+
+diff=$(cat)
+n=$(printf '%s' "$diff" | wc -c | tr -d ' ')
+[ "$n" -le "$MAXC" ] || {
+  echo "NORTHSTAR：这次的改动有 $n 字节，超过评审上限 $MAXC。评审不截断：按验收标准拆成更小的提交。" >&2; exit 2; }
+
+prompt="=== NORTHSTAR（方向，以及少数关键设计约束 N#）===
+$(cat "$NSF")"
+for f in ${designs[@]+"${designs[@]}"}; do
+  prompt="$prompt
+
+=== 签名的设计：$(basename "$f") ===
+$(cat "$f")"
+done
+prompt="$prompt
+
+=== 本节点条目（声明的文件、验收标准、对应条款）===
+$(cat "$entry")"
+[ -n "$checks" ] && prompt="$prompt
+
+=== 已运行的检查结果 ===
+$(cat "$checks")"
+prompt="$prompt
+
+=== 待提交的改动 ===
+$diff
+
+你是独立评审，只依据上面的材料判断，回答两个问题：
+1. 方向：这些改动是否在推进本节点的验收标准，且没有违反 NORTHSTAR 的任何条款、非目标或停止条件？
+2. 做法：实现方式是否照签名的设计？（没有设计文件时只回答第 1 问）
+任一项不符就判 DRIFT。${prev:+上一次被判定偏离的原因是：$prev。请特别确认它已经消除。}
+第一行只输出 ALIGNED 或 DRIFT。若 DRIFT，第二行写违反的是哪条 N# 或设计的哪一节，以及原因；第三行写涉及的文件和行号。"
+
+out=$("${cmd[@]}" "$prompt" 2>/dev/null)
+v=$(grep -m1 -oE '^(ALIGNED|DRIFT)' <<<"$out")
+[ -n "$v" ] || { echo "NORTHSTAR：对齐评审没有返回结果。稍后重试提交；持续失败就停止并告诉用户。" >&2; exit 2; }
+printf '%s\n' "$out"
+[ "$v" = ALIGNED ]

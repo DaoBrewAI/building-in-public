@@ -10,7 +10,7 @@ grep -qE 'git[[:space:]]+add' <<<"$cmd" && { echo "NORTHSTAR：把 git add 和 g
 
 MAXF=8                                    # 小步提交：一次最多几个文件
 # 交叉评审：Claude Code 写的交给 Codex 审，Codex 写的交给 Claude 审
-if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then REVIEW=(codex exec --sandbox read-only); else REVIEW=(claude -p); fi
+if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then REVIEWER=codex; else REVIEWER=claude; fi
 m=$(cat .northstar/missions/ACTIVE); MF=".northstar/missions/$m.md"
 GD=$(git rev-parse --git-dir); CTR="$GD/northstar-drift-count"; LAST="$GD/northstar-drift-last"
 notify() { osascript -e "display notification \"$1\" with title \"NORTHSTAR\"" 2>/dev/null || true; }
@@ -22,16 +22,13 @@ nf=$("${DIFF[@]}" --name-only | wc -l | tr -d ' ')
 [ "$nf" -le "$MAXF" ] || { echo "NORTHSTAR：这次要提交 $nf 个文件，超过 $MAXF 个。按验收标准拆成更小的提交。" >&2; exit 2; }
 
 prev=$(cat "$LAST" 2>/dev/null)
-prompt="$(cat .northstar/NORTHSTAR.md "$MF")
-=== 待提交的改动 ===
-$("${DIFF[@]}" --stat --patch | head -c 60000)
-
-你是独立评审，只依据上面的 NORTHSTAR、mission 和待提交的改动判断：这些改动是否在推进 mission 的验收标准，且没有违反任何条款、非目标或停止条件？${prev:+上一次被判定偏离的原因是：$prev。请特别确认它已经消除。}
-第一行只输出 ALIGNED 或 DRIFT。若 DRIFT，第二行写违反的条款编号和原因，第三行写涉及的文件和行号。"
-out=$("${REVIEW[@]}" "$prompt" 2>/dev/null)
-v=$(grep -m1 -oE '^(ALIGNED|DRIFT)' <<<"$out")
-[ -n "$v" ] || { echo "NORTHSTAR：对齐评审没有返回结果。稍后重试提交；持续失败就停止并告诉用户。" >&2; exit 2; }
-[ "$v" = DRIFT ] || { rm -f "$CTR" "$LAST"; exit 0; }      # 通过：连续偏离计数清零
+# 评审和 orc 的 broker 共用 northstar-review：mission 就是本节点条目；签名的设计放在 .northstar/design.md（随 seal 签名）
+args=(--entry "$MF" --reviewer "$REVIEWER")
+[ -f .northstar/design.md ] && args+=(--design .northstar/design.md)
+[ -n "$prev" ] && args+=(--prev "$prev")
+out=$("${DIFF[@]}" --stat --patch | /opt/northstar/bin/northstar-review "${args[@]}" 2>&1); rc=$?
+[ $rc -eq 2 ] && { echo "$out" >&2; exit 2; }              # 不能评审（超长、没有结果）：不放行
+[ $rc -eq 0 ] && { rm -f "$CTR" "$LAST"; exit 0; }         # 通过：连续偏离计数清零
 
 n=$(( $(cat "$CTR" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CTR"
 reason=$(grep -m1 -A2 '^DRIFT' <<<"$out" | tail -n +2); head -n 1 <<<"$reason" > "$LAST"

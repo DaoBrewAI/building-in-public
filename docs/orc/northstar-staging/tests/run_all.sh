@@ -9,7 +9,7 @@ done
 
 rc=0
 echo "== 语法检查"
-for f in "$S"/install.sh "$S"/bin/northstar "$S"/hooks/*.sh "$S"/git/commit-msg; do
+for f in "$S"/install.sh "$S"/bin/northstar "$S"/bin/northstar-review "$S"/hooks/*.sh "$S"/git/commit-msg; do
   bash -n "$f" && echo "  ok   bash -n ${f#$S/}" || { echo "  FAIL bash -n ${f#$S/}"; rc=1; }
 done
 for f in "$S"/bin/northstar-scope "$S"/bin/northstar-status; do

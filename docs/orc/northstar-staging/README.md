@@ -6,6 +6,7 @@
 | --- | --- |
 | `bin/northstar` | CLI：init、seal、start、finish、verify、approve-mission、verify-mission |
 | `bin/northstar-scope` | 判断文件是否在当前 mission 范围内、是否触发停止条件 |
+| `bin/northstar-review` | 对齐评审的唯一入口：align.sh 和 orc 的 commit broker 都调用它。对照 NORTHSTAR、签名的设计、节点条目和 diff，回答方向和做法两个问题；diff 超长时拒绝，不截断 |
 | `bin/northstar-status` | 生成进度报告（事实由脚本算，agent 只写带引用的说明） |
 | `hooks/guard.sh` | 拦截对受保护文件的写入、签名和绕过类命令、越界写入 |
 | `hooks/align.sh` | 每次提交前由另一家模型做对齐评审，偏离就拒绝并发纠偏单 |
