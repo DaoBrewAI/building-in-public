@@ -54,6 +54,16 @@ guard "$(write_p Edit "$PWD/.northstar/NORTHSTAR.md")";  expect_rc 2 "拦截 Edi
 guard "$(write_p NotebookEdit "$PWD/.northstar/a.ipynb")"; expect_rc 2 "拦截 NotebookEdit"
 guard "$(patch_p $'*** Begin Patch\n*** Add File: .northstar/x\n+hi\n*** End Patch')"; expect_rc 2 "拦截 apply_patch 新增 .northstar/x"
 guard "$(write_p Write "$PWD/src/a.py")";   expect_rc 0 "无进行中 mission 时任意普通文件放行"
+guard "$(write_p MultiEdit "$PWD/.github/workflows/ci.yml")"; expect_rc 2 "拦截 MultiEdit .github/workflows/ci.yml"
+guard "$(patch_p $'*** Begin Patch\n*** Update File: src/a.py\n*** Move to: .northstar/x\n@@\n-a\n+b\n*** End Patch')"
+expect_rc 2 "拦截 apply_patch 把文件移到 .northstar/"
+# 只看要写的文件路径，不看内容：普通文件里提到受保护路径不拦
+guard "$(jq -nc '{tool_name:"Write",tool_input:{file_path:"src/a.py",content:"# 读取 .northstar/architecture.json\nx = 42"}}')"
+expect_rc 0 "放行：Write 普通文件，内容提到 .northstar/"
+guard "$(jq -nc '{tool_name:"Edit",tool_input:{file_path:"docs/ci.md",old_string:"a",new_string:"见 .github/workflows/ci.yml 和 status/STATUS.md"}}')"
+expect_rc 0 "放行：Edit 普通文件，内容提到受保护路径"
+guard "$(patch_p $'*** Begin Patch\n*** Update File: src/a.py\n@@\n-a\n+path = \".northstar/NORTHSTAR.md\"\n*** End Patch')"
+expect_rc 0 "放行：apply_patch 改普通文件，内容提到 .northstar/"
 
 begin "guard：mission 范围围栏与停止条件"
 new_repo; write_mission_fixture
