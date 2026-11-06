@@ -8,7 +8,8 @@ deny() { echo "NORTHSTAR 保护：$1。目标需要调整时，把提案写进 p
 # 目录名后面不要求 /：rm -rf .northstar、mv .northstar x 也要拦
 PROTECTED='\.northstar([^[:alnum:]_-]|$)|\.github/workflows([^[:alnum:]_-]|$)|/opt/northstar|allowed_signers|managed-settings|\.codex/hooks|\.claude/settings|status/status\.json|status/STATUS\.md'
 BYPASS='northstar[[:space:]]+(seal|start|finish|approve-mission)|ssh-keygen.*-Y[[:space:]]*sign|--no-verify|core\.hooksPath'
-WRITE='>|tee[[:space:]]|mv[[:space:]]|cp[[:space:]]|rm[[:space:]]|sed[[:space:]]+-i|chmod|chflags|truncate|ln[[:space:]]|python|perl|node|ruby|git[[:space:]]+(checkout|restore|reset|rm|mv)'
+# 写入类命令按“整个命令词”匹配：node_modules、platform、perlman 这类普通单词不算；/bin/rm、xargs rm 照样算
+WRITE='>|(^|[^[:alnum:]_.-])(tee|mv|cp|rm|ln|chmod|chflags|truncate|perl|node|ruby|python[0-9.]*)([[:space:]]|$)|sed[[:space:]]+-i|git[[:space:]]+(checkout|restore|reset|rm|mv)'
 tool=$(jq -r '.tool_name // empty' <<<"$payload")
 # 写文件类工具要写的路径，一行一个（apply_patch 包括 Move to 的目标）
 files="$(jq -r '.tool_input | (.file_path // empty), (.notebook_path // empty)' <<<"$payload" 2>/dev/null)
