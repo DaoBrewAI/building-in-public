@@ -104,6 +104,49 @@ expect_true '[ ! -f "$T/reviewer-calls" ]' "被拒时没有调用评审"
 align 'git commit -am "[N1] x"'
 expect_rc 0 "git commit -a 仍然正常评审"
 
+begin "评审输入：签名的设计、两个问题"
+setup_mission_repo
+echo 42 > src/core/a.py; git add src/core/a.py; verdict ALIGNED
+align
+expect_true '! grep -q "=== 签名的设计" "$T/last-prompt"' "没有 .northstar/design.md 时不带设计"
+expect_true 'grep -q "1. 方向" "$T/last-prompt" && grep -q "2. 做法" "$T/last-prompt"' "评审回答方向和做法两个问题"
+printf '# 设计\n## 3.2 匹配\n模型之前不准有按原话匹配的分支\n' > .northstar/design.md
+align
+expect_true 'grep -q "=== 签名的设计：design.md" "$T/last-prompt" && grep -q "不准有按原话匹配的分支" "$T/last-prompt"' "有 .northstar/design.md 时评审看到设计原文"
+expect_true 'grep -q "违反的是哪条 N# 或设计的哪一节" "$T/last-prompt"' "要求 DRIFT 写明违反 N# 还是设计的哪一节"
+
+begin "超长改动：拒绝，不截断"
+setup_mission_repo
+head -c 70000 /dev/zero | tr '\0' 'a' | fold -w 100 > src/core/big.txt; git add src/core/big.txt
+verdict ALIGNED
+align
+expect_rc 2 "diff 超过 60000 字节被拒"
+expect_out "超过评审上限" "提示超长"
+expect_out "拆成更小的提交" "要求拆分"
+expect_true '[ ! -f "$T/reviewer-calls" ]' "超长时不调用评审（不截断后送审）"
+expect_true '[ ! -f "$GD/northstar-drift-count" ]' "超长不算偏离"
+
+begin "northstar-review：broker 直接调用"
+setup_mission_repo
+NR="$ROOT/bin/northstar-review"
+printf 'node: n1\nfiles: src/core/a.py\n验收标准: core 返回 42\n条款: N1\n' > "$T/node.md"
+printf '# 冻结设计\nD7 节点条目\n' > "$T/approved-design.md"
+printf 'check core42: PASS\n' > "$T/checks.txt"
+verdict ALIGNED
+run_in $'+42\n' "$NR" --entry "$T/node.md" --design "$T/approved-design.md" --checks "$T/checks.txt" --reviewer claude
+expect_rc 0 "ALIGNED 退出码 0"
+expect_true 'grep -q "D7 节点条目" "$T/last-prompt" && grep -q "node: n1" "$T/last-prompt" && grep -q "check core42: PASS" "$T/last-prompt"' "评审看到设计、节点条目和检查结果"
+verdict "${DRIFT[@]}"
+run_in $'+42\n' "$NR" --entry "$T/node.md" --reviewer claude
+expect_rc 1 "DRIFT 退出码 1"
+expect_out "src/core/a.py:1" "DRIFT 输出评审原文"
+run_in $'+42\n' "$NR" --entry "$T/node.md" --reviewer gpt
+expect_rc 2 "未知评审方拒绝"
+run_in $'+42\n' "$NR" --entry "$T/missing.md" --reviewer claude
+expect_rc 2 "缺少节点条目时拒绝"
+run_in $'+42\n' "$NR" --entry "$T/node.md" --design "$T/missing.md" --reviewer claude
+expect_rc 2 "缺少设计文件时拒绝"
+
 begin "worktree：每个 worktree 单独计数"
 setup_mission_repo
 git worktree add -q "$T/wt" -b node-a 2>/dev/null
