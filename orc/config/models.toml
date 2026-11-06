@@ -1,0 +1,18 @@
+# orc/config/models.toml
+# 唯一写模型名的地方。skill、brief、脚本里只引用角色，不出现具体模型名。
+# 选"最强"而不是"最新"：新模型发布后由你判断是否更强，再手动改这里。
+# mission 开始时 orc 把这里解析出的模型记进 mission 状态，运行中的 mission 不受改动影响。
+
+[implement]                       # 写代码、修复、rework：OpenAI 当前最强
+cli     = "codex"
+model   = "gpt-6-astra"
+effort  = "high"
+
+[plan_review]                     # brainstorm、设计、计划、对齐评审、最终审查：Claude 当前最强
+cli      = "claude"
+model    = "claude-fable-5-1"
+effort   = "high"
+fallback = "claude-opus-5-5"      # 主模型额度用完或不可用时的降级
+
+# 交叉原则由角色保证：implement 是 GPT，plan_review 是 Claude。
+# 不要把两个角色配成同一家的模型。
