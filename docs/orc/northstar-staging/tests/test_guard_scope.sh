@@ -42,6 +42,15 @@ for c in 'rm -rf .northstar' 'mv .northstar /tmp/x' 'git rm -r .northstar' 'cp -
   guard "$(bash_p "$c")"; expect_rc 2 "拦截（目录本身，不带 /）：$c"
 done
 guard "$(codex_p 'echo hi > .northstar/test')"; expect_rc 2 "拦截 Codex 的写入命令"
+# .northstar 下只读：读的时候丢掉输出或合并 stderr 不算写
+for c in 'cat .northstar/NORTHSTAR.md 2>/dev/null' 'ls .northstar >/dev/null 2>&1' \
+         'grep -r N1 .northstar &>/dev/null' 'cat .northstar/NORTHSTAR.md 2>&1 | head' 'cat .northstar/x 2> /dev/null'; do
+  guard "$(bash_p "$c")"; expect_rc 0 "放行（只读）：$c"
+done
+for c in 'echo x > .northstar/a 2>/dev/null' 'cat a 2>/dev/null > .northstar/b' 'echo x >> .northstar/a 2>&1' \
+         'echo x 2>/dev/null >.northstar/a'; do
+  guard "$(bash_p "$c")"; expect_rc 2 "拦截（重定向写进 .northstar）：$c"
+done
 for c in 'cat .northstar/NORTHSTAR.md' 'ls .github/workflows' 'echo ok > src/a.py' 'git diff -- .northstar'; do
   guard "$(bash_p "$c")"; expect_rc 0 "放行：$c"
 done
