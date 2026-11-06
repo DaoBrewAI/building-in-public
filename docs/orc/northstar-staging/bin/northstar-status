@@ -17,7 +17,8 @@ base = sh(f"git log -1 --format=%H --grep='^\\[NS\\] start {mission}$'").stdout.
 if not base: sys.exit(f"找不到 [NS] start {mission} 这个 commit")
 
 # ---- 事实层 ----
-commits = [l.split(" ", 1) for l in sh(f"git log --format='%h %s' {base}..HEAD").stdout.splitlines()]
+# 只改了 status/ 的 commit（提交进度报告本身）不算：否则报告一提交，CI 重新生成的 commit 列表就多一条
+commits = [l.split(" ", 1) for l in sh(f"git log --format='%h %s' {base}..HEAD -- . ':!{OUT}'").stdout.splitlines()]
 skip = (NS + "/", OUT + "/", "drafts/", "proposals/")
 changed = [f for f in sh(f"git diff --name-only {base}..HEAD").stdout.split() if not f.startswith(skip)]
 ok = {k["id"]: sh(k["cmd"]).returncode == 0 for k in checks}

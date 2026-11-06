@@ -12,8 +12,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30   # 防止卡住的运行一直耗分钟数；检查较慢的项目按需调大
     steps:
+      # 检出 PR 本身的最新 commit，不用 GitHub 默认的合并引用：
+      # 合并引用多出一个不带 [N#] 的合并 commit，也会让进度报告里的 commit 列表对不上
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }
+        with: { fetch-depth: 0, ref: "${{ github.event.pull_request.head.sha }}" }
       # 在这里补上本项目安装依赖的步骤，否则 CI 跑不通检查
       - name: 签名校验
         env: { SIGNERS: "${{ vars.NORTHSTAR_ALLOWED_SIGNERS }}" }
