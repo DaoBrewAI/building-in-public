@@ -18,7 +18,9 @@ case "$tool" in
   Bash|shell|exec_command|local_shell)
     cmd=$(jq -r '.tool_input.command | if type=="array" then join(" ") else (. // "") end' <<<"$payload" 2>/dev/null || echo "$payload")
     grep -qE "$BYPASS" <<<"$cmd" && deny "禁止签名或绕过校验的命令"
-    grep -qE "$PROTECTED" <<<"$cmd" && grep -qE "$WRITE" <<<"$cmd" && deny "禁止用命令写入受保护文件" ;;
+    # 受保护文件只读：丢到 /dev/null、2>&1 这类重定向不算写入
+    wcmd=$(sed -E 's#(&|[0-9]*)>>?[[:space:]]*/dev/null##g; s#[0-9]*>&[0-9-]+##g' <<<"$cmd")
+    grep -qE "$PROTECTED" <<<"$cmd" && grep -qE "$WRITE" <<<"$wcmd" && deny "禁止用命令写入受保护文件" ;;
   *)  # 写文件类工具：Edit / Write / MultiEdit / NotebookEdit / apply_patch
     # 只看要写的路径，不看内容：普通文件里提到受保护路径不算；认不出路径时才退回整段匹配
     grep -qE "$PROTECTED" <<<"${files:-$payload}" && deny "禁止修改受保护文件" ;;
