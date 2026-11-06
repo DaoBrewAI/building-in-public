@@ -1,8 +1,16 @@
 name: northstar
-on: pull_request
+# 省 Actions 分钟数：只在指向 main 的 PR 上跑；同一个 PR 有新推送时取消还没跑完的旧运行。
+# 不要加 paths 过滤：这是 required check，被过滤掉时检查一直停在等待中，PR 合不进去。
+on:
+  pull_request:
+    branches: [main]
+concurrency:
+  group: northstar-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30   # 防止卡住的运行一直耗分钟数；检查较慢的项目按需调大
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }

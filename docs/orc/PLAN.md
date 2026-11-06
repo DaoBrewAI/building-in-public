@@ -61,7 +61,7 @@
 - [ ] **【你】** 逐个读 `northstar-staging/`，重点是 `install.sh` 和 `hooks/guard.sh`。
 - [ ] **【你】** `sudo bash docs/orc/northstar-staging/install.sh`。⚠️ 会覆盖 `managed-settings.json` 和 `~/.codex/hooks.json`（自动备份为 `.bak`）；原来有自定义 hook 的话，先让 Claude Code 合并进 staging 的两个 JSON。
 - [ ] **【你】** 在 Codex 里运行 `/hooks`，审核并信任四个 hook。
-- [ ] **【你，网页】** GitHub：建模板仓库（放入 `repo-template/`）；产品仓库建变量 `NORTHSTAR_ALLOWED_SIGNERS`、main 开分支保护（required check：`northstar / verify`）；建 agent 专用 fine-grained token（Contents、Pull requests 读写，Metadata 只读；**不给** Workflows、Administration、Variables、Secrets）。
+- [ ] **【你，网页】** GitHub：建模板仓库（放入 `repo-template/`）；产品仓库建变量 `NORTHSTAR_ALLOWED_SIGNERS`、main 开分支保护（required check：`northstar / verify`）；建 agent 专用 fine-grained token（Contents、Pull requests 读写，Metadata 只读；**不给** Workflows、Administration、Variables、Secrets）；产品仓库是私有的话，确认 Actions 花费上限是 $0（默认值），用完免费分钟数时 CI 停下而不是扣费。
 - [ ] **【你】** ⚠️ 先推完所有 workflow，**再** `gh auth login --with-token` 换成 agent 专用 token。
 - [ ] **【Claude Code + 你旁观】** 在测试产品仓库里验收：`northstar init`，你 `northstar seal`；让 Claude Code 和 Codex 各尝试写 `.northstar/test` 和运行 `northstar seal`，确认都被拦下；开新会话问"N1 原文是什么"，确认注入生效。
 
@@ -121,6 +121,8 @@
 - [ ] **【Claude Code】** 最终审查：全部节点集成后，`plan_review` 模型对合并后的代码做一次整体审查，对照材料是签名的设计文件、NORTHSTAR 和全部检查结果（`events.jsonl` 里的检查记录）；发现的问题按节点路由回 rework。
 - [ ] **【你】** 写隐藏考题，放在 agent 读不到的地方（私有仓库，或 GitHub secret）。不能放进 `.northstar/`：它对 agent 可读，`inject.sh` 还会把它注入会话。
 - [ ] **【Claude Code】** CI 增加隐藏考题 job：用 agent 没有的凭证（GitHub secret）取考题并运行，只回报通过或失败，不回报内容；加进 main 的 required check。
+  - 省分钟数：只在 PR 不是草稿时运行（触发事件含 `ready_for_review`），之后每次推送照常跑；设 `timeout-minutes`
+  - 不用标签触发（agent 的 token 有 PR 写权限，能自己加减标签）；不加 `paths` 过滤（required check 被过滤掉时 PR 会一直合不进去）
 - [ ] **【Claude Code】** 状态页由脚本生成：每个 DAG 节点一行，不能省略；状态和测试结果来自 `events.jsonl` 和 `orc` 自己运行的验证记录；架构图按组件着色；agent 只写说明，每条带可核对的引用（沿用 `northstar-status` 的校验规则）。发布到 Sites 的 `/status`。
 - [ ] **【Claude Code】** "完成"之前必须有最新的状态页；`orc` 在没有状态页时不会输出 `report`。
 - [ ] **【Claude Code】** 清理：对已集成的节点执行 `git worktree remove` 并删除分支，只动 `orc` 自己记录过的 worktree 和分支；先输出清单，再执行。
