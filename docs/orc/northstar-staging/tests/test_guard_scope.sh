@@ -47,8 +47,14 @@ for c in 'cat .northstar/NORTHSTAR.md 2>/dev/null' 'ls .northstar >/dev/null 2>&
          'grep -r N1 .northstar &>/dev/null' 'cat .northstar/NORTHSTAR.md 2>&1 | head' 'cat .northstar/x 2> /dev/null'; do
   guard "$(bash_p "$c")"; expect_rc 0 "放行（只读）：$c"
 done
+# 读命令里出现含 node / rm / cp 等字母的普通单词，不算写（Codex 实测：rg -g '!node_modules' 被误拦）
+for c in "rg --files -g '.northstar/**' -g '!node_modules' --hidden" 'ls platform .northstar' \
+         'grep -r perlman .northstar' 'cat .northstar/NORTHSTAR.md | wc -l'; do
+  guard "$(bash_p "$c")"; expect_rc 0 "放行（只读）：$c"
+done
 for c in 'echo x > .northstar/a 2>/dev/null' 'cat a 2>/dev/null > .northstar/b' 'echo x >> .northstar/a 2>&1' \
-         'echo x 2>/dev/null >.northstar/a'; do
+         'echo x 2>/dev/null >.northstar/a' '/bin/rm .northstar/NORTHSTAR.md' 'node -e "1" .northstar/x' \
+         'python3.11 -c "open(\".northstar/t\",\"w\")"' 'find .northstar -type f | xargs rm' 'truncate -s0 .northstar/NORTHSTAR.md'; do
   guard "$(bash_p "$c")"; expect_rc 2 "拦截（重定向写进 .northstar）：$c"
 done
 for c in 'cat .northstar/NORTHSTAR.md' 'ls .github/workflows' 'echo ok > src/a.py' 'git diff -- .northstar'; do
