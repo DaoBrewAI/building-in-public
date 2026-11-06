@@ -10,19 +10,22 @@ PROTECTED='\.northstar([^[:alnum:]_-]|$)|\.github/workflows([^[:alnum:]_-]|$)|/o
 BYPASS='northstar[[:space:]]+(seal|start|finish|approve-mission)|ssh-keygen.*-Y[[:space:]]*sign|--no-verify|core\.hooksPath'
 WRITE='>|tee[[:space:]]|mv[[:space:]]|cp[[:space:]]|rm[[:space:]]|sed[[:space:]]+-i|chmod|chflags|truncate|ln[[:space:]]|python|perl|node|ruby|git[[:space:]]+(checkout|restore|reset|rm|mv)'
 tool=$(jq -r '.tool_name // empty' <<<"$payload")
+# 写文件类工具要写的路径，一行一个（apply_patch 包括 Move to 的目标）
+files="$(jq -r '.tool_input | (.file_path // empty), (.notebook_path // empty)' <<<"$payload" 2>/dev/null)
+$(grep -oE '\*\*\* ((Add|Update|Delete) File|Move to): [^\\"]+' <<<"$payload" | sed -E 's/^\*\*\* [^:]+: //')"
+files="$(grep -v '^$' <<<"$files")"
 case "$tool" in
   Bash|shell|exec_command|local_shell)
     cmd=$(jq -r '.tool_input.command | if type=="array" then join(" ") else (. // "") end' <<<"$payload" 2>/dev/null || echo "$payload")
     grep -qE "$BYPASS" <<<"$cmd" && deny "禁止签名或绕过校验的命令"
     grep -qE "$PROTECTED" <<<"$cmd" && grep -qE "$WRITE" <<<"$cmd" && deny "禁止用命令写入受保护文件" ;;
   *)  # 写文件类工具：Edit / Write / MultiEdit / NotebookEdit / apply_patch
-    grep -qE "$PROTECTED" <<<"$payload" && deny "禁止修改受保护文件" ;;
+    # 只看要写的路径，不看内容：普通文件里提到受保护路径不算；认不出路径时才退回整段匹配
+    grep -qE "$PROTECTED" <<<"${files:-$payload}" && deny "禁止修改受保护文件" ;;
 esac
 
 # —— 范围围栏与停止条件（只对写文件类工具）——
 if [ "$tool" != Bash ] && [ -f .northstar/missions/ACTIVE ]; then
-  files="$(jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' <<<"$payload")"
-  files="$files $(grep -oE '\*\*\* (Add|Update|Delete) File: [^\\"]+' <<<"$payload" | sed 's/.*File: //')"
   msg=$(/opt/northstar/bin/northstar-scope $files 2>&1); rc=$?
   m=$(cat .northstar/missions/ACTIVE)
   if [ $rc -eq 3 ]; then
