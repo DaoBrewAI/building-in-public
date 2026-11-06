@@ -37,6 +37,10 @@ for c in 'echo hi > .northstar/test' 'tee .northstar/test' 'cp a .northstar/NORT
          'git checkout -- .northstar/NORTHSTAR.md' 'echo x > status/status.json' 'cp k /opt/northstar/allowed_signers'; do
   guard "$(bash_p "$c")"; expect_rc 2 "拦截：$c"
 done
+for c in 'rm -rf .northstar' 'mv .northstar /tmp/x' 'git rm -r .northstar' 'cp -r /tmp/evil .northstar' \
+         'chmod -R 777 .northstar' 'rm -r .github/workflows' 'mv .northstar.bak .northstar'; do
+  guard "$(bash_p "$c")"; expect_rc 2 "拦截（目录本身，不带 /）：$c"
+done
 guard "$(codex_p 'echo hi > .northstar/test')"; expect_rc 2 "拦截 Codex 的写入命令"
 for c in 'cat .northstar/NORTHSTAR.md' 'ls .github/workflows' 'echo ok > src/a.py' 'git diff -- .northstar'; do
   guard "$(bash_p "$c")"; expect_rc 0 "放行：$c"
