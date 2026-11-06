@@ -84,6 +84,8 @@
 ## 阶段 3：规划与 go
 
 - [ ] **【Claude Code】** 规划阶段：`orc` 用 `plan_review` 模型（`claude -p`）启动规划会话，产出 `design.md`、`plan.md`、`task-dag.json` 和审阅页 HTML。DAG 每个节点必须带：声明的文件、验收标准、对应的 NORTHSTAR 条款、所属组件、依赖。用复用的 `validate-task-dag.sh` 校验（含节点间文件不重叠的检查）。
+  - 外部 PRD 在规划时并入 `design.md`，随冻结文件一起签名；评审只认签名的设计。
+  - NORTHSTAR 尽量少加，只写方向；规划会话从设计里挑出少数"违反了就等于换了设计"的关键决定（例如"模型之前不准有按原话匹配的分支"），起草成 N# 约束放进 `drafts/NORTHSTAR.md`，由你 `northstar seal`。
 - [ ] **【Claude Code】** 规划中需要问你的问题，`orc` 输出 `ask-user`；你的回答经 `orc answer` 写回，再恢复同一个规划会话。
 - [ ] **【Claude Code】** 调研 OpenAI Sites 怎样从脚本发布（命令行、API，或者只能通过 Codex 发布）。写成一个独立的 `publish` 适配层，`orc` 只调用它。把调研结论写进 PR。
 - [ ] **【你】** 确认 Sites 发布方式可行；如果只能通过 Codex 发布，确认可以接受用 `codex exec` 执行固定的发布步骤。
@@ -99,21 +101,25 @@
 - [ ] **【Claude Code】** 启动子任务：每个节点一个 worktree；用 `codex exec` 在其中运行，模型和 effort 取自 mission 里记录的 `implement` 角色，沙箱为 workspace-write。brief 只给：任务、验收标准原文、声明文件、"每完成一条验收标准就发一次提交请求"。
 - [ ] **【Claude Code】** 进程监管：记录 PID、开始时间、退出码；超时按 Astra 的实际耗时设定，写进配置；崩溃按配置重试一次，再失败则节点进入 `blocked`。
 - [ ] **【Claude Code】** 子任务结果：要求子任务最后输出结构化结果（改了哪些文件、对应哪条验收标准、遗留问题），由 `orc` 按固定格式校验；校验不过视为未完成。
-- [ ] **【Claude Code】** commit broker（复用）在文件范围校验之后加对齐评审：由 `plan_review` 模型（Claude）只看 NORTHSTAR、节点 brief 和这次的 diff，判定 ALIGNED 或 DRIFT。
-  - DRIFT：拒绝，纠偏单（违反的原文、证据、验收标准原文）作为拒绝原因返回
+- [ ] **【Claude Code】** commit broker（复用）在文件范围校验之后加对齐评审：调用 `northstar-review`（和提交前 hook `align.sh` 是同一个评审入口、同样的输入），由 `plan_review` 模型（Claude）对照 NORTHSTAR、签名的 `design.md`、本节点的 DAG 条目（声明文件、验收标准、条款）和这次的 diff，回答两个问题：方向有没有偏、做法是不是照设计。任一项不符判 DRIFT。
+  - DRIFT：拒绝，纠偏单（违反的是哪条 N# 或设计的哪一节、证据、验收标准原文）作为拒绝原因返回
+  - diff 超过评审上限时不截断：拒绝并要求拆成更小的提交
   - 同一节点连续第 2 次：`orc` 把该 worktree 未提交的改动 stash 掉，回到上一次通过评审的状态，重发完整 brief 和纠偏单
   - 第 3 次：节点进入 `blocked`，`orc` 输出 `mediate`；涉及目标或范围的，升级给你
   - 评审通过一次，计数清零；评审服务出错时不放行
+- [ ] **【Claude Code】** 整体评审：节点进入 `submitted` 时，用 `northstar-review` 拿整个节点的累计 diff 对照签名的设计再评审一次；DRIFT 时节点回到 `rework`，纠偏单同上。
 - [ ] **【Claude Code】** 纠偏和 rework 尽量回到同一个 codex 会话（用 codex exec 的会话恢复功能）；不可用时新开会话，附上完整 brief 和纠偏单。
 - [ ] **【Claude Code】** 集成：复用 `integrate-task.sh`，在复用的生命周期锁内按顺序合并，不改写历史。
-- [ ] **【Claude Code】** 为以上每个分支写契约测试，包括：两个不重叠节点同时运行、重叠节点被排队、DRIFT 三次熔断、子任务超时、两个节点同时集成被锁串行化。
+- [ ] **【Claude Code】** 为以上每个分支写契约测试，包括：两个不重叠节点同时运行、重叠节点被排队、DRIFT 三次熔断、子任务超时、两个节点同时集成被锁串行化、整体评审 DRIFT 时节点回到 `rework`、超长 diff 被拒而不是截断。
 - [ ] **【你】** 审 PR。
 
 **完成标志**：上面列出的契约测试全部通过。
 
 ## 阶段 5：验收、状态页、清理
 
-- [ ] **【Claude Code】** 最终审查：全部节点集成后，`plan_review` 模型对合并后的代码做一次整体审查；发现的问题按节点路由回 rework。
+- [ ] **【Claude Code】** 最终审查：全部节点集成后，`plan_review` 模型对合并后的代码做一次整体审查，对照材料是签名的设计文件、NORTHSTAR 和全部检查结果（`events.jsonl` 里的检查记录）；发现的问题按节点路由回 rework。
+- [ ] **【你】** 写隐藏考题，放在 agent 读不到的地方（私有仓库，或 GitHub secret）。不能放进 `.northstar/`：它对 agent 可读，`inject.sh` 还会把它注入会话。
+- [ ] **【Claude Code】** CI 增加隐藏考题 job：用 agent 没有的凭证（GitHub secret）取考题并运行，只回报通过或失败，不回报内容；加进 main 的 required check。
 - [ ] **【Claude Code】** 状态页由脚本生成：每个 DAG 节点一行，不能省略；状态和测试结果来自 `events.jsonl` 和 `orc` 自己运行的验证记录；架构图按组件着色；agent 只写说明，每条带可核对的引用（沿用 `northstar-status` 的校验规则）。发布到 Sites 的 `/status`。
 - [ ] **【Claude Code】** "完成"之前必须有最新的状态页；`orc` 在没有状态页时不会输出 `report`。
 - [ ] **【Claude Code】** 清理：对已集成的节点执行 `git worktree remove` 并删除分支，只动 `orc` 自己记录过的 worktree 和分支；先输出清单，再执行。
