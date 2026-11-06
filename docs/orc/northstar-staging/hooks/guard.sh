@@ -5,7 +5,8 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -d .northstar ] || exit 0
 payload=$(cat)
 deny() { echo "NORTHSTAR 保护：$1。目标需要调整时，把提案写进 proposals/ 并停止，等待人工处理。" >&2; exit 2; }
-PROTECTED='\.northstar/|\.github/workflows/|/opt/northstar|allowed_signers|managed-settings|\.codex/hooks|\.claude/settings|status/status\.json|status/STATUS\.md'
+# 目录名后面不要求 /：rm -rf .northstar、mv .northstar x 也要拦
+PROTECTED='\.northstar([^[:alnum:]_-]|$)|\.github/workflows([^[:alnum:]_-]|$)|/opt/northstar|allowed_signers|managed-settings|\.codex/hooks|\.claude/settings|status/status\.json|status/STATUS\.md'
 BYPASS='northstar[[:space:]]+(seal|start|finish|approve-mission)|ssh-keygen.*-Y[[:space:]]*sign|--no-verify|core\.hooksPath'
 WRITE='>|tee[[:space:]]|mv[[:space:]]|cp[[:space:]]|rm[[:space:]]|sed[[:space:]]+-i|chmod|chflags|truncate|ln[[:space:]]|python|perl|node|ruby|git[[:space:]]+(checkout|restore|reset|rm|mv)'
 tool=$(jq -r '.tool_name // empty' <<<"$payload")
