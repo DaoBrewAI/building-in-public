@@ -1,0 +1,547 @@
+#!/usr/bin/env python3
+"""orc —— 新 workflow 的机械流程。判断留给 coordinator，流程全部在这里。
+
+  orc step --new "<请求>" [--repo <产品仓库>] [--name <mission 名>]
+  orc step --mission <mission>
+  orc answer [--mission <mission>] [--file <问题文件>] "<回答>"
+  orc status [--mission <mission>]
+  orc doctor [--live]
+
+状态模型见 docs/orc/STATE.md。每次 step 最后一行打印 `next: …`。
+"""
+from __future__ import annotations
+
+import argparse
+import datetime as _dt
+import hashlib
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Tuple
+
+ORC_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ORC_ROOT / "scripts"
+MODELS_TOML = Path(os.environ.get("ORC_MODELS_TOML", ORC_ROOT / "config" / "models.toml"))
+NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+
+MISSION_STATES = ["new", "planning", "plan-review", "approved", "executing",
+                  "reviewing", "accepted", "cleaned", "blocked", "failed"]
+TERMINAL = {"cleaned", "failed"}
+FORWARD = {  # 合法的状态转换（STATE.md「mission 状态」）
+    "new": {"planning"},
+    "planning": {"plan-review"},
+    "plan-review": {"approved", "planning"},
+    "approved": {"executing"},
+    "executing": {"reviewing"},
+    "reviewing": {"accepted", "executing"},
+    "accepted": {"cleaned"},
+}
+INTEGRATED_SCRIPT_STATES = {"integrated", "cleanup_pending", "collected"}
+
+
+class OrcError(Exception):
+    """可以直接告诉 coordinator 的错误：消息里写明错在哪、该怎么做。"""
+
+
+# ---------------------------------------------------------------- 小工具
+
+def now() -> str:
+    return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def orc_home() -> Path:
+    return Path(os.environ.get("ORC_HOME", Path.home() / ".orc")).expanduser()
+
+
+def write_atomic(path: Path, text: str) -> None:
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def load_lock_module():
+    spec = importlib.util.spec_from_file_location(
+        "coordinator_lifecycle_lock", SCRIPTS / "coordinator_lifecycle_lock.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    return module
+
+
+# ---------------------------------------------------------------- models.toml
+
+def parse_toml(text: str) -> Dict[str, Dict[str, str]]:
+    """Python 3.11+ 用 tomllib；更老的 Python 用这个只认「[段] + key = "字符串"」的最小解析器。"""
+    try:
+        import tomllib  # type: ignore[import-not-found]
+    except ModuleNotFoundError:
+        return parse_toml_minimal(text)
+    return tomllib.loads(text)
+
+
+def parse_toml_minimal(text: str) -> Dict[str, Dict[str, str]]:
+    data: Dict[str, Dict[str, str]] = {}
+    section: Optional[str] = None
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        m = re.fullmatch(r"\[([A-Za-z0-9_-]+)\]\s*(#.*)?", line)
+        if m:
+            section = m.group(1)
+            data.setdefault(section, {})
+            continue
+        m = re.fullmatch(r'([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"\s*(#.*)?', line)
+        if m and section is not None:
+            data[section][m.group(1)] = m.group(2)
+            continue
+        raise OrcError(f"models.toml 第 {n} 行看不懂：{raw.strip()}。只支持 [角色] 段和 key = \"字符串\"。")
+    return data
+
+
+def resolve_models(path: Path = MODELS_TOML) -> dict:
+    if not path.is_file():
+        raise OrcError(f"找不到模型配置 {path}。把 orc/config/models.toml 放回原位再运行。")
+    raw = path.read_bytes()
+    try:
+        data = parse_toml(raw.decode("utf-8"))
+    except OrcError:
+        raise
+    except Exception as error:  # tomllib 的解析错误
+        raise OrcError(f"models.toml 解析失败：{error}。按文件里的注释修正格式。") from error
+    roles = {}
+    for role, required in (("implement", ("cli", "model", "effort")),
+                           ("plan_review", ("cli", "model", "effort"))):
+        section = data.get(role)
+        if not isinstance(section, dict):
+            raise OrcError(f"models.toml 缺少 [{role}] 段。照模板补上这个角色。")
+        missing = [k for k in required if not section.get(k)]
+        if missing:
+            raise OrcError(f"models.toml 的 [{role}] 缺少 {', '.join(missing)}。")
+        roles[role] = {k: str(v) for k, v in section.items()}
+    if roles["implement"]["cli"] == roles["plan_review"]["cli"]:
+        raise OrcError("models.toml 里 implement 和 plan_review 用了同一个 CLI。交叉评审要求两家不同：implement 用 codex，plan_review 用 claude。")
+    return {"source": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
+            "resolved_at": now(), "roles": roles}
+
+
+# ---------------------------------------------------------------- mission
+
+class Mission:
+    def __init__(self, name: str):
+        if not NAME_RE.match(name):
+            raise OrcError(f"mission 名「{name}」不合法：只能用小写字母、数字和 -，以字母或数字开头，最长 64 个字符。")
+        self.name = name
+        self.dir = orc_home() / "missions" / name
+        self.control = self.dir / "control"
+        self.events_path = self.dir / "events.jsonl"
+        self.state_path = self.dir / "state"
+        self._lock_fd: Optional[int] = None
+        self._lock_module = None
+
+    def exists(self) -> bool:
+        return self.events_path.is_file()
+
+    # -- 锁：和 commit broker、integrate-task 共用 control/ 下的生命周期锁
+    def __enter__(self) -> "Mission":
+        if not self.exists():
+            raise OrcError(f"没有名为「{self.name}」的 mission。用 orc status 看现有的 mission，或用 orc step --new \"<请求>\" 新建。")
+        self._lock_module = load_lock_module()
+        control = Path(os.path.realpath(self.control))
+        try:
+            self._lock_fd = self._lock_module.acquire_lifecycle_lock(control)
+        except self._lock_module.LifecycleLockError as error:
+            raise OrcError(f"拿不到 mission 的生命周期锁（{error}）。检查 {self.control} 是否被改成了符号链接或权限过宽。") from error
+        self.reconcile()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        if self._lock_fd is not None:
+            self._lock_module.release_lifecycle_lock(self._lock_fd)
+            self._lock_fd = None
+
+    # -- 事件日志：状态的唯一来源
+    def events(self) -> List[dict]:
+        out = []
+        if self.events_path.is_file():
+            for n, line in enumerate(self.events_path.read_text(encoding="utf-8").splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError as error:
+                    raise OrcError(f"{self.events_path} 第 {n} 行不是合法 JSON（{error}）。这个文件只能追加，不要手改；把那一行恢复原样。") from error
+        return out
+
+    def append(self, kind: str, by: str, **fields) -> dict:
+        event = {"ts": now(), "mission": self.name, "kind": kind, "by": by, **fields}
+        with open(self.events_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        return event
+
+    def state_from_events(self) -> str:
+        state = "new"
+        for e in self.events():
+            if e.get("kind") == "state":
+                state = e["to"]
+        return state
+
+    def reconcile(self) -> str:
+        """state 文件只是缓存：和日志不一致时（比如中断在写日志和写 state 之间）按日志补齐。"""
+        state = self.state_from_events()
+        cached = self.state_path.read_text().strip() if self.state_path.is_file() else None
+        if cached != state:
+            write_atomic(self.state_path, state + "\n")
+        return state
+
+    @property
+    def state(self) -> str:
+        return self.state_from_events()
+
+    def transition(self, to: str, by: str, reason: Optional[str] = None) -> None:
+        current = self.state
+        legal = (to in FORWARD.get(current, set())
+                 or (to in {"blocked", "failed"} and current not in TERMINAL | {"blocked"})
+                 or (current == "blocked" and to == self.blocked_from()))
+        if not legal:
+            raise OrcError(f"不允许从 {current} 转到 {to}（见 docs/orc/STATE.md 的状态表）。这是 orc 的 bug，不要手改状态；把这条消息告诉用户。")
+        fields = {"from": current, "to": to}
+        if reason:
+            fields["reason"] = reason
+        self.append("state", by, **fields)       # 先写日志
+        write_atomic(self.state_path, to + "\n")  # 再更新缓存；中断在中间时下次 reconcile 补齐
+
+    def blocked_from(self) -> Optional[str]:
+        last = None
+        for e in self.events():
+            if e.get("kind") == "state" and e.get("to") == "blocked":
+                last = e.get("from")
+        return last
+
+    # -- 问答
+    def open_questions(self) -> List[Path]:
+        qdir, adir = self.dir / "questions", self.dir / "answers"
+        if not qdir.is_dir():
+            return []
+        return sorted(q for q in qdir.glob("*.md") if not (adir / q.name).exists())
+
+    def ask(self, text: str, kind: str, by: str) -> Path:
+        qdir = self.dir / "questions"
+        qdir.mkdir(exist_ok=True)
+        n = len(list(qdir.glob("*.md"))) + 1
+        path = qdir / f"{n:03d}.md"
+        write_atomic(path, text.rstrip() + "\n")
+        self.append("ask", by, id=path.stem, type=kind, file=str(path))
+        return path
+
+    # -- 节点状态：从复用脚本的协议文件推出来，不单独存（STATE.md「节点状态」）
+    def node_states(self) -> Dict[str, str]:
+        dag = self.control / "approved-task-dag.json"
+        if not dag.is_file():
+            return {}
+        try:
+            ids = [t["id"] for t in json.loads(dag.read_text())["tasks"]]
+        except (ValueError, KeyError, TypeError) as error:
+            raise OrcError(f"{dag} 读不出节点列表（{error}）。冻结文件被改坏了，停下来告诉用户。") from error
+        return {node: self.node_state(node) for node in ids}
+
+    def node_state(self, node: str) -> str:
+        ctl, work = self.control / "tasks" / node, self.dir / "nodes" / node
+        if not ctl.is_dir():
+            return "pending"
+        read = lambda p: p.read_text().strip() if p.is_file() else ""
+        if (ctl / "blocked").exists():
+            return "blocked"
+        if (ctl / "unresolved-rework").exists():
+            return "rework"
+        if read(ctl / "state") in INTEGRATED_SCRIPT_STATES:
+            return "integrated"
+        if read(work / "state") == "completed":
+            return "submitted"
+        return "running"
+
+
+def create_mission(request: str, repo: Optional[str], name: Optional[str]) -> Mission:
+    if not request.strip():
+        raise OrcError("请求是空的。用 orc step --new \"<用户的原话>\" 新建 mission。")
+    repo_path = Path(repo or os.getcwd()).expanduser()
+    top = subprocess.run(["git", "-C", str(repo_path), "rev-parse", "--show-toplevel"],
+                         capture_output=True, text=True)
+    if top.returncode != 0:
+        raise OrcError(f"{repo_path} 不是 git 仓库。在产品仓库里运行，或用 --repo <产品仓库路径> 指定。")
+    repo_real = os.path.realpath(top.stdout.strip())
+    models = resolve_models()
+    if name is None:
+        words = re.findall(r"[a-z0-9]+", request.lower())
+        slug = "-".join(words[:4])[:40].strip("-") or "mission"
+        name = f"{_dt.datetime.now():%Y%m%d-%H%M%S}-{slug}"
+    mission = Mission(name)
+    if mission.dir.exists():
+        raise OrcError(f"mission「{name}」已经存在。继续它用 orc step --mission {name}；新建就换一个 --name。")
+    for sub in ("", "control", "control/tasks", "nodes", "questions", "answers", "plan"):
+        (mission.dir / sub).mkdir(parents=True, exist_ok=sub != "")
+    write_atomic(mission.dir / "request.md", request.rstrip() + "\n")
+    write_atomic(mission.dir / "repo", repo_real + "\n")
+    models_text = json.dumps(models, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    write_atomic(mission.dir / "models.json", models_text)
+    mission.append("created", "orc step", request=request, repo=repo_real,
+                   models=hashlib.sha256(models_text.encode()).hexdigest())
+    write_atomic(mission.state_path, "new\n")
+    return mission
+
+
+# ---------------------------------------------------------------- step：每个状态的一段机械流程
+
+Next = str
+Handler = Callable[[Mission], Tuple[Optional[Next], bool]]   # (next 行, 是否继续执行下一个状态)
+
+
+def h_new(m: Mission):
+    m.transition("planning", "orc step")
+    print(f"mission {m.name}：new → planning")
+    return None, True
+
+
+def h_planning(m: Mission):
+    return (f"error 规划会话还没有实现（PLAN 阶段 3）。mission {m.name} 停在 planning，"
+            f"阶段 3 完成后运行 orc step --mission {m.name} 即可接上。", False)
+
+
+def not_yet(phase: str) -> Handler:
+    def handler(m: Mission):
+        return (f"error {m.state} 阶段的流程还没有实现（PLAN {phase}）。mission {m.name} 停在 {m.state}，"
+                f"实现后运行 orc step --mission {m.name} 即可接上。", False)
+    return handler
+
+
+def h_blocked(m: Mission):
+    pending = m.open_questions()
+    if pending:
+        return f"ask-user {pending[0].read_text().strip()}", False
+    back = m.blocked_from()
+    m.transition(back, "orc step", reason="用户已回答")
+    print(f"mission {m.name}：blocked → {back}")
+    return None, True
+
+
+def h_terminal(m: Mission):
+    if m.state == "failed":
+        last = [e for e in m.events() if e.get("kind") == "state"][-1]
+        return f"error mission {m.name} 已失败：{last.get('reason', '原因见 events.jsonl')}。不要手动续跑，把原因告诉用户。", False
+    return f"error mission {m.name} 已完成清理，没有可做的步骤。新任务用 orc step --new。", False
+
+
+HANDLERS: Dict[str, Handler] = {
+    "new": h_new,
+    "planning": h_planning,
+    "plan-review": not_yet("阶段 3"),
+    "approved": not_yet("阶段 4"),
+    "executing": not_yet("阶段 4"),
+    "reviewing": not_yet("阶段 5"),
+    "accepted": not_yet("阶段 5"),
+    "blocked": h_blocked,
+    "cleaned": h_terminal,
+    "failed": h_terminal,
+}
+
+
+def step(mission: Mission) -> Next:
+    with mission:
+        for _ in range(len(MISSION_STATES) + 1):   # 一次 step 可以连过几个不需要等待的状态
+            nxt, cont = HANDLERS[mission.state](mission)
+            if not cont:
+                return nxt or "wait"
+        return "error orc step 在一次运行里转了太多次状态。这是 orc 的 bug，把 events.jsonl 给用户看。"
+
+
+# ---------------------------------------------------------------- 命令
+
+def cmd_step(args) -> int:
+    if bool(args.new) == bool(args.mission):
+        raise OrcError("orc step 需要 --new \"<请求>\" 或 --mission <mission> 其中之一。")
+    mission = create_mission(args.new, args.repo, args.name) if args.new else Mission(args.mission)
+    if args.new:
+        print(f"已新建 mission {mission.name}（{mission.dir}）")
+    nxt = step(mission)
+    print(f"next: {nxt}")
+    return 1 if nxt.startswith("error ") else 0
+
+
+def all_missions() -> List[Mission]:
+    root = orc_home() / "missions"
+    if not root.is_dir():
+        return []
+    return [Mission(p.name) for p in sorted(root.iterdir()) if NAME_RE.match(p.name) and (p / "events.jsonl").is_file()]
+
+
+def cmd_answer(args) -> int:
+    if args.mission:
+        mission = Mission(args.mission)
+    else:
+        waiting = [m for m in all_missions() if m.open_questions()]
+        if not waiting:
+            raise OrcError("没有等待回答的问题。用 orc status 看各 mission 的状态。")
+        if len(waiting) > 1:
+            raise OrcError("有多个 mission 在等回答：" + "、".join(m.name for m in waiting) + "。用 --mission 指定。")
+        mission = waiting[0]
+    with mission:
+        pending = mission.open_questions()
+        if args.file:
+            target = Path(args.file).resolve()
+            matched = [q for q in pending if q.resolve() == target]
+            if not matched:
+                raise OrcError(f"{args.file} 不是 mission {mission.name} 里等待回答的问题。待回答的有：" + ("、".join(str(q) for q in pending) or "无"))
+            question = matched[0]
+        elif len(pending) == 1:
+            question = pending[0]
+        elif not pending:
+            raise OrcError(f"mission {mission.name} 没有等待回答的问题。")
+        else:
+            raise OrcError("有多个待回答的问题，用 --file 指定是哪一个：" + "、".join(str(q) for q in pending))
+        if not args.text.strip():
+            raise OrcError("回答是空的。把用户的原话写进引号里。")
+        answer = mission.dir / "answers" / question.name
+        write_atomic(answer, args.text.rstrip() + "\n")
+        mission.append("answer", "orc answer", id=question.stem, file=str(answer))
+    print(f"已写回 {answer}")
+    print(f"next: 运行 orc step --mission {mission.name}")
+    return 0
+
+
+def cmd_status(args) -> int:
+    missions = [Mission(args.mission)] if args.mission else all_missions()
+    if args.mission and not missions[0].exists():
+        raise OrcError(f"没有名为「{args.mission}」的 mission。")
+    if not missions:
+        print(f"还没有 mission（{orc_home() / 'missions'}）。")
+        return 0
+    for m in missions:
+        events = m.events()
+        created = next((e for e in events if e.get("kind") == "created"), {})
+        print(f"{m.name}  {m.state}  创建于 {created.get('ts', '?')}  仓库 {created.get('repo', '?')}")
+        if args.mission:
+            models = json.loads((m.dir / "models.json").read_text())["roles"]
+            print("  模型：" + "，".join(f"{r}={v['model']}" for r, v in models.items()))
+            nodes = m.node_states()
+            print("  节点：" + ("，".join(f"{k}={v}" for k, v in nodes.items()) if nodes else "（还没有冻结的 DAG）"))
+            for q in m.open_questions():
+                print(f"  待回答：{q}")
+            print("  最近事件：")
+            for e in events[-5:]:
+                detail = {k: v for k, v in e.items() if k not in ("ts", "mission", "kind", "by")}
+                print(f"    {e['ts']}  {e['kind']}  {json.dumps(detail, ensure_ascii=False)}")
+    return 0
+
+
+# ---------------------------------------------------------------- doctor
+
+def cmd_doctor(args) -> int:
+    ns_root = Path(os.environ.get("ORC_NORTHSTAR_ROOT", "/opt/northstar"))
+    managed = Path(os.environ.get("ORC_CLAUDE_MANAGED_SETTINGS",
+                                  "/Library/Application Support/ClaudeCode/managed-settings.json"))
+    codex_hooks = Path(os.environ.get("ORC_CODEX_HOOKS", Path.home() / ".codex" / "hooks.json"))
+    results: List[Tuple[str, str, str]] = []   # (级别, 检查项, 说明)
+
+    def check(name: str, ok: bool, fix: str, level_if_bad: str = "FAIL") -> None:
+        results.append(("ok" if ok else level_if_bad, name, "" if ok else fix))
+
+    # 1. 信任层
+    check("信任层：northstar 命令", os.access(ns_root / "bin" / "northstar", os.X_OK),
+          f"{ns_root}/bin/northstar 不存在或不可执行 → 让用户运行 sudo bash docs/orc/northstar-staging/install.sh")
+    hooks_ok = all((ns_root / "hooks" / h).is_file() for h in ("guard.sh", "align.sh", "inject.sh", "stop-gate.sh"))
+    check("信任层：四个 hook 脚本", hooks_ok, f"{ns_root}/hooks 下缺少 hook → 重新运行 install.sh")
+    text = lambda p: p.read_text(errors="replace") if p.is_file() else ""
+    check("信任层：Claude Code 已注册 hook", "guard.sh" in text(managed),
+          f"{managed} 里没有 guard.sh → 重新运行 install.sh")
+    check("信任层：Codex 已注册 hook", "guard.sh" in text(codex_hooks),
+          f"{codex_hooks} 里没有 guard.sh → 重新运行 install.sh，再在 Codex 里用 /hooks 信任")
+    hooks_path = subprocess.run(["git", "config", "--global", "--get", "core.hooksPath"],
+                                capture_output=True, text=True).stdout.strip()
+    check("信任层：git 全局 hook 目录", hooks_path == str(ns_root / "git"),
+          f"core.hooksPath 是「{hooks_path or '未设置'}」，应为 {ns_root / 'git'} → 重新运行 install.sh")
+
+    # 2. 模型配置
+    try:
+        models = resolve_models()
+        check("模型配置：models.toml", True, "")
+    except OrcError as error:
+        models = None
+        check("模型配置：models.toml", False, str(error))
+
+    # 3. 命令
+    for cmd in ("git", "jq", "codex", "claude"):
+        check(f"命令：{cmd}", shutil.which(cmd) is not None, f"PATH 里找不到 {cmd} → 安装后再运行 orc doctor")
+
+    # 4. 模型可用（会消耗额度，只在 --live 时实测）
+    if models and args.live:
+        for role, cfg in models["roles"].items():
+            if cfg["cli"] == "codex":
+                argv = ["codex", "exec", "--skip-git-repo-check", "-m", cfg["model"], "只回复 ok"]
+            else:
+                argv = ["claude", "-p", "--model", cfg["model"], "只回复 ok"]
+            try:
+                run = subprocess.run(argv, capture_output=True, text=True, timeout=180)
+                ok = run.returncode == 0 and "ok" in run.stdout.lower()
+                detail = (run.stderr or run.stdout).strip().splitlines()[-1:] or ["无输出"]
+            except (OSError, subprocess.TimeoutExpired) as error:
+                ok, detail = False, [str(error)]
+            check(f"模型可用：{role}（{cfg['model']}）", ok,
+                  f"{' '.join(argv[:-1])} 没有返回 ok（{detail[0][:160]}）→ 检查登录、代理和额度")
+    elif models:
+        results.append(("skip", "模型可用", "没有实测（会消耗额度）→ 需要时运行 orc doctor --live"))
+
+    # 5. Sites 发布：publish 适配层在阶段 3 实现
+    results.append(("warn", "Sites 发布", "publish 适配层还没有实现（PLAN 阶段 3）"))
+
+    width = max(len(r[1]) for r in results)
+    for level, name, note in results:
+        print(f"{level:>4}  {name.ljust(width)}  {note}".rstrip())
+    failed = sum(1 for r in results if r[0] == "FAIL")
+    print(f"\n{'有 ' + str(failed) + ' 项未通过' if failed else '全部通过'}（warn、skip 不算失败）")
+    return 1 if failed else 0
+
+
+# ---------------------------------------------------------------- 入口
+
+def main(argv: Optional[List[str]] = None) -> int:
+    parser = argparse.ArgumentParser(prog="orc", description=__doc__.split("\n")[0])
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("step", help="执行当前状态的一段机械流程，打印 next:")
+    p.add_argument("--new", metavar="请求")
+    p.add_argument("--mission")
+    p.add_argument("--repo", help="产品仓库（默认当前目录所在的 git 仓库）")
+    p.add_argument("--name", help="mission 名（默认按时间和请求生成）")
+    p.set_defaults(func=cmd_step)
+    p = sub.add_parser("answer", help="把用户或 coordinator 的回答写回")
+    p.add_argument("text")
+    p.add_argument("--mission")
+    p.add_argument("--file")
+    p.set_defaults(func=cmd_answer)
+    p = sub.add_parser("status", help="查看 mission 状态")
+    p.add_argument("--mission")
+    p.set_defaults(func=cmd_status)
+    p = sub.add_parser("doctor", help="检查信任层、模型配置和依赖")
+    p.add_argument("--live", action="store_true", help="实际调用一次每个模型（消耗额度）")
+    p.set_defaults(func=cmd_doctor)
+    args = parser.parse_args(argv)
+    try:
+        return args.func(args)
+    except OrcError as error:
+        if args.command == "step":
+            print(f"next: error {error}")
+        else:
+            print(f"orc {args.command}：{error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
