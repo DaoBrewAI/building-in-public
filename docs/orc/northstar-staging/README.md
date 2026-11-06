@@ -17,5 +17,6 @@
 | `install.sh` | 安装脚本（只能由你用 sudo 执行） |
 | `repo-template/` | 产品仓库要带的 CI workflow、状态脚本、AGENTS.md、CLAUDE.md |
 | `tests/` | 功能测试：`bash tests/run_all.sh`。在临时目录里用临时密钥和临时 ssh-agent 运行，不需要 sudo，不碰 `/opt/northstar`、Secretive 和你的 git 全局配置 |
+| `tests/sandbox.sh` | 安装前自己动手试：搭一个已签名、mission 进行中的临时仓库，进入子 shell，用 `agent-write` / `agent-bash` / `agent-stop` 看 hook 拦不拦。隔离方式同上，`exit` 后全部删除 |
 
 安装前需要把 Secretive 的公钥保存为本目录下的 `northstar_signing.pub`；`allowed_signers` 会由 install.sh 自动生成。
