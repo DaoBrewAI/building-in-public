@@ -4,7 +4,8 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 [ -d .northstar ] || exit 0
 cat >/dev/null
 notify() { osascript -e "display notification \"$1\" with title \"NORTHSTAR\"" 2>/dev/null || true; }
-CNT="$(git rev-parse --git-dir)/northstar-stop-count"
+GD="$(git rev-parse --git-dir)"; CNT="$GD/northstar-stop-count"
+LOG="$GD/northstar-checks.log"   # 每个 worktree 一份，并行运行时互不覆盖
 
 # 1. 签名：不一致就让 agent 停下并通知你，不让它自己修
 if ! /opt/northstar/bin/northstar verify >/dev/null 2>&1; then
@@ -24,11 +25,11 @@ if [ -f .northstar/missions/ACTIVE ]; then
 fi
 # 4. 验收检查 + 进度报告
 ok=1
-if [ -f .northstar/checks/run_all.sh ]; then bash .northstar/checks/run_all.sh >/tmp/ns-checks.log 2>&1 || ok=0; else : >/tmp/ns-checks.log; fi
-/opt/northstar/bin/northstar-status >>/tmp/ns-checks.log 2>&1 || ok=0
+if [ -f .northstar/checks/run_all.sh ]; then bash .northstar/checks/run_all.sh >"$LOG" 2>&1 || ok=0; else : >"$LOG"; fi
+/opt/northstar/bin/northstar-status >>"$LOG" 2>&1 || ok=0
 if [ $ok -eq 1 ]; then rm -f "$CNT"; exit 0; fi
 n=$(( $(cat "$CNT" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$CNT"
 if [ "$n" -ge 5 ]; then rm -f "$CNT"; notify "验收检查连续 5 次未通过，需要你介入"; exit 0; fi
 echo "NORTHSTAR 验收检查或进度报告未通过（第 $n 次），修复后再结束：" >&2
-tail -n 40 /tmp/ns-checks.log >&2
+tail -n 40 "$LOG" >&2
 exit 2

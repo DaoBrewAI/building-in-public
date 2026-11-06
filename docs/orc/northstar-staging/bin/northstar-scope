@@ -10,7 +10,7 @@ except FileNotFoundError:
     sys.exit(0)                                   # 没有进行中的 mission，不设围栏
 text = open(f"{NS}/missions/{m}.md").read()
 def field(k):
-    h = re.search(rf"^{k}:\s*(.+)$", text, re.M)
+    h = re.search(rf"^{k}:[ \t]*(.*)$", text, re.M)   # 不能用 \s*：值为空时会吞掉下一行
     return [s.strip() for s in h.group(1).split("#")[0].split(",") if s.strip()] if h else []
 files = [os.path.relpath(os.path.abspath(p), root) for p in sys.argv[1:] if p]
 stop = [f for f in files if any(fnmatch.fnmatch(f, g) for g in field("forbid"))]

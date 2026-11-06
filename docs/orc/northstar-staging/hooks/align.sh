@@ -5,6 +5,8 @@ cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 payload=$(cat)
 cmd=$(jq -r '.tool_input.command | if type=="array" then join(" ") else (. // "") end' <<<"$payload" 2>/dev/null)
 grep -qE 'git[[:space:]]+commit' <<<"$cmd" || exit 0
+# hook 在命令执行前运行：同一条命令里的 git add 还没生效，评审会看不到真正要提交的内容
+grep -qE 'git[[:space:]]+add' <<<"$cmd" && { echo "NORTHSTAR：把 git add 和 git commit 分成两条命令运行：先 git add，再单独 git commit，对齐评审才能看到要提交的内容。" >&2; exit 2; }
 
 MAXF=8                                    # 小步提交：一次最多几个文件
 # 交叉评审：Claude Code 写的交给 Codex 审，Codex 写的交给 Claude 审

@@ -44,12 +44,14 @@ case "${1:-}" in
     seal ;;
   start)    # 你：启动 mission，草稿必须已在 drafts/missions/<名字>.md
     [ -n "${2:-}" ] || { echo "用法：northstar start <名字>"; exit 1; }
+    interactive   # 先确认是终端，再动任何文件（否则非交互调用会先清零偏离计数）
     [ -f "$DR/missions/$2.md" ] || [ -f "$NS/missions/$2.md" ] \
       || { echo "先让 agent 起草 $DR/missions/$2.md" >&2; exit 1; }
     mkdir -p "$DR/missions"; echo "$2" > "$DR/missions/ACTIVE"
     GD=$(git rev-parse --git-dir); rm -f "$GD/northstar-drift-count" "$GD/northstar-drift-last"
     seal ;;
   finish)   # 你：先看进度报告，再归档当前 mission
+    interactive   # 先确认是终端，再动任何文件（否则非交互调用会先归档 mission）
     if [ -f "$NS/architecture.json" ]; then
       "$ROOT/bin/northstar-status" || { echo "进度报告未通过校验，先让 agent 修正" >&2; exit 1; }
       open status/STATUS.md 2>/dev/null || cat status/STATUS.md
