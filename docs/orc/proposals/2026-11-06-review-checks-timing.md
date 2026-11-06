@@ -1,5 +1,13 @@
 # 提案：评审前先跑检查，放在哪个时点
 
+## 决定（林翰，2026-11-06）
+
+- 第 2 条选 **A**，已写进 PLAN 阶段 4（broker 评审步骤、整体评审步骤、契约测试）。
+- 受保护路径（`.github/workflows/`、`allowed_signers`、`managed-settings.json`、`status/STATUS.md` 等）**继续只读**。
+- 隐藏考题**暂定只在 CI 跑**（Claude Code 的建议，等林翰确认）：broker 跑在本机，考题在本机磁盘上时 coordinator 能读到；按 Codex 文档，它的 workspace-write 沙箱只限制写和联网、不限制读，并行的 Codex 子任务也可能读到，独立检查就失效了。Codex 沙箱能否读工作区外的文件，在阶段 1 验收时实测确认。
+
+以下是提案原文。
+
 来源：FinTelli orchestrator-9 会话转来的评审设计第 2 条（林翰已确认方向）：
 
 > broker 先跑本节点的验收检查和测试，结果写进 events.jsonl。不通过就直接拒绝，不调用模型；通过后再把检查结果连同 diff 交给模型评审。
