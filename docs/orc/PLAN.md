@@ -105,7 +105,7 @@
 ## 阶段 4：并行执行
 
 - [ ] **【Claude Code】** 调度：就绪条件是前置节点都已 `integrated`、声明文件不和任何运行中的节点重叠、未超过并发上限。每次有节点集成后重新计算。
-- [ ] **【Claude Code】** 启动子任务：每个节点一个 worktree；用 `claude -p` 在其中运行，模型和 effort 取自 mission 里记录的 `implement` 角色。会话设置：`sandbox.enabled`、`failIfUnavailable`、`allowUnsandboxedCommands:false`、`filesystem.denyWrite` 主仓库 `.git`（git 只读，提交必须走 broker）、网络按需放行；Edit / Write 用权限规则限制在自己的 worktree 里（先实测，见提案）；环境变量 `ORC_ROLE=implement`、`ORC_NODE=<node>`。brief 只给：任务、验收标准原文、声明文件、"每完成一条验收标准就发一次提交请求"。worktree 里放入冻结的验收测试（`control/approved-tests/`，执行会话可读不可改）。
+- [ ] **【Claude Code】** 启动子任务：每个节点一个 worktree；用 `claude -p` 在其中运行，模型和 effort 取自 mission 里记录的 `implement` 角色。会话设置：`sandbox.enabled`、`failIfUnavailable`、`allowUnsandboxedCommands:false`、`filesystem.denyWrite` 主仓库 `.git`（git 只读，提交必须走 broker）、网络按需放行；Edit / Write 用权限规则限制在自己的 worktree 里（先实测，见提案）；环境变量 `ORC_ROLE=implement`、`ORC_NODE=<node>`（信任层的 Stop hook 据此跳过「未提交的改动」和验收检查两条，见 `proposals/2026-11-07-stop-gate-implement.md`）。brief 只给：任务、验收标准原文、声明文件、"每完成一条验收标准就发一次提交请求"。worktree 里放入冻结的验收测试（`control/approved-tests/`，执行会话可读不可改）。
 - [ ] **【Claude Code】** 进程监管：记录 PID、开始时间、退出码；超时按 Astra 的实际耗时设定，写进配置；崩溃按配置重试一次，再失败则节点进入 `blocked`。
 - [ ] **【Claude Code】** 子任务结果：要求子任务最后输出结构化结果（改了哪些文件、对应哪条验收标准、遗留问题），由 `orc` 按固定格式校验；校验不过视为未完成。
 - [ ] **【Claude Code】** 提交关口（2026-11-07 改，见 `proposals/2026-11-07-commit-gate.md`；在锁外运行，通过后才写提交请求交给复用的 commit broker，评审过的改动用 `diff_sha256` 绑定）：文件范围校验之后做对齐评审：调用 `northstar-review`（和提交前 hook `align.sh` 是同一个评审入口、同样的输入），按评审分级选模型（上一次 DRIFT 后的复审、改动超过 `deep_review_over_lines` 行用 `review`，其余用 `review_light`；`review` 不可用时不降级，节点进入 `blocked` 问用户），对照 NORTHSTAR、签名的 `design.md`、本节点的 DAG 条目（声明文件、验收标准、条款）和这次的 diff，回答两个问题：方向有没有偏、做法是不是照设计。任一项不符判 DRIFT。
