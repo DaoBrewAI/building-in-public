@@ -98,6 +98,12 @@ pending → running → submitted → integrated
 | `ask` | `id`、`type`（ask-user / mediate）、`file` |
 | `answer` | `id`、`file` |
 | `error` | `message` |
+| `planner-start` | `run`（第几次运行）、`session`、`pid`、`mode`（new / resume）、`delivers`（这次发给会话的回答、意见 id） |
+| `planner-exit` | `run`、`rc`、`outcome`（question / invalid / ready / failed）、`problems`（可选） |
+| `plan-ready` | `files`（文件名 → sha256） |
+| `feedback` | `id`、`text`：用户审阅后的修改意见 |
+| `published` | `route`、`url`、`sha256` |
+| `frozen` | `files`（冻结文件名 → sha256） |
 
 状态页和排查都只读这个文件。
 
@@ -115,10 +121,56 @@ pending → running → submitted → integrated
 
 之后 orc 只读 `models.json`，不再读 `models.toml`；改 `models.toml` 只影响新 mission。
 
+## 规划与 go（阶段 3）
+
+**规划会话**：`plan` 角色，`claude -p` 在后台运行。
+
+- **工作目录**：`~/.orc-worktrees/<mission>/plan-work/`，不在 `$ORC_HOME` 里，因为 guard 不让 agent 写 `$ORC_HOME`。
+- **可读**：用 `--add-dir` 加入产品仓库，规划会话能读代码。
+- **可写**：Write / Edit 只放行 `plan-work/`。Bash 在沙箱里跑，只能写 `plan-work/` 和临时目录。
+- **记录**：会话 id、pid 和每次运行的序号写进 `planner-start` 事件。包装脚本在会话结束时写 `.runs/<n>.rc`。
+- **判断状态**：有 rc 文件，就是“结束了”；没有 rc 文件但进程还在，就是“在运行”；没有 rc 文件、进程也不在，就是“丢了”，按失败处理。拿不准时一律当它还在运行，不重复启动。
+
+**规划会话的产出**写在 `plan-work/` 下：
+
+| 文件 | 内容 |
+| --- | --- |
+| `design.md` | 设计，外部 PRD 也并进来 |
+| `plan.md` | 计划 |
+| `task-dag.json` | `validate-task-dag.sh` 的格式。每个节点另外要有：`acceptance`（验收标准列表）、`clauses`（对应的 N# 列表；产品仓库有 NORTHSTAR 时不能为空）、`component`（所属组件）。`mission` 字段必须等于 mission 名，`state` 必须是 `ready` |
+| `northstar-constraints.md` | 可选：从设计里挑出的少数关键决定，写成 N# 约束 |
+| `QUESTION.md` | 规划需要问用户时只写这一个文件，然后结束本次运行 |
+
+**每次规划会话结束后，orc 做的事**（写 `planner-exit` 事件）：
+
+- **有 `QUESTION.md`**：调用 `block(ask-user)`。用户用 `orc answer` 回答后，orc 用 `claude --resume <同一个会话>` 把回答发回规划会话。
+- **产出校验不通过**：把问题发回同一个会话让它修，最多修 2 次；还不通过，就 `block(mediate)`，交给 coordinator 裁决。
+- **通过**：把产出复制进 mission 的 `plan/`，写 `plan-ready` 事件，状态进入 `plan-review`。
+
+**`plan-review`**：
+
+1. orc 用 `plan/` 生成审阅页 HTML，交给发布适配层，发布到 Sites 的 `/plan`。
+2. 发布成功后写 `published` 事件，发布回执记在 `publish.json`。回执里的哈希和当前页面一致时，不重复发布。
+3. 输出 `next: go-gate <链接>`。
+4. 发布失败时输出 `next: error`。**不能拿本地文件代替链接去要 go。**
+
+**go 之前的两条路**：
+
+- `orc revise "<意见>"`：只能在 go 之前用。写 `feedback` 事件，状态回到 `planning`，orc 把意见发回同一个规划会话。
+- `orc go`：用户说 go 之后由 coordinator 运行。orc 依次做这些事：
+  1. 写 `control/approved-design.md`、`approved-plan.md`、`brief-exec.md` 和 `approved.sha256`。
+  2. 调用 `validate-task-dag.sh --freeze`，把 DAG 冻结成第 4 个文件。
+  3. 写 `frozen` 事件。
+  4. 如果规划产出了 N# 约束，而且产品仓库有 `.northstar/`，就把约束追加到产品仓库的 `drafts/NORTHSTAR.md`，等用户 `northstar seal`。
+  5. 输出 `next: sign <control 目录>`。
+
+**签名**：用户在自己的终端运行 `northstar approve-mission <control 目录>`，按 Touch ID。之后 `orc step` 先跑 `northstar verify-mission`，再跑 `verify-approved-authority.py`，两项都通过才进入 `approved`。没签名时一直是 `next: sign …`；签名无效时输出 `next: error`，状态停在 `plan-review`。
+
 ## `orc step` 的约定
 
 - 每次运行：拿锁 → 对齐 `state` 与日志 → 执行当前状态的一段机械流程 → 写日志和状态 → 放锁 → 最后一行打印 `next: …`。
 - **可以重复运行**：同一状态下重复运行，输出相同，不追加重复事件。
 - **中断后再跑一次就能接上**：先写事件再更新 `state`；中断在两者之间时，下次运行按日志补齐。
-- `next:` 只有这几种：`ask-user <问题>`、`go-gate <链接>`、`mediate <文件>`、`report <链接>`、`wait`、`error <错在哪、该怎么做>`。
+- `next:` 只有这几种：`ask-user <问题>`、`go-gate <链接>`、`sign <control 目录>`、`mediate <文件>`、`report <链接>`、`wait`、`error <错在哪、该怎么做>`。
+- `wait` 表示后台有进程在跑（比如规划会话）。coordinator 在后台运行 `orc wait --mission <m>`，它返回后再运行 `orc step`。
 - 所有拒绝和报错都写明错在哪、该怎么做。

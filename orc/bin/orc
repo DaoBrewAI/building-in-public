@@ -209,6 +209,22 @@ class Mission:
     def worktree(self, node: str) -> Path:
         return worktrees_root() / self.name / node
 
+    # 规划会话和发布站点的工作目录也在 $ORC_HOME 之外：agent（规划会话、codex）要写它们，guard 不让写 $ORC_HOME
+    def plan_work(self) -> Path:
+        return worktrees_root() / self.name / "plan-work"
+
+    def site_dir(self) -> Path:
+        return worktrees_root() / self.name / "site"
+
+    def repo(self) -> Path:
+        return Path((self.dir / "repo").read_text().strip())
+
+    def roles(self) -> dict:
+        return json.loads((self.dir / "models.json").read_text())["roles"]
+
+    def frozen(self) -> bool:
+        return (self.control / "approved-task-dag.json").is_file()
+
     # -- 锁：和 commit broker、integrate-task 共用 control/ 下的生命周期锁
     def __enter__(self) -> "Mission":
         if not self.exists():
@@ -410,9 +426,410 @@ def h_new(m: Mission):
     return None, True
 
 
+# ---------------------------------------------------------------- 规划会话（阶段 3，STATE.md「规划与 go」）
+
+PLAN_FILES = ("design.md", "plan.md", "task-dag.json")
+MAX_REPAIRS = 2                     # 产出校验不通过时，发回同一个会话自动修的次数
+CLAUSE_RE = re.compile(r"N[0-9]+\Z")
+
+
+def planner_starts(m: Mission) -> List[dict]:
+    return [e for e in m.events() if e.get("kind") == "planner-start"]
+
+
+def planner_exits(m: Mission) -> Dict[int, dict]:
+    return {e["run"]: e for e in m.events() if e.get("kind") == "planner-exit"}
+
+
+def process_alive(pid: int, marker: str) -> bool:
+    """拿不准就当它还活着（REUSE.md：任何不确定的进程状态都当作还活着，绝不重复启动）。"""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    ps = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    if ps.returncode != 0 and not ps.stdout.strip():
+        return False
+    return marker in ps.stdout or not ps.stdout.strip()
+
+
+def planner_prompt(m: Mission, work: Path) -> str:
+    text = (ORC_ROOT / "templates" / "planner-brief.md").read_text(encoding="utf-8")
+    ns = m.repo() / ".northstar" / "NORTHSTAR.md"
+    if ns.is_file():
+        block = f"- 产品的 NORTHSTAR（已签名；节点的 `clauses` 引用这里的 N#）：\n\n```\n{ns.read_text(encoding='utf-8').strip()}\n```\n"
+        rule = "，不能为空"
+    else:
+        block = "- 产品仓库还没有 NORTHSTAR。\n"
+        rule = "；产品仓库没有 NORTHSTAR，可以是空数组"
+    for key, value in (("{{REQUEST}}", (m.dir / "request.md").read_text(encoding="utf-8").strip()),
+                       ("{{REPO}}", str(m.repo())), ("{{WORK}}", str(work)), ("{{MISSION}}", m.name),
+                       ("{{NORTHSTAR_BLOCK}}", block), ("{{CLAUSES_RULE}}", rule)):
+        text = text.replace(key, value)
+    return text
+
+
+def launch_planner(m: Mission, message: Optional[str], delivers: List[str]) -> None:
+    """后台启动规划会话。message 为 None 时新开会话，否则 --resume 同一个会话并把 message 发过去。"""
+    if shutil.which("claude") is None:
+        raise OrcError("PATH 里找不到 claude，启动不了规划会话 → 安装 Claude Code 后再运行 orc step。")
+    cfg = m.roles()["plan"]
+    work = m.plan_work()
+    runs = work / ".runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    work_real = os.path.realpath(work)
+    starts = planner_starts(m)
+    n = len(starts) + 1
+    if message is None:
+        session, mode, prompt = str(__import__("uuid").uuid4()), "new", planner_prompt(m, Path(work_real))
+    else:
+        session, mode, prompt = starts[0]["session"], "resume", message
+    write_atomic(runs / f"{n}.prompt", prompt)
+    settings = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False}}
+    # 只放行这些工具；Write / Edit 只能写规划工作目录（权限规则里 // 开头是绝对路径）。-p 模式下没放行的工具一律被拒
+    tools = ["Read", "Glob", "Grep", "Bash"] + [f"{t}(/{work_real}/**)" for t in ("Write", "Edit", "MultiEdit")]
+    argv = ["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
+            "--permission-mode", "default", f"--settings={json.dumps(settings)}",
+            f"--add-dir={m.repo()}", f"--allowedTools={','.join(tools)}"]
+    argv += ["--session-id", session] if mode == "new" else ["--resume", session]
+    # 包装：会话结束时原子地写出退出码文件，orc 据此判断“结束了”
+    wrapper = ('"$@" < "$ORC_RUN_IN" > "$ORC_RUN_OUT" 2> "$ORC_RUN_ERR"; '
+               'echo $? > "$ORC_RUN_RC.tmp" && mv "$ORC_RUN_RC.tmp" "$ORC_RUN_RC"')
+    env = dict(os.environ, ORC_ROLE="plan", ORC_MISSION=m.name,
+               ORC_RUN_IN=str(runs / f"{n}.prompt"), ORC_RUN_OUT=str(runs / f"{n}.json"),
+               ORC_RUN_ERR=str(runs / f"{n}.err"), ORC_RUN_RC=str(runs / f"{n}.rc"))
+    proc = subprocess.Popen(["sh", "-c", wrapper, "orc-planner", *argv], cwd=work_real, env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    m.append("planner-start", "orc step", run=n, session=session, pid=proc.pid, mode=mode, delivers=delivers)
+    print(f"已启动规划会话（第 {n} 次运行，{mode}，模型 {cfg['model']}）")
+
+
+def validate_plan_outputs(m: Mission, work: Path) -> List[str]:
+    problems = []
+    for name in ("design.md", "plan.md"):
+        p = work / name
+        if not p.is_file() or not p.read_text(encoding="utf-8").strip():
+            problems.append(f"缺少 {name}，或者它是空的")
+    dag = work / "task-dag.json"
+    if not dag.is_file():
+        return problems + ["缺少 task-dag.json"]
+    check = subprocess.run(["bash", str(SCRIPTS / "validate-task-dag.sh"), str(dag)], capture_output=True, text=True)
+    if check.returncode != 0:
+        problems.append("task-dag.json 没通过 validate-task-dag.sh：" + (check.stderr.strip() or "无输出"))
+    try:
+        data = json.loads(dag.read_text(encoding="utf-8"))
+    except ValueError as error:
+        return problems + [f"task-dag.json 不是合法 JSON：{error}"]
+    if not isinstance(data, dict):
+        return problems + ["task-dag.json 的根必须是对象"]
+    if data.get("mission") != m.name:
+        problems.append(f"task-dag.json 的 mission 必须是 {m.name}")
+    has_northstar = (m.repo() / ".northstar" / "NORTHSTAR.md").is_file()
+    for task in data.get("tasks") if isinstance(data.get("tasks"), list) else []:
+        if not isinstance(task, dict):
+            continue
+        tid = task.get("id", "?")
+        acceptance = task.get("acceptance")
+        if not isinstance(acceptance, list) or not acceptance or not all(isinstance(a, str) and a.strip() for a in acceptance):
+            problems.append(f"节点 {tid} 缺少 acceptance（验收标准列表，不能为空）")
+        clauses = task.get("clauses")
+        if not isinstance(clauses, list) or not all(isinstance(c, str) and CLAUSE_RE.match(c) for c in clauses):
+            problems.append(f"节点 {tid} 的 clauses 必须是 N# 列表")
+        elif has_northstar and not clauses:
+            problems.append(f"节点 {tid} 的 clauses 不能为空：产品仓库有 NORTHSTAR，写清它服务哪条 N#")
+        if not isinstance(task.get("component"), str) or not task["component"].strip():
+            problems.append(f"节点 {tid} 缺少 component（所属组件）")
+        if task.get("state") != "ready":
+            problems.append(f"节点 {tid} 的 state 必须是 ready")
+    return problems
+
+
+def copy_plan_outputs(m: Mission, work: Path) -> Dict[str, str]:
+    dest = m.dir / "plan"
+    dest.mkdir(exist_ok=True)
+    files = {}
+    for name in PLAN_FILES + ("northstar-constraints.md",):
+        src, dst = work / name, dest / name
+        if src.is_file():
+            data = src.read_bytes()
+            tmp = dst.with_name(f".{name}.tmp-{os.getpid()}")
+            tmp.write_bytes(data)
+            os.replace(tmp, dst)
+            files[name] = hashlib.sha256(data).hexdigest()
+        elif dst.exists():
+            dst.unlink()            # 上一版有、这一版没有的可选产出
+    return files
+
+
+def consecutive_failures(m: Mission) -> int:
+    count = 0
+    for run in sorted(planner_exits(m), reverse=True):
+        if planner_exits(m)[run].get("outcome") in ("invalid", "failed"):
+            count += 1
+        else:
+            break
+    return count
+
+
+def finish_planner_run(m: Mission, n: int, rc: Optional[int]):
+    """一次规划运行结束：提问 / 校验不通过（发回去修或交给 coordinator）/ 通过进入 plan-review。"""
+    work = m.plan_work()
+    question = work / "QUESTION.md"
+    if question.is_file() and question.read_text(encoding="utf-8").strip():
+        text = question.read_text(encoding="utf-8").strip()
+        q = m.ask(text, "ask-user", "orc step")
+        m.append("planner-exit", "orc step", run=n, rc=rc, outcome="question", question=q.stem)
+        m.transition("blocked", "orc step", reason="规划会话提问", question=q.stem, type="ask-user")
+        question.rename(work / ".runs" / f"{n}.question.md")
+        return None, True
+    if rc == 0:
+        problems = validate_plan_outputs(m, work)
+        outcome = "invalid"
+    else:
+        problems = [f"规划会话异常退出（退出码 {rc}）" if rc is not None else "规划会话的进程不见了，没有留下退出码"]
+        outcome = "failed"
+    if not problems:
+        files = copy_plan_outputs(m, work)
+        m.append("planner-exit", "orc step", run=n, rc=rc, outcome="ready")
+        m.append("plan-ready", "orc step", files=files)
+        m.transition("plan-review", "orc step", reason="规划产出通过校验")
+        print(f"mission {m.name}：规划产出通过校验，planning → plan-review")
+        return None, True
+    previous = consecutive_failures(m)
+    if previous < MAX_REPAIRS:
+        m.append("planner-exit", "orc step", run=n, rc=rc, outcome=outcome, problems=problems)
+        launch_planner(m, "orc 校验你的产出没有通过：\n" + "\n".join(f"- {p}" for p in problems)
+                       + "\n\n修正后把全部产出文件重新写出（design.md、plan.md、task-dag.json）。", [])
+        return "wait", False
+    text = (f"规划会话的产出连续 {previous + 1} 次没有通过校验，需要裁决：\n" + "\n".join(f"- {p}" for p in problems)
+            + f"\n\n产出在 {work}。回答会原样发给规划会话。")
+    q = m.ask(text, "mediate", "orc step")
+    m.append("planner-exit", "orc step", run=n, rc=rc, outcome=outcome, problems=problems, question=q.stem)
+    m.transition("blocked", "orc step", reason="规划产出校验没有通过", question=q.stem, type="mediate")
+    return None, True
+
+
+def pending_planner_messages(m: Mission) -> Tuple[List[str], List[str]]:
+    """还没发给规划会话的：规划提问的回答、coordinator 的裁决、用户审阅后的修改意见。"""
+    delivered = {d for s in planner_starts(m) for d in s.get("delivers", [])}
+    planner_questions = {e["question"]: e for e in planner_exits(m).values() if e.get("question")}
+    ids, parts = [], []
+    for e in m.events():
+        if e.get("kind") == "answer" and e.get("id") in planner_questions and f"answer:{e['id']}" not in delivered:
+            text = Path(e["file"]).read_text(encoding="utf-8").strip()
+            if planner_questions[e["id"]].get("outcome") == "question":
+                parts.append(f"用户对你的问题的回答：\n\n{text}\n\n据此继续：写出全部产出文件，或者再写一个 QUESTION.md。")
+            else:
+                parts.append(f"你的产出没有通过校验，coordinator 的裁决：\n\n{text}\n\n据此修正后把全部产出文件重新写出。")
+            ids.append(f"answer:{e['id']}")
+        if e.get("kind") == "feedback" and f"feedback:{e['id']}" not in delivered:
+            parts.append(f"用户审阅后的修改意见：\n\n{e['text']}\n\n按意见修改工作目录里的产出，把全部产出文件重新写出。")
+            ids.append(f"feedback:{e['id']}")
+    return ids, parts
+
+
 def h_planning(m: Mission):
-    return (f"error 规划会话还没有实现（PLAN 阶段 3）。mission {m.name} 停在 planning，"
-            f"阶段 3 完成后运行 orc step --mission {m.name} 即可接上。", False)
+    starts = planner_starts(m)
+    if not starts:
+        launch_planner(m, None, [])
+        return "wait", False
+    last = starts[-1]
+    n = last["run"]
+    if n not in planner_exits(m):
+        rc_file = m.plan_work() / ".runs" / f"{n}.rc"
+        if rc_file.is_file():
+            rc_text = rc_file.read_text().strip()
+            rc: Optional[int] = int(rc_text) if rc_text.lstrip("-").isdigit() else None
+        elif process_alive(last["pid"], last["session"]):
+            return "wait", False
+        else:
+            rc = None
+        return finish_planner_run(m, n, rc)
+    ids, parts = pending_planner_messages(m)
+    if parts:
+        launch_planner(m, "\n\n---\n\n".join(parts), ids)
+        return "wait", False
+    return (f"error mission {m.name} 在 planning，但规划会话已经结束、也没有待处理的回答或意见。"
+            "这是 orc 的 bug；把 events.jsonl 给用户看。", False)
+
+
+# ---------------------------------------------------------------- 审阅页与发布（Sites）
+
+def md_to_html(text: str) -> str:
+    """够用的 Markdown：标题、列表、代码块、段落、行内代码和粗体。全部先转义。"""
+    import html as _h
+    out, para, in_code, in_list = [], [], False, None
+
+    def inline(s: str) -> str:
+        s = _h.escape(s)
+        s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+        return re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", s)
+
+    def flush():
+        nonlocal para, in_list
+        if para:
+            out.append("<p>" + inline(" ".join(para)) + "</p>")
+            para = []
+        if in_list:
+            out.append(f"</{in_list}>")
+            in_list = None
+    for line in text.splitlines():
+        if line.strip().startswith("```"):
+            if in_code:
+                out.append("</code></pre>")
+            else:
+                flush()
+                out.append("<pre><code>")
+            in_code = not in_code
+            continue
+        if in_code:
+            out.append(_h.escape(line))
+            continue
+        heading = re.match(r"(#{1,6})\s+(.*)", line)
+        item = re.match(r"\s*(?:[-*]|(\d+)\.)\s+(.*)", line)
+        if heading:
+            flush()
+            level = min(len(heading.group(1)) + 1, 6)
+            out.append(f"<h{level}>{inline(heading.group(2))}</h{level}>")
+        elif item:
+            if para:
+                out.append("<p>" + inline(" ".join(para)) + "</p>")
+                para = []
+            kind = "ol" if item.group(1) else "ul"
+            if in_list != kind:
+                if in_list:
+                    out.append(f"</{in_list}>")
+                out.append(f"<{kind}>")
+                in_list = kind
+            out.append(f"<li>{inline(item.group(2))}</li>")
+        elif not line.strip():
+            flush()
+        else:
+            para.append(line.strip())
+    if in_code:
+        out.append("</code></pre>")
+    flush()
+    return "\n".join(out)
+
+
+def render_review(m: Mission) -> str:
+    import html as _h
+    plan = m.dir / "plan"
+    read = lambda name: (plan / name).read_text(encoding="utf-8") if (plan / name).is_file() else ""
+    sha = lambda name: hashlib.sha256((plan / name).read_bytes()).hexdigest() if (plan / name).is_file() else "—"
+    dag = json.loads(read("task-dag.json") or "{}")
+    rows = []
+    for t in dag.get("tasks", []):
+        cell = lambda items: "<br>".join(_h.escape(str(x)) for x in items)
+        rows.append(f"<tr><td><code>{_h.escape(t['id'])}</code></td><td>{cell(t.get('depends_on', [])) or '—'}</td>"
+                    f"<td>{cell(t.get('files', []))}</td><td>{cell(t.get('acceptance', []))}</td>"
+                    f"<td>{cell(t.get('clauses', [])) or '—'}</td><td>{_h.escape(str(t.get('component', '')))}</td>"
+                    f"<td>{cell(t.get('verification', []))}</td></tr>")
+    constraints = read("northstar-constraints.md")
+    request = (m.dir / "request.md").read_text(encoding="utf-8").strip()
+    return f"""<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>审阅：{_h.escape(m.name)}</title>
+<style>
+:root{{--bg:#fff;--fg:#1b1b1b;--muted:#666;--line:#ddd;--code:#f4f4f4}}
+@media (prefers-color-scheme:dark){{:root{{--bg:#151515;--fg:#eee;--muted:#aaa;--line:#333;--code:#222}}}}
+body{{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,system-ui,sans-serif;margin:0 auto;max-width:960px;padding:16px}}
+h1{{font-size:1.5em}} h2{{border-top:1px solid var(--line);padding-top:1em}} code,pre{{background:var(--code);border-radius:4px}}
+pre{{padding:8px;overflow-x:auto}} table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}}
+.wrap{{overflow-x:auto}} .muted{{color:var(--muted)}}
+</style></head><body>
+<h1>计划审阅：{_h.escape(m.name)}</h1>
+<p class="muted">由 orc 根据规划会话的产出生成。说 go 之后，下面三个文件会原样冻结，你用 Touch ID 签名的就是它们的哈希。</p>
+<h2>请求（原话）</h2><blockquote>{_h.escape(request)}</blockquote>
+<h2>核对用的哈希</h2>
+<table><tr><th>文件</th><th>sha256</th></tr>
+<tr><td>设计 design.md</td><td><code>{sha('design.md')}</code></td></tr>
+<tr><td>计划 plan.md</td><td><code>{sha('plan.md')}</code></td></tr>
+<tr><td>DAG task-dag.json</td><td><code>{sha('task-dag.json')}</code></td></tr></table>
+<h2>任务 DAG</h2><div class="wrap"><table><tr><th>节点</th><th>依赖</th><th>文件</th><th>验收标准</th><th>条款</th><th>组件</th><th>验证</th></tr>
+{''.join(rows)}</table></div>
+{('<h2>建议加入 NORTHSTAR 的关键约束</h2>' + md_to_html(constraints)) if constraints.strip() else ''}
+<h2>设计</h2>{md_to_html(read('design.md'))}
+<h2>计划</h2>{md_to_html(read('plan.md'))}
+</body></html>
+"""
+
+
+def run_publisher(site: Path) -> dict:
+    """发布适配层：Sites 只能经由 Codex 的连接器工具发布（没有独立 CLI 或 API），所以用 codex exec 跑固定步骤。"""
+    if shutil.which("codex") is None:
+        raise OrcError("PATH 里找不到 codex，发布不了审阅页（Sites 只能通过 Codex 发布）→ 安装并登录 Codex 后再运行 orc step。")
+    prompt = (ORC_ROOT / "templates" / "publish-sites.md").read_text(encoding="utf-8")
+    argv = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
+            "-c", "sandbox_workspace_write.network_access=true", prompt]
+    try:
+        run = subprocess.run(argv, cwd=str(site), capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired as error:
+        raise OrcError("Sites 发布超时（15 分钟）。不要拿本地文件代替链接；稍后再运行 orc step 重试。") from error
+    result = {}
+    for line in reversed(run.stdout.splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                result = json.loads(line)
+                break
+            except ValueError:
+                continue
+    if not result.get("url", "").startswith("https://"):
+        detail = result.get("error") or (run.stderr.strip().splitlines() or ["没有输出发布结果"])[-1]
+        raise OrcError(f"Sites 发布失败（{detail[:200]}）。不要拿本地文件代替链接去要 go；检查 Codex 登录和 Sites 插件后再运行 orc step。")
+    return result
+
+
+def ensure_published(m: Mission, route: str, html_text: str) -> str:
+    digest = hashlib.sha256(html_text.encode()).hexdigest()
+    receipts_path = m.dir / "publish.json"
+    receipts = json.loads(receipts_path.read_text()) if receipts_path.is_file() else {}
+    current = receipts.get(route, {})
+    if current.get("sha256") == digest:
+        return current["url"]
+    site = m.site_dir()
+    (site / "dist" / route).mkdir(parents=True, exist_ok=True)
+    write_atomic(site / "dist" / route / "index.html", html_text)
+    links = "".join(f'<li><a href="/{r}/">{r}</a></li>' for r in sorted({*receipts.keys(), route} - {"project_id"}))
+    write_atomic(site / "dist" / "index.html",
+                 f'<!doctype html><meta charset="utf-8"><title>{m.name}</title><h1>{m.name}</h1><ul>{links}</ul>\n')
+    result = run_publisher(site)
+    receipts[route] = {"url": result["url"], "sha256": digest, "at": now()}
+    if result.get("project_id"):
+        receipts["project_id"] = result["project_id"]
+    write_atomic(receipts_path, json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
+    m.append("published", "orc step", route=route, url=result["url"], sha256=digest)
+    return result["url"]
+
+
+def published_is_current(m: Mission, route: str) -> bool:
+    receipts_path = m.dir / "publish.json"
+    if not receipts_path.is_file():
+        return False
+    digest = hashlib.sha256(render_review(m).encode()).hexdigest()
+    return json.loads(receipts_path.read_text()).get(route, {}).get("sha256") == digest
+
+
+def h_plan_review(m: Mission):
+    if m.frozen():
+        control = os.path.realpath(m.control)
+        if not (m.control / "approved.sha256.sig").is_file():
+            return f"sign {control}", False
+        problem = verify_approval(m)
+        if problem:
+            return problem, False
+        m.transition("approved", "orc step", reason="签名和哈希校验通过")
+        print(f"mission {m.name}：plan-review → approved")
+        return None, True
+    try:
+        url = ensure_published(m, "plan", render_review(m))
+    except OrcError as error:
+        return f"error {error}", False
+    return f"go-gate {url}", False
 
 
 def not_yet(phase: str) -> Handler:
@@ -465,7 +882,7 @@ def h_terminal(m: Mission):
 HANDLERS: Dict[str, Handler] = {
     "new": h_new,
     "planning": h_planning,
-    "plan-review": not_yet("阶段 3"),
+    "plan-review": h_plan_review,
     "approved": not_yet("阶段 4"),
     "executing": not_yet("阶段 4"),
     "reviewing": not_yet("阶段 5"),
@@ -542,6 +959,97 @@ def cmd_answer(args) -> int:
         mission.append("answer", "orc answer", id=question.stem, file=str(answer))
     print(f"已写回 {answer}")
     print(f"next: 运行 orc step --mission {mission.name}")
+    return 0
+
+
+def cmd_revise(args) -> int:
+    """go 之前，把用户审阅后的修改意见发回规划会话。"""
+    if not args.text.strip():
+        raise OrcError("修改意见是空的。把用户的原话写进引号里。")
+    with Mission(args.mission) as m:
+        if m.frozen():
+            raise OrcError(f"mission {m.name} 已经冻结（用户说过 go），不能再改计划。要改就让用户决定放弃这个 mission、重新开一个。")
+        if m.state != "plan-review":
+            raise OrcError(f"mission {m.name} 现在是 {m.state}：只有在 plan-review（审阅页已发布、还没 go）时才能提修改意见。")
+        n = sum(1 for e in m.events() if e.get("kind") == "feedback") + 1
+        m.append("feedback", "orc revise", id=n, text=args.text.strip())
+        m.transition("planning", "orc revise", reason="用户修改意见")
+    print(f"已记录修改意见，mission {m.name}：plan-review → planning")
+    print(f"next: 运行 orc step --mission {m.name}")
+    return 0
+
+
+def cmd_go(args) -> int:
+    """用户说 go 之后：冻结设计、计划、执行规则和 DAG，等用户签名。"""
+    with Mission(args.mission) as m:
+        if m.frozen():
+            raise OrcError(f"mission {m.name} 已经冻结，等用户签名：northstar approve-mission {os.path.realpath(m.control)}")
+        if m.state != "plan-review":
+            raise OrcError(f"mission {m.name} 现在是 {m.state}：只有在 plan-review、用户看过审阅页并说 go 之后才能运行 orc go。")
+        if not published_is_current(m, "plan"):
+            raise OrcError("审阅页还没有发布（或者计划改过、还没重新发布）。先运行 orc step 发布，让用户看过最新的审阅页再说 go。")
+        c, plan = m.control, m.dir / "plan"
+        brief = (ORC_ROOT / "templates" / "brief-exec.md").read_text(encoding="utf-8")
+        brief = brief.replace("{{MISSION}}", m.name).replace("{{IMPLEMENT_MODEL}}", m.roles()["implement"]["model"])
+        written = {"approved-design.md": (plan / "design.md").read_bytes(),
+                   "approved-plan.md": (plan / "plan.md").read_bytes(),
+                   "brief-exec.md": brief.encode()}
+        for name, data in written.items():
+            (c / name).write_bytes(data)
+        write_atomic(c / "approved.sha256", "".join(f"{hashlib.sha256(d).hexdigest()}  {n}\n" for n, d in written.items()))
+        freeze = subprocess.run(["bash", str(SCRIPTS / "validate-task-dag.sh"), "--freeze", str(plan / "task-dag.json"),
+                                 os.path.realpath(c)], capture_output=True, text=True)
+        if freeze.returncode != 0:
+            for name in (*written, "approved.sha256"):   # 撤掉没冻结成的半成品，重新 go 时从头来
+                (c / name).unlink(missing_ok=True)
+            raise OrcError("冻结 DAG 失败：" + (freeze.stderr.strip() or "无输出") + "。冻结没有完成，可以修正后重新运行 orc go。")
+        frozen = {n: hashlib.sha256((c / n).read_bytes()).hexdigest()
+                  for n in ("approved-design.md", "approved-plan.md", "brief-exec.md", "approved-task-dag.json")}
+        m.append("frozen", "orc go", files=frozen)
+        constraints = plan / "northstar-constraints.md"
+        drafted = None
+        if constraints.is_file() and constraints.read_text(encoding="utf-8").strip():
+            ns_dir = m.repo() / ".northstar"
+            if ns_dir.is_dir():
+                drafts = m.repo() / "drafts"
+                drafts.mkdir(exist_ok=True)
+                target = drafts / "NORTHSTAR.md"
+                base = target if target.is_file() else ns_dir / "NORTHSTAR.md"
+                text = base.read_text(encoding="utf-8").rstrip() + f"\n\n## mission {m.name} 的关键设计约束\n\n" \
+                    + constraints.read_text(encoding="utf-8").strip() + "\n"
+                write_atomic(target, text)
+                drafted = target
+        control = os.path.realpath(c)
+    print(f"已冻结 mission {m.name} 的设计、计划、执行规则和 DAG（{control}）。")
+    print(f"请用户在自己的终端运行：northstar approve-mission {control}，核对哈希后输入 SEAL 并按 Touch ID。")
+    if drafted:
+        print(f"规划提出的关键约束已追加到 {drafted}：请用户在产品仓库运行 northstar seal 把它们签进 NORTHSTAR。")
+    print(f"next: sign {control}")
+    return 0
+
+
+def cmd_wait(args) -> int:
+    """阻塞到后台的规划会话结束（或 mission 不再处于 planning），然后返回；coordinator 在后台运行它。"""
+    import time
+    m = Mission(args.mission)
+    if not m.exists():
+        raise OrcError(f"没有名为「{args.mission}」的 mission。")
+    deadline = time.monotonic() + args.timeout
+    while time.monotonic() < deadline:
+        if m.replay()["state"] != "planning":
+            break
+        starts = planner_starts(m)
+        if not starts:
+            break
+        last = starts[-1]
+        if last["run"] in planner_exits(m) or (m.plan_work() / ".runs" / f"{last['run']}.rc").is_file() \
+                or not process_alive(last["pid"], last["session"]):
+            break
+        time.sleep(1)
+    else:
+        print(f"等了 {args.timeout} 秒，规划会话还在运行。")
+        return 1
+    print(f"next: 运行 orc step --mission {m.name}")
     return 0
 
 
@@ -673,6 +1181,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--mission")
     p.add_argument("--file")
     p.set_defaults(func=cmd_answer)
+    p = sub.add_parser("revise", help="go 之前把用户的修改意见发回规划会话")
+    p.add_argument("text")
+    p.add_argument("--mission", required=True)
+    p.set_defaults(func=cmd_revise)
+    p = sub.add_parser("go", help="用户说 go 之后冻结设计、计划和 DAG，等用户签名")
+    p.add_argument("--mission", required=True)
+    p.set_defaults(func=cmd_go)
+    p = sub.add_parser("wait", help="等后台的规划会话结束")
+    p.add_argument("--mission", required=True)
+    p.add_argument("--timeout", type=int, default=3600)
+    p.set_defaults(func=cmd_wait)
     p = sub.add_parser("status", help="查看 mission 状态")
     p.add_argument("--mission")
     p.set_defaults(func=cmd_status)
