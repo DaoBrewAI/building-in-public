@@ -27,8 +27,9 @@
     approved.sha256     approved.sha256.sig（northstar approve-mission 的签名）
     tasks/<node>/     每个节点的控制目录（broker、integrate-task 的 --control-dir）
   nodes/<node>/       每个节点的工作侧目录（broker 的 --mission-dir、integrate-task 的 --task-dir）
-  worktrees/<node>/   节点的 git worktree（阶段 4 创建；清理只删这里登记过的）
 ```
+
+节点的 git worktree **不在 mission 目录里**，放在 `~/.orc-worktrees/<mission>/<node>/`（环境变量 `ORC_WORKTREES` 可改根目录）。原因：guard 拦截 agent 对 `$ORC_HOME` 的一切写入，worktree 放在里面，节点就写不了代码；guard 也不给任何路径开例外，例外路径容易被利用。`ORC_WORKTREES` 落在 `$ORC_HOME` 之内时 orc 直接报错，`orc doctor` 也会检查。worktree 在阶段 4 创建，路径登记在 `control/tasks/<node>/worktrees.txt`；清理只删登记过的。
 
 `control/` 和 `nodes/` 里的文件格式沿用复用脚本的约定（`worktrees.txt` 一行四列：worktree、分支、base、仓库，用制表符分隔；`generation`、`state` 等单行文件），orc 不另起一套。
 
