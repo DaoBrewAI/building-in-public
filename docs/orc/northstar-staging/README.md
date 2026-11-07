@@ -9,7 +9,7 @@
 | `bin/northstar-review` | 对齐评审的唯一入口：align.sh 和 orc 的 commit broker 都调用它。对照 NORTHSTAR、签名的设计、节点条目和 diff，回答方向和做法两个问题；diff 超长时拒绝，不截断 |
 | `bin/northstar-status` | 生成进度报告（事实由脚本算，agent 只写带引用的说明） |
 | `hooks/guard.sh` | 拦截对受保护文件的写入、签名和绕过类命令、越界写入 |
-| `hooks/align.sh` | 每次提交前由另一家模型做对齐评审，偏离就拒绝并发纠偏单 |
+| `hooks/align.sh` | 每次提交前调用 `northstar-review --role auto` 做对齐评审（模型按 models.toml 的评审分级选，2026-11-07 起不再按「另一家」选），偏离就拒绝并发纠偏单 |
 | `hooks/inject.sh` | 每次会话开始和压缩后重新注入 NORTHSTAR 原文 |
 | `hooks/stop-gate.sh` | 结束前校验签名、工作区干净、无越界、检查和进度报告通过 |
 | `git/commit-msg` | 强制 commit 首行带 [N#] |
