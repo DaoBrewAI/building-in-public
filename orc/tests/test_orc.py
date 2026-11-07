@@ -200,8 +200,7 @@ class Transitions(OrcCase):
         _, mdir = self.new()
         m = self.orc.Mission("m1")
         with m:
-            m.transition("blocked", "test", reason="熔断")
-            q = m.ask("节点 n1 连续 3 次偏离，要调整目标吗？", "ask-user", "test")
+            q = m.block("熔断", "节点 n1 连续 3 次偏离，要调整目标吗？", "ask-user", "test")
         r = self.run_orc("step", "--mission", "m1")
         self.assertEqual(self.next_line(r), "next: ask-user 节点 n1 连续 3 次偏离，要调整目标吗？")
         self.assertEqual(r.returncode, 0)
@@ -212,7 +211,7 @@ class Transitions(OrcCase):
         self.assertIn("blocked → planning", r.stdout)
         self.assertEqual((mdir / "state").read_text().strip(), "planning")
         kinds = [e["kind"] for e in self.events(mdir)]
-        self.assertEqual(kinds, ["created", "state", "state", "ask", "answer", "state"])
+        self.assertEqual(kinds, ["created", "state", "ask", "state", "answer", "state"])
 
     def test_answer_refusals(self):
         self.new("m1")
@@ -228,6 +227,149 @@ class Transitions(OrcCase):
         self.assertIn("不是 mission m1 里等待回答的问题", r.stderr)
         r = self.run_orc("answer", "--mission", "m1", "  ")
         self.assertIn("回答是空的", r.stderr)
+
+
+class ForgedLog(OrcCase):
+    """评审意见 1a：状态只认合法的、首尾相接的转换；日志被追加伪造的状态事件时停下，不按它走。"""
+
+    def forge(self, mdir, **event):
+        line = {"ts": "x", "mission": "m1", "kind": "state", "by": "agent", **event}
+        with open(mdir / "events.jsonl", "a") as f:
+            f.write(json.dumps(line) + "\n")
+
+    def test_jump_to_accepted_is_rejected(self):
+        _, mdir = self.new()
+        self.forge(mdir, **{"from": "planning", "to": "accepted"})
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("不是合法的状态转换", self.next_line(r))
+        self.assertIn("第 3 行", self.next_line(r))
+        r = self.run_orc("status")
+        self.assertNotIn("m1  accepted", r.stdout)
+        self.assertIn("m1  日志无法回放", r.stdout)
+
+    def test_from_must_match_previous_state(self):
+        _, mdir = self.new()
+        self.forge(mdir, **{"from": "plan-review", "to": "approved"})   # 单看是合法转换，但当时状态是 planning
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("当时的状态是 planning", self.next_line(r))
+
+    def test_forged_blocked_without_question_and_forged_unblock(self):
+        _, mdir = self.new()
+        self.forge(mdir, **{"from": "planning", "to": "blocked"})       # 没有 question 的 blocked
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("不是合法的状态转换", self.next_line(r))
+
+
+class BlockedNeedsQuestion(OrcCase):
+    """评审意见 2：进入 blocked 必须带一个问题；离开 blocked 必须有这个问题的回答。"""
+
+    def test_transition_to_blocked_without_question_is_refused(self):
+        self.new()
+        with self.orc.Mission("m1") as m:
+            with self.assertRaises(self.orc.OrcError) as ctx:
+                m.transition("blocked", "test", reason="熔断：节点连续 3 次 DRIFT")
+            self.assertIn("block()", str(ctx.exception))
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertNotIn("blocked → planning", r.stdout)
+
+    def test_blocked_stays_until_its_own_question_is_answered(self):
+        _, mdir = self.new()
+        with self.orc.Mission("m1") as m:
+            m.ask("一个无关的旧问题", "mediate", "test")
+        self.run_orc("answer", "无关回答")
+        with self.orc.Mission("m1") as m:
+            m.block("熔断", "要调整目标吗？", "ask-user", "test")
+        for _ in range(2):
+            r = self.run_orc("step", "--mission", "m1")
+            self.assertEqual(self.next_line(r), "next: ask-user 要调整目标吗？")
+        self.assertEqual((mdir / "state").read_text().strip(), "blocked")
+        self.run_orc("answer", "不调整")
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("blocked → planning", r.stdout)
+
+    def test_mediate_question_prints_mediate_with_file(self):
+        _, mdir = self.new()
+        with self.orc.Mission("m1") as m:
+            q = m.block("子任务提问", "接口用 v1 还是 v2？", "mediate", "test")
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertEqual(self.next_line(r), f"next: mediate {q}")
+
+
+class ApprovalReverified(OrcCase):
+    """评审意见 1c：approved 之后的每一次 step 都重新校验签名和哈希。"""
+
+    def setUp(self):
+        super().setUp()
+        _, self.mdir = self.new()
+        c = self.mdir / "control"
+        (c / "approved-design.md").write_text("design\n")
+        (c / "approved-plan.md").write_text("plan\n")
+        (c / "brief-exec.md").write_text("brief\n")
+        (c / "approved-task-dag.json").write_text(json.dumps({"version": 1, "mission": "m1", "tasks": [
+            {"id": "a", "depends_on": [], "files": ["a.txt"], "contracts": [], "verification": ["true"], "state": "ready"}]}))
+        subprocess.run("shasum -a 256 approved-design.md approved-plan.md brief-exec.md approved-task-dag.json > approved.sha256",
+                       shell=True, cwd=c, check=True)
+        ns = self.tmp / "ns"
+        (ns / "bin").mkdir(parents=True)
+        self.sig_ok = self.tmp / "sig-ok"
+        self.sig_ok.write_text("")
+        (ns / "bin" / "northstar").write_text(
+            f'#!/bin/sh\n[ "$1" = verify-mission ] && [ "$2" = "{os.path.realpath(c)}" ] && [ -f "{self.sig_ok}" ]\n')
+        (ns / "bin" / "northstar").chmod(0o755)
+        self.env["ORC_NORTHSTAR_ROOT"] = str(ns)
+        with self.orc.Mission("m1") as m:
+            for to in ("plan-review", "approved", "executing"):
+                m.transition(to, "test")
+
+    def test_good_signature_and_hashes_pass_through(self):
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("executing 阶段的流程还没有实现", self.next_line(r))
+
+    def test_tampered_frozen_file_stops_every_step(self):
+        (self.mdir / "control" / "approved-design.md").write_text("design changed after go\n")
+        for _ in range(2):
+            r = self.run_orc("step", "--mission", "m1")
+            self.assertIn("冻结文件和签名时的哈希不一致", self.next_line(r))
+        self.assertEqual((self.mdir / "state").read_text().strip(), "executing")
+
+    def test_bad_signature_stops_step(self):
+        self.sig_ok.unlink()
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("签名校验失败", self.next_line(r))
+
+    def test_blocked_after_approval_is_also_verified(self):
+        with self.orc.Mission("m1") as m:
+            m.block("熔断", "要调整吗？", "ask-user", "test")
+        self.sig_ok.unlink()
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("签名校验失败", self.next_line(r))
+
+
+class CreateLeftovers(OrcCase):
+    """小问题：--name 新建在写 events.jsonl 之前失败时，不能留下无法接管的目录。"""
+
+    def test_leftover_directory_without_events_is_taken_over(self):
+        leftover = self.home / "missions" / "m1"
+        leftover.mkdir(parents=True)
+        (leftover / "request.md").write_text("half written\n")
+        r, mdir = self.new()
+        self.assertIn("接管", r.stdout)
+        self.assertEqual((mdir / "request.md").read_text().strip(), "Add CSV export")
+        self.assertEqual((mdir / "state").read_text().strip(), "planning")
+
+    def test_failure_before_events_removes_the_directory(self):
+        real = self.orc.write_atomic
+        def flaky(path, text):
+            if path.name == "models.json":
+                raise OSError("disk full")
+            real(path, text)
+        self.orc.write_atomic = flaky
+        try:
+            with self.assertRaises(OSError):
+                self.orc.create_mission("x", str(self.repo), "m1")
+        finally:
+            self.orc.write_atomic = real
+        self.assertFalse((self.home / "missions" / "m1").exists())
 
 
 class NodeStates(OrcCase):
@@ -316,6 +458,17 @@ class Doctor(OrcCase):
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("ok  模型可用：implement", r.stdout)
         self.assertIn("ok  模型可用：plan_review", r.stdout)
+
+    def test_live_requires_a_line_that_is_exactly_ok(self):
+        env = self.fake_install()
+        fakebin = Path(env["PATH"].split(":")[0])
+        (fakebin / "codex").write_text("#!/bin/sh\necho 'token limit reached'\n")   # 含 ok 子串，但不是 ok
+        r = self.run_orc("doctor", "--live", env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FAIL  模型可用：implement", r.stdout)
+        (fakebin / "codex").write_text("#!/bin/sh\necho '  OK  '\n")
+        r = self.run_orc("doctor", "--live", env=env)
+        self.assertIn("ok  模型可用：implement", r.stdout)
 
     def test_missing_trust_layer_fails_with_fix(self):
         env = self.fake_install()
