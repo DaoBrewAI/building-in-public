@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """阶段 3：规划会话、审阅页发布、go 关口与签名。python3 orc/tests/test_planning.py
 
-规划会话和发布（都是 claude -p）、签名校验（northstar）都换成可编排的假命令：
-$ORC_FAKE/script 每行决定第几次规划运行做什么；$ORC_FAKE/publish 决定发布成功还是失败。
+规划会话、验证会话和发布（都是 claude -p）、签名校验（northstar）都换成可编排的假命令：
+$ORC_FAKE/script 每行决定第几次规划运行做什么；$ORC_FAKE/vscript 每行决定第几次验证运行做什么；
+$ORC_FAKE/publish 决定发布成功还是失败。
 """
+import hashlib
 import json
 import os
 import subprocess
@@ -34,6 +36,42 @@ if os.environ.get("ORC_ROLE") == "publish":
     else:
         line = json.dumps({"error": "Artifact tool unavailable"})
     print(json.dumps({"type": "result", "is_error": False, "result": "发布好了。\n" + line}))
+    sys.exit(0)
+if os.environ.get("ORC_ROLE") == "verify":
+    # 假验证会话：在 repo/ 里写测试，在工作目录根上写 checks.json
+    n = len(list(fake.glob("verify-call-*.json"))) + 1
+    session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
+    work = pathlib.Path(os.getcwd())
+    (fake / f"verify-call-{n}.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt,
+        "role": os.environ.get("ORC_ROLE"), "files": sorted(str(p.relative_to(work)) for p in work.rglob("*")
+                                                           if ".runs" not in p.parts)}))
+    vs = [l for l in (fake / "vscript").read_text().splitlines() if l.strip()] if (fake / "vscript").exists() else []
+    action = vs[n - 1] if n - 1 < len(vs) else "ok"
+    test = work / "repo" / "tests" / "orc" / "test_export.sh"
+    def write(body, files=("tests/orc/test_export.sh",), acceptance=(1,)):
+        test.parent.mkdir(parents=True, exist_ok=True)
+        test.write_text(body)
+        (work / "checks.json").write_text(json.dumps({"version": 1, "mission": os.environ["ORC_MISSION"],
+            "test_files": list(files), "checks": [{"id": "export-writes-csv", "node": "export", "acceptance": list(acceptance),
+            "command": "sh tests/orc/test_export.sh", "expect_before": "fail"}]}))
+    if action.startswith("question:"):
+        (work / "QUESTION.md").write_text(action.split(":", 1)[1])
+    elif action == "ok":
+        write("test -f src/export.py\n")
+    elif action == "escape":
+        write('echo x > "$ORC_FAKE/escaped"; curl -s -m 3 https://example.com > /dev/null && touch net-open; test -f src/export.py\n')
+    elif action == "passing":
+        write("true\n")                      # 实现之前就通过：什么也没测
+    elif action == "overlap":
+        (work / "repo" / "src").mkdir(parents=True, exist_ok=True)
+        (work / "repo" / "src" / "export.py").write_text("x = 1\n")
+        write("test -f src/export.py\n", files=("src/export.py",))
+    elif action == "uncovered":
+        write("test -f src/export.py\n", acceptance=(2,))
+    elif action == "nochecks":
+        test.parent.mkdir(parents=True, exist_ok=True); test.write_text("x\n")
+        (work / "checks.json").unlink(missing_ok=True)
+    print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "done"}))
     sys.exit(0)
 n = len(list(fake.glob("call-*.json"))) + 1
 session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
@@ -88,6 +126,8 @@ class PlanningCase(OrcCase):
         # 产品仓库带 NORTHSTAR：节点的 clauses 不能为空
         (self.repo / ".northstar").mkdir()
         (self.repo / ".northstar" / "NORTHSTAR.md").write_text("# NORTHSTAR\n- N1: 报表可以导出\n")
+        (self.repo / "README.md").write_text("product\n")
+        self.commit("初始提交")
         self.env.update(ORC_FAKE=str(self.fake), ORC_NORTHSTAR_ROOT=str(ns),
                         ORC_WORKTREES=str(self.tmp / "wt"), PATH=f"{bin_}:/usr/bin:/bin")
         os.environ["ORC_WORKTREES"] = str(self.tmp / "wt")
@@ -95,6 +135,24 @@ class PlanningCase(OrcCase):
     def tearDown(self):
         os.environ.pop("ORC_WORKTREES", None)
         super().tearDown()
+
+    def commit(self, message):
+        subprocess.run(["git", "-C", str(self.repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", message],
+                       check=True, env=self.env)
+
+    def vscript(self, *steps):
+        (self.fake / "vscript").write_text("\n".join(steps) + "\n")
+
+    def vcalls(self):
+        return [json.loads(p.read_text()) for p in sorted(self.fake.glob("verify-call-*.json"), key=lambda p: int(p.stem[12:]))]
+
+    def through_verify(self):
+        """规划产出通过之后：这次 step 进入 verifying 并启动验证会话，再等它结束。"""
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
+        self.assertIn("planning → verifying", r.stdout)
+        self.wait()
 
     def script(self, *steps):
         (self.fake / "script").write_text("\n".join(steps) + "\n")
@@ -175,6 +233,7 @@ class LaunchAndWait(PlanningCase):
         lost = [e for e in self.events(mdir) if e["kind"] == "planner-exit"][0]
         self.assertEqual((lost["rc"], lost["outcome"]), (None, "failed"))
         self.wait()
+        self.through_verify()
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
 
@@ -185,6 +244,7 @@ class LaunchAndWait(PlanningCase):
         r = self.step()                        # 第 1 次失败：自动重跑（同一会话）
         self.assertEqual(self.next_line(r), "next: wait")
         self.wait()
+        self.through_verify()
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
         self.assertIn("--resume", self.calls()[1]["args"])
@@ -193,6 +253,7 @@ class LaunchAndWait(PlanningCase):
 class Outputs(PlanningCase):
     def test_valid_outputs_go_to_plan_review_and_publish(self):
         mdir = self.to_plan_review("ok")
+        self.through_verify()
         r = self.step()
         self.assertEqual(self.next_line(r), "next: go-gate https://claude.ai/code/artifact/fake-plan", r.stdout + r.stderr)
         self.assertEqual((mdir / "state").read_text().strip(), "plan-review")
@@ -214,6 +275,7 @@ class Outputs(PlanningCase):
 
     def test_publisher_only_reads_and_publishes(self):
         mdir = self.to_plan_review("ok")
+        self.through_verify()
         self.step()
         call = self.publish_calls()[0]
         args = call["args"]
@@ -227,6 +289,7 @@ class Outputs(PlanningCase):
 
     def test_changed_page_updates_the_same_artifact(self):
         mdir = self.to_plan_review("ok")
+        self.through_verify()
         self.step()
         (mdir / "plan" / "plan.md").write_text("# 计划\n1. 导出\n2. 筛选\n")
         r = self.step()
@@ -261,6 +324,7 @@ class Outputs(PlanningCase):
         r = self.step()
         self.assertEqual(self.next_line(r), "next: wait")
         self.wait()
+        self.through_verify()
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
         first, second = self.calls()
@@ -270,10 +334,128 @@ class Outputs(PlanningCase):
         self.assertFalse((self.tmp / "wt" / "m1" / "plan-work" / "QUESTION.md").exists())
 
 
+class Verify(PlanningCase):
+    """验收测试在实现之前，由独立的验证会话写好（docs/orc/proposals/2026-11-07-tests-before-implement.md）。"""
+
+    def test_verifier_gets_design_and_dag_but_not_the_plan(self):
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        (v,) = self.vcalls()
+        args = v["args"]
+        models = json.loads((mdir / "models.json").read_text())["roles"]
+        self.assertEqual(args[args.index("--model") + 1], models["review"]["model"])   # 和执行用的模型不同
+        self.assertNotEqual(models["review"]["model"], models["implement"]["model"])
+        self.assertEqual(v["role"], "verify")
+        self.assertIn("--session-id", args)
+        work = self.tmp / "wt" / "m1" / "verify-work"
+        self.assertEqual(os.path.realpath(v["cwd"]), os.path.realpath(work))
+        self.assertIn("spec/design.md", v["files"])
+        self.assertIn("spec/task-dag.json", v["files"])
+        self.assertIn("repo/README.md", v["files"])                        # 当前提交的代码副本
+        self.assertFalse(any(f.endswith("plan.md") for f in v["files"]), v["files"])   # 看不到计划
+        self.assertFalse(any(".git" in Path(f).parts for f in v["files"]))
+        settings = json.loads(next(a for a in args if a.startswith("--settings="))[len("--settings="):])
+        self.assertEqual(settings["sandbox"]["filesystem"]["denyWrite"], [os.path.realpath(self.repo)])
+        self.assertNotIn("# 计划", v["prompt"])
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
+        ready = [e for e in self.events(mdir) if e["kind"] == "verify-ready"][0]
+        self.assertEqual(ready["results"], {"export-writes-csv": 1})     # 实际运行过，实现前失败
+        page = (self.tmp / "wt" / "m1" / "site" / "plan.html").read_text()
+        self.assertIn("验收测试", page)
+        self.assertIn("test -f src/export.py", page)                       # 测试全文在审阅页上
+        self.assertIn(models["review"]["model"], page)
+
+    def test_check_that_passes_before_implementation_is_sent_back(self):
+        self.vscript("passing", "ok")
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: wait", r.stdout)
+        first, = [e for e in self.events(mdir) if e["kind"] == "verifier-exit"]
+        self.assertEqual(first["outcome"], "invalid")
+        self.assertIn("就通过了", first["problems"][0])
+        self.wait()
+        second = self.vcalls()[1]
+        self.assertIn("--resume", second["args"])
+        self.assertIn("就通过了", second["prompt"])
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
+
+    def test_bad_outputs_are_rejected_with_reasons_then_mediated(self):
+        self.vscript("overlap", "uncovered", "nochecks")
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        for _ in range(2):
+            r = self.step()
+            self.assertEqual(self.next_line(r), "next: wait", r.stdout)
+            self.wait()
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: mediate "), r.stdout)
+        problems = [e["problems"] for e in self.events(mdir) if e["kind"] == "verifier-exit"]
+        self.assertTrue(any("和节点声明的文件重叠" in p for p in problems[0]), problems[0])
+        self.assertFalse(any("是仓库里已有的文件" in p for p in problems[0]))
+        self.assertTrue(any("第 1 条验收标准没有检查" in p for p in problems[1]), problems[1])
+        self.assertTrue(any("缺少 checks.json" in p for p in problems[2]), problems[2])
+        self.assertEqual((mdir / "state").read_text().strip(), "blocked")
+
+    def test_existing_file_cannot_be_used_as_a_test(self):
+        (self.repo / "tests" / "orc").mkdir(parents=True)
+        (self.repo / "tests" / "orc" / "test_export.sh").write_text("old\n")
+        self.commit("已有测试")
+        self.vscript("ok")
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: wait")
+        exit_ = [e for e in self.events(mdir) if e["kind"] == "verifier-exit"][0]
+        self.assertTrue(any("是仓库里已有的文件" in p for p in exit_["problems"]), exit_["problems"])
+
+    def test_question_blocks_and_answer_resumes_the_verifier(self):
+        self.vscript("question:导出失败时要报错还是返回空文件？", "ok")
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: ask-user 导出失败时要报错还是返回空文件？")
+        self.assertEqual(self.run_orc("answer", "报错").returncode, 0)
+        r = self.step()
+        self.assertIn("blocked → verifying", r.stdout)
+        self.assertEqual(self.next_line(r), "next: wait")
+        self.wait()
+        first, second = self.vcalls()
+        self.assertEqual(second["args"][second["args"].index("--resume") + 1],
+                         first["args"][first["args"].index("--session-id") + 1])
+        self.assertIn("报错", second["prompt"])
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
+
+    def test_checks_run_sandboxed_on_a_clean_copy(self):
+        # 检查命令是 agent 写的：只能写快照目录和临时目录，不能联网
+        self.vscript("escape")
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
+        self.assertFalse((self.fake / "escaped").exists())
+        self.assertFalse((self.tmp / "wt" / "m1" / "verify-work" / ".check-run" / "net-open").exists())
+        self.assertFalse((self.repo / "net-open").exists())
+
+    def test_new_commit_in_product_repo_during_verify_stops(self):
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        (self.repo / "src").mkdir()
+        (self.repo / "src" / "export.py").write_text("x = 1\n")
+        self.commit("有人在验证期间提交了实现")
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: error "), r.stdout)
+        self.assertIn("当前提交", self.next_line(r))
+
+
 class Publish(PlanningCase):
     def test_publish_failure_never_offers_a_local_file(self):
         (self.fake / "publish").write_text("fail")
         mdir = self.to_plan_review("ok")
+        self.through_verify()
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: error "), r.stdout)
         self.assertIn("审阅页发布失败", self.next_line(r))
@@ -287,6 +469,7 @@ class Publish(PlanningCase):
 class ReviseAndGo(PlanningCase):
     def at_gate(self, *steps):
         mdir = self.to_plan_review(*steps)
+        self.through_verify()
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
         return mdir
@@ -301,8 +484,15 @@ class ReviseAndGo(PlanningCase):
         self.wait()
         self.assertIn("再加一个按日期筛选", self.calls()[1]["prompt"])
         self.assertIn("--resume", self.calls()[1]["args"])
+        self.through_verify()
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
+        # 重新规划之后，验证从头写：新会话（不 resume 上一轮），并带上用户的意见
+        first, second = self.vcalls()
+        self.assertIn("--session-id", second["args"])
+        self.assertNotEqual(first["args"][first["args"].index("--session-id") + 1],
+                            second["args"][second["args"].index("--session-id") + 1])
+        self.assertIn("再加一个按日期筛选", second["prompt"])
 
     def test_go_freezes_four_files_then_waits_for_signature(self):
         mdir = self.at_gate("ok")
@@ -321,6 +511,15 @@ class ReviseAndGo(PlanningCase):
                              "--control-dir", control], capture_output=True, text=True)
         self.assertEqual(ok.returncode, 0, ok.stderr)
         self.assertIn("frozen", [e["kind"] for e in self.events(mdir)])
+        # 验收测试冻结进 control/，哈希写进签名的 brief-exec.md
+        frozen_test = c / "approved-tests" / "tests" / "orc" / "test_export.sh"
+        self.assertEqual(frozen_test.read_text(), "test -f src/export.py\n")
+        checks = json.loads((c / "approved-checks.json").read_text())
+        self.assertEqual([x["id"] for x in checks["checks"]], ["export-writes-csv"])
+        brief = (c / "brief-exec.md").read_text()
+        self.assertIn("## 冻结的验收测试", brief)
+        self.assertIn(hashlib.sha256((c / "approved-checks.json").read_bytes()).hexdigest(), brief)
+        self.assertIn(hashlib.sha256(frozen_test.read_bytes()).hexdigest(), brief)
         # 没签名：停在 plan-review，一直提示签名
         for _ in range(2):
             r = self.step()
@@ -365,6 +564,7 @@ class ReviseAndGo(PlanningCase):
     def test_go_refused_before_review_page_is_published(self):
         (self.fake / "publish").write_text("fail")
         mdir = self.to_plan_review("ok")
+        self.through_verify()
         self.step()
         r = self.run_orc("go", "--mission", "m1")
         self.assertNotEqual(r.returncode, 0)
