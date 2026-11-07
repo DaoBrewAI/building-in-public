@@ -184,6 +184,77 @@ pending → running → submitted → integrated
 
 **签名**：用户在自己的终端运行 `northstar approve-mission <control 目录>`，按 Touch ID。之后 `orc step` 先跑 `northstar verify-mission`，再跑 `verify-approved-authority.py`，再按 `brief-exec.md` 里的哈希核对 `approved-checks.json` 和 `approved-tests/`（多一个、少一个、改一个都不行），全部通过才进入 `approved`。进入 `approved` 之后每次 step 都重新做这三项。没签名时一直是 `next: sign …`；签名无效时输出 `next: error`，状态停在 `plan-review`。
 
+## 执行（阶段 4）
+
+### 进入 `executing` 时一次性准备
+
+- 产品仓库必须有 `.northstar/NORTHSTAR.md`：对齐评审（`northstar-review`）要读它。没有就 `next: error`。
+- 读 `orc/config/orc.toml` 的 `[execution]`（并发上限、执行会话超时、崩溃重试次数），写进 `exec-setup` 事件，之后不变。
+- 从产品仓库当前提交开出 **mission 分支** `orc/<mission>`，放在父 worktree `~/.orc-worktrees/<mission>/integration/`。orc 把冻结的验收测试（`control/approved-tests/`）提交到这个分支上（提交说明 `[orc] 冻结的验收测试`）。节点都从这个分支开出来，所以测试在节点里是**已跟踪的文件**：执行会话改了它，就是改了声明文件以外的文件，提交关口和 broker 都会拒绝。
+
+### 节点
+
+- **调度**：节点 `pending`，前置节点都 `integrated`，声明文件不和任何已启动、未集成的节点重叠，运行中的节点数没到上限，就启动它。每次 step 都重新算。
+- **启动**：从 mission 分支当前的提交开出分支 `orc-task/<mission>/<node>`，worktree 在 `~/.orc-worktrees/<mission>/<node>/`。按复用脚本的约定写好控制文件：`control/tasks/<node>/` 的 `worktrees.txt`、`task-state-dir`、`generation`、`accepted-thread-id`、`outcome-nonce`、`state`；`nodes/<node>/` 的 `worktrees.txt`、`state`。
+- **执行会话**：`implement` 角色，`claude -p` 在后台运行，工作目录是节点的 worktree。沙箱开、`failIfUnavailable`、不允许脱离沙箱；主仓库 `.git` denyWrite（git 只读）；网络关；Write / Edit 只放行 worktree；环境变量 `ORC_ROLE=implement`、`ORC_NODE=<node>`（Stop hook 据此放行未提交的改动）。实测见 `proposals/2026-11-07-stop-gate-implement.md`。
+- **一条验收标准一轮**：执行会话做完一条验收标准就结束这一轮，最后输出一个 JSON 结果（见下）。orc 处理完再用 `claude --resume` 回到同一个会话，发下一条指示。
+- **超时和崩溃**：一轮超过 `session_timeout_seconds` 就结束整个进程组，按崩溃处理（提交关口、整体评审、集成内部各有超时：检查每条 300 秒、评审 1800 秒、broker 600 秒）。崩溃（退出码非 0、进程不见了、超时）按 `crash_retries` 重试，重试用同一个会话；再失败，节点 `blocked`。
+
+**执行会话每轮最后输出的 JSON**（只认最后一条消息里的这个对象）：
+
+| `status` | 其他字段 | orc 怎么处理 |
+| --- | --- | --- |
+| `commit` | `acceptance`（这次完成的第几条，从 1 开始；rework 时可以为空）、`files`（改了哪些文件）、`message`（提交说明） | 交给提交关口 |
+| `question` | `question` | 节点 `blocked`，mission 进入 `blocked`（ask-user），回答发回同一个会话 |
+| `test-wrong` | `check`（检查 id）、`reason` | 交给 `review` 模型判断冻结的测试有没有错（见下） |
+
+格式不对、`files` 和 worktree 里实际改动的文件对不上，都算这一轮没完成，把问题发回同一个会话；连续 2 次就节点 `blocked`、mission `mediate`。
+
+### 提交关口（锁外的后台任务；`proposals/2026-11-07-commit-gate.md`）
+
+依次检查，任何一项不过就拒绝，后面的不再做：
+
+1. **文件范围**：worktree 里实际改动的文件都在本节点的 `files` 里；动了冻结的验收测试直接拒绝。
+2. **测试哈希**：worktree 里每个冻结的测试文件，和 `brief-exec.md` 里签名的哈希一致。
+3. **检查**：跑这次声明完成的验收标准对应的冻结检查，加上本节点此前已经通过的检查。在 worktree 当前内容的副本上、沙箱里运行（同阶段 3：只能写副本、不能联网、每条最多 300 秒），必须全部通过。不通过就拒绝，**不调用评审模型**。
+4. **对齐评审**：`northstar-review --role auto`，工作目录是节点的 worktree，输入是本节点的 DAG 条目、签名的 `approved-design.md`、检查结果和这次的 diff；上一次被判 DRIFT 时带上 `--prev`。退出码 0 ALIGNED、1 DRIFT（拒绝，发纠偏单）。退出码 2 时：diff 超过上限就拒绝、要求拆小；其他原因（评审模型不可用等）**不放行、不降级**，节点 `blocked`，mission `ask-user`。
+5. 全部通过：算出 `diff_sha256`，写提交请求 `nodes/<node>/COMMIT-REQUEST-<n>.json`，把两份 `state` 设成 `ready_for_commit`，运行 `commit-broker.sh --once`。broker 在锁里再做一遍它自己的全部校验，并核对 `diff_sha256`：评审之后改了一个字节都提交不进去。
+
+**连续被拒**（检查不过、DRIFT、范围不对都算；评审服务出错不算）：
+
+- 第 1 次：纠偏单发回同一个会话。
+- 第 2 次：把 worktree 里未提交的改动存成补丁（`nodes/<node>/discarded-<n>.patch`），worktree 回到上一次提交通过的状态；新开会话（`generation` 加 1），发完整 brief 和纠偏单。
+- 第 3 次：节点 `blocked`，mission `mediate`。
+- 提交成功一次，计数清零。
+
+纠偏单写在 `nodes/<node>/correction-<n>.md`：违反了什么（检查 id 和输出、N# 或设计的哪一节）、证据、相关验收标准的原文。
+
+### 冻结的测试有错时
+
+执行会话输出 `test-wrong` 后，orc 用 `review` 模型新开一个只读会话（`claude -p`，只放行 Read），给它设计、本节点的 DAG 条目、测试全文、检查输出和执行会话的理由，要它输出 `{"verdict": "test-ok" | "test-wrong", "reason": "…"}`。
+
+- `test-ok`：带着理由发回执行会话，继续修实现。
+- `test-wrong`：节点 `blocked`，mission `ask-user`：改测试要回到写验证这一步，重新审阅、go、签名，由用户决定。
+
+### 整体评审和集成
+
+- 节点每条验收标准都有一次通过的提交后，进入 `submitted`（`nodes/<node>/state` 设成 `completed`，写 `report.md`）。orc 在后台做整体评审：先在节点分支的最新提交上跑本节点全部冻结检查，不通过就 `rework`，不调用模型；通过后用 `northstar-review --role review`，拿整个节点的累计 diff 和检查结果对照签名的设计。DRIFT 时写 `unresolved-rework`，节点回到 `rework`，纠偏单发回执行会话；rework 的提交通过提交关口后，清掉 `unresolved-rework`，再做一次整体评审。
+- 整体评审通过：orc 写 `verification.sha`、`coordinator-verification.sha/.md`、`parent-verification.sha`，然后在后台运行复用的 `integrate-task.sh`。集成一次只跑一个，脚本自己再拿集成锁，普通 merge，不改写历史。
+- 所有节点都 `integrated` 后，进入 `reviewing` 之前，orc 不只信日志，从协议文件重新算一遍：每个节点 `control/tasks/<node>/state` 是 `integrated`，记录的 `integrated_sha` 确实在 mission 分支上。和日志不一致就 `next: error`。
+
+### 后台任务和事件
+
+执行会话、提交关口、整体评审、集成、判断测试对错，都是后台任务：orc 在锁里启动它，写 `job-start`；任务自己跑（broker 和 integrate-task 会自己拿锁）；下一次 `orc step` 读到它的退出码文件，处理结果，写 `job-exit`。运行文件放在 `~/.orc-worktrees/<mission>/.jobs/`。`orc wait` 等到任何一个后台任务结束就返回。
+
+| `kind` | 额外字段 |
+| --- | --- |
+| `exec-setup` | `base`、`branch`、`parent_worktree`、`tests_commit`、`config` |
+| `node-start` | `node`、`base`、`branch`、`worktree` |
+| `job-start` | `job`、`type`（executor / gate / submit / dispute / integrate）、`node`、`pid`；执行会话另有 `session`、`mode`、`generation` |
+| `job-exit` | `job`、`type`、`node`、`rc`、`outcome`，以及按类型的结果（执行会话的 JSON、关口的结论和理由、提交的 sha） |
+
+`node-state`、`commit`、`review`、`correction`、`check` 沿用上表。
+
 ## `orc step` 的约定
 
 - 每次运行：拿锁 → 对齐 `state` 与日志 → 执行当前状态的一段机械流程 → 写日志和状态 → 放锁 → 最后一行打印 `next: …`。

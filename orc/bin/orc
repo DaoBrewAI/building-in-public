@@ -722,8 +722,18 @@ def run_checks(m: Mission, base: str, test_src: Path, test_files: List[str], che
         dst = where / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(test_src / rel, dst)
+    results = []
+    for check, run in zip(checks, run_check_commands(where, checks)):
+        ok = expected_before(check, run["rc"], run["tail"])
+        results.append({"id": check["id"], "expect_before": check["expect_before"], "rc": run["rc"], "ok": ok,
+                        "tail": run["tail"]})
+    return results
+
+
+def run_check_commands(where: Path, checks: List[dict]) -> List[dict]:
+    """在 where（一份代码副本）里逐条运行检查命令：沙箱里只能写这份副本（TMPDIR 也在里面），不能联网，每条最多 CHECK_TIMEOUT 秒。"""
     tmp = where / ".orc-tmp"
-    tmp.mkdir()
+    tmp.mkdir(exist_ok=True)
     env = dict(os.environ, ORC_ROLE="check", TMPDIR=os.path.realpath(tmp) + "/")
     results = []
     for check in checks:
@@ -733,8 +743,7 @@ def run_checks(m: Mission, base: str, test_src: Path, test_files: List[str], che
             rc, tail = run.returncode, (run.stdout + run.stderr).strip().splitlines()[-8:]
         except subprocess.TimeoutExpired:
             rc, tail = None, [f"超过 {CHECK_TIMEOUT} 秒没有结束"]
-        ok = expected_before(check, rc, tail)
-        results.append({"id": check["id"], "expect_before": check["expect_before"], "rc": rc, "ok": ok, "tail": tail})
+        results.append({"id": check["id"], "command": check["command"], "rc": rc, "tail": tail})
     return results
 
 
@@ -1280,13 +1289,1038 @@ def h_terminal(m: Mission):
     return f"error mission {m.name} 已完成清理，没有可做的步骤。新任务用 orc step --new。", False
 
 
+# ---------------------------------------------------------------- 执行（阶段 4，STATE.md「执行」）
+
+EXEC_CONFIG = Path(os.environ.get("ORC_EXEC_CONFIG", ORC_ROOT / "config" / "orc.toml"))
+EXEC_KEYS = ("max_parallel", "session_timeout_seconds", "crash_retries")
+RESULT_REPAIRS = 2              # 执行会话的结果格式不对时，发回同一个会话修的次数
+STREAK_FRESH, STREAK_BLOCK = 2, 3   # 连续被拒第 2 次：撤回改动、新开会话；第 3 次：节点 blocked
+REVIEW_TIMEOUT = 1800           # 一次对齐评审最多等多久（秒）；超时按「评审服务出错」处理，不放行
+NODE_EVENTS = {"node-start", "job-start", "job-exit", "node-blocked", "node-unblocked"}
+ORC_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "user.name=orc", "-c", "user.email=orc@localhost"]
+
+
+def exec_config(path: Path = EXEC_CONFIG) -> Dict[str, int]:
+    if not path.is_file():
+        raise OrcError(f"找不到执行配置 {path}。把 orc/config/orc.toml 放回原位再运行。")
+    try:
+        data = parse_toml(path.read_text(encoding="utf-8"))
+    except OrcError:
+        raise
+    except Exception as error:
+        raise OrcError(f"orc.toml 解析失败：{error}。按文件里的注释修正格式。") from error
+    section = data.get("execution")
+    if not isinstance(section, dict):
+        raise OrcError("orc.toml 缺少 [execution] 段。照模板补上。")
+    out = {}
+    for key in EXEC_KEYS:
+        value = str(section.get(key, ""))
+        if not value.isdigit():
+            raise OrcError(f"orc.toml 的 [execution] {key} 必须是非负整数（写成带引号的字符串），现在是「{value}」。")
+        out[key] = int(value)
+    if out["max_parallel"] < 1 or out["session_timeout_seconds"] < 1:
+        raise OrcError("orc.toml 的 max_parallel 和 session_timeout_seconds 至少是 1。")
+    return out
+
+
+def northstar_root() -> Path:
+    return Path(os.environ.get("ORC_NORTHSTAR_ROOT", "/opt/northstar"))
+
+
+def run_git(cwd, *args, env: Optional[dict] = None, check: bool = True) -> str:
+    r = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, env=env)
+    if check and r.returncode != 0:
+        raise OrcError(f"git {' '.join(args)}（在 {cwd}）失败：{(r.stderr or r.stdout).strip()}")
+    return r.stdout.strip()
+
+
+def read1(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def exec_dir(m: Mission) -> Path:
+    return worktrees_root() / m.name
+
+
+def parent_worktree(m: Mission) -> Path:
+    return exec_dir(m) / "integration"
+
+
+def jobs_dir(m: Mission) -> Path:
+    return exec_dir(m) / ".jobs"
+
+
+def job_file(m: Mission, job: str, ext: str) -> Path:
+    return jobs_dir(m) / f"{job}.{ext}"
+
+
+def mission_branch(m: Mission) -> str:
+    return f"orc/{m.name}"
+
+
+def node_branch(m: Mission, node: str) -> str:
+    return f"orc-task/{m.name}/{node}"
+
+
+def node_ctl(m: Mission, node: str) -> Path:
+    return m.control / "tasks" / node
+
+
+def node_work(m: Mission, node: str) -> Path:
+    return m.dir / "nodes" / node
+
+
+def approved_tasks(m: Mission) -> Dict[str, dict]:
+    tasks = json.loads((m.control / "approved-task-dag.json").read_text(encoding="utf-8"))["tasks"]
+    return {t["id"]: t for t in tasks}
+
+
+def approved_checks(m: Mission) -> dict:
+    return json.loads((m.control / "approved-checks.json").read_text(encoding="utf-8"))
+
+
+def node_checks(m: Mission, node: str) -> List[dict]:
+    return [c for c in approved_checks(m)["checks"] if c["node"] == node]
+
+
+def exec_setup(m: Mission) -> Optional[dict]:
+    return next((e for e in reversed(m.events()) if e.get("kind") == "exec-setup"), None)
+
+
+def node_events(m: Mission, node: str) -> List[dict]:
+    return [e for e in m.events() if e.get("node") == node and e.get("kind") in NODE_EVENTS]
+
+
+def job_starts(m: Mission, node: Optional[str] = None, type_: Optional[str] = None) -> List[dict]:
+    return [e for e in m.events() if e.get("kind") == "job-start"
+            and (node is None or e.get("node") == node) and (type_ is None or e.get("type") == type_)]
+
+
+def job_exits(m: Mission, node: Optional[str] = None, type_: Optional[str] = None) -> List[dict]:
+    return [e for e in m.events() if e.get("kind") == "job-exit"
+            and (node is None or e.get("node") == node) and (type_ is None or e.get("type") == type_)]
+
+
+def running_jobs(m: Mission) -> List[dict]:
+    done = {e["job"] for e in job_exits(m)}
+    return [s for s in job_starts(m) if s["job"] not in done]
+
+
+def changed_paths(wt: Path) -> List[str]:
+    """worktree 里实际改动的文件（含新建、删除；忽略的文件不算），按仓库相对路径排序。"""
+    out = subprocess.run(["git", "-C", str(wt), "status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"],
+                         capture_output=True)
+    if out.returncode != 0:
+        raise OrcError(f"读不出 {wt} 的改动（{out.stderr.decode(errors='replace').strip()}）。")
+    return sorted({item[3:].decode("utf-8") for item in out.stdout.split(b"\0") if len(item) > 3})
+
+
+def diff_sha256(root: Path, paths: List[str]) -> str:
+    """和 commit-broker.sh 的 compute_diff_sha256 同一个算法：broker 据此核对提交的正是评审过的字节。"""
+    payload = bytearray()
+    for rel in sorted(paths):
+        target = root / rel
+        if target.is_file() and not target.is_symlink():
+            state, mode = b"file", (b"100755" if os.lstat(target).st_mode & 0o111 else b"100644")
+            digest = hashlib.sha256(target.read_bytes()).hexdigest().encode("ascii")
+        elif not os.path.lexists(target):
+            state, mode, digest = b"deleted", b"000000", b""
+        else:
+            raise OrcError(f"{rel} 不是普通文件，不能提交。")
+        payload.extend(rel.encode("utf-8") + b"\0" + state + b"\0" + mode + b"\0" + digest + b"\n")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def pending_diff(wt: Path, paths: List[str]) -> str:
+    """这次要提交的改动（含新建文件）。用临时 index 算，不碰 worktree 自己的 index。"""
+    import tempfile
+    if not paths:
+        return ""
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
+        run_git(wt, "read-tree", "HEAD", env=env)
+        run_git(wt, "add", "-A", "--", *paths, env=env)
+        r = subprocess.run(["git", "-C", str(wt), "diff", "--cached", "--no-color", "--no-renames", "HEAD", "--", *paths],
+                           capture_output=True, text=True, env=env)
+        return r.stdout
+
+
+def copy_worktree(wt: Path, dest: Path) -> None:
+    """把 worktree 当前的内容（已跟踪和未忽略的新文件，不含 .git）复制成一份副本，检查在副本上跑。"""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    out = subprocess.run(["git", "-C", str(wt), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                         capture_output=True, check=True).stdout
+    for rel in {p.decode("utf-8") for p in out.split(b"\0") if p}:
+        src = wt / rel
+        if src.is_file() and not src.is_symlink():
+            (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dest / rel)
+
+
+def last_json_object(text: str) -> Optional[dict]:
+    """取文本里最后一个 JSON 对象（允许外面包着代码块）。"""
+    decoder = json.JSONDecoder()
+    for i in range(len(text) - 1, -1, -1):
+        if text[i] != "{":
+            continue
+        try:
+            obj, end = decoder.raw_decode(text[i:])
+        except ValueError:
+            continue
+        if isinstance(obj, dict) and not text[i + end:].strip().strip("`").strip():
+            return obj
+    return None
+
+
+def claude_result(path: Path) -> Tuple[Optional[str], Optional[str]]:
+    """读 claude -p --output-format json 的输出：返回 (最后一条消息, 错误)。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return None, f"输出不是 claude --output-format json 的格式（{error}）"
+    if not isinstance(data, dict):
+        return None, "输出不是 JSON 对象"
+    if data.get("is_error"):
+        return None, f"claude 报错：{str(data.get('result'))[:300]}"
+    return str(data.get("result") or ""), None
+
+
+# -- 进入 executing：mission 分支、冻结的测试
+
+def setup_execution(m: Mission) -> dict:
+    cfg = exec_config()
+    repo = m.repo()
+    if not (repo / ".northstar" / "NORTHSTAR.md").is_file():
+        raise OrcError(f"产品仓库 {repo} 没有 .northstar/NORTHSTAR.md：每次提交前的对齐评审（northstar-review）要对照它。"
+                       "先让用户在产品仓库 northstar init 并签好 NORTHSTAR，再运行 orc step。")
+    approved = approved_checks(m)
+    base, branch, parent = approved["base"], mission_branch(m), parent_worktree(m)
+    exists = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+                            capture_output=True).returncode == 0
+    if not exists:
+        if parent.exists():
+            raise OrcError(f"{parent} 已经存在，但分支 {branch} 不存在：不是 orc 留下的。让用户确认后移走它，再运行 orc step。")
+        parent.parent.mkdir(parents=True, exist_ok=True)
+        run_git(repo, "worktree", "add", "-q", "-b", branch, str(parent), base)
+    elif not parent.is_dir() or run_git(parent, "symbolic-ref", "--short", "HEAD", check=False) != branch:
+        raise OrcError(f"分支 {branch} 已经存在，但父 worktree {parent} 不在这个分支上：不是 orc 留下的状态。把这条消息告诉用户。")
+    tip = run_git(parent, "rev-parse", "HEAD")
+    if tip == base:
+        for rel in approved["test_files"]:
+            dst = parent / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(m.control / "approved-tests" / rel, dst)
+        run_git(parent, "add", "--", *approved["test_files"])
+        clauses = sorted({c for t in approved_tasks(m).values() for c in t.get("clauses", [])}, key=lambda c: int(c[1:]))
+        prefix = f"[{','.join(clauses)}]" if clauses else "[orc]"
+        run_git(parent, *ORC_GIT, "commit", "-q", "-m", f"{prefix} orc：冻结 mission {m.name} 的验收测试")
+        tip = run_git(parent, "rev-parse", "HEAD")
+    elif run_git(parent, "rev-parse", "HEAD^", check=False) != base:
+        raise OrcError(f"mission 分支 {branch} 上有 orc 不认识的提交（{tip[:12]}）。把这条消息告诉用户。")
+    for rel, digest in approved["test_files"].items():
+        if sha256_file(parent / rel) != digest:
+            raise OrcError(f"mission 分支上的验收测试 {rel} 和签名时的哈希不一致。把这条消息告诉用户。")
+    return m.append("exec-setup", "orc step", base=base, branch=branch, parent_worktree=os.path.realpath(parent),
+                    tests_commit=tip, config=cfg)
+
+
+def h_approved(m: Mission):
+    if exec_setup(m) is None:
+        setup_execution(m)
+    m.transition("executing", "orc step", reason="签名有效，开始调度节点")
+    print(f"mission {m.name}：approved → executing")
+    return None, True
+
+
+# -- 后台任务
+
+def launch_job(m: Mission, type_: str, node: str, argv: List[str], cwd, stdin_text: str = "",
+               env_extra: Optional[dict] = None, **fields) -> str:
+    jobs_dir(m).mkdir(parents=True, exist_ok=True)
+    job = f"{node}.{type_}.{len(job_starts(m, node, type_)) + 1}"
+    write_atomic(job_file(m, job, "in"), stdin_text)
+    wrapper = ('"$@" < "$ORC_RUN_IN" > "$ORC_RUN_OUT" 2> "$ORC_RUN_ERR"; '
+               'echo $? > "$ORC_RUN_RC.tmp" && mv "$ORC_RUN_RC.tmp" "$ORC_RUN_RC"')
+    env = dict(os.environ, ORC_MISSION=m.name, ORC_RUN_IN=str(job_file(m, job, "in")),
+               ORC_RUN_OUT=str(job_file(m, job, "out")), ORC_RUN_ERR=str(job_file(m, job, "err")),
+               ORC_RUN_RC=str(job_file(m, job, "rc")))
+    env.update(env_extra or {})
+    proc = subprocess.Popen(["sh", "-c", wrapper, f"orc-job-{m.name}-{job}", *argv], cwd=str(cwd), env=env,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            start_new_session=True)
+    m.append("job-start", "orc step", job=job, type=type_, node=node, pid=proc.pid, **fields)
+    return job
+
+
+def job_status(m: Mission, start: dict) -> Tuple[str, Optional[int]]:
+    """(running | done | lost, 退出码)。拿不准就当它还在运行（REUSE.md）。"""
+    rc_file = job_file(m, start["job"], "rc")
+    if rc_file.is_file():
+        text = rc_file.read_text().strip()
+        return "done", int(text) if text.lstrip("-").isdigit() else None
+    if process_alive(start["pid"], f"orc-job-{m.name}-{start['job']}"):
+        return "running", None
+    return "lost", None
+
+
+def job_age_seconds(start: dict) -> float:
+    started = _dt.datetime.fromisoformat(start["ts"])
+    return (_dt.datetime.now().astimezone() - started).total_seconds()
+
+
+def session_overdue(start: dict, cfg: dict) -> bool:
+    """模型会话（执行会话的一轮、判断测试对错）超过 session_timeout_seconds 就算超时。"""
+    return start["type"] in ("executor", "dispute") and job_age_seconds(start) > cfg["session_timeout_seconds"]
+
+
+def kill_job(start: dict) -> None:
+    import signal
+    try:
+        os.killpg(start["pid"], signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def orc_self(*args: str) -> List[str]:
+    return [sys.executable, str(Path(__file__).resolve()), *args]
+
+
+# -- 节点的准备和执行会话
+
+def start_node(m: Mission, node: str) -> None:
+    """开分支和 worktree，按复用脚本的约定写控制文件。可以重复运行（中断后接上）。"""
+    repo, parent, wt = m.repo(), parent_worktree(m), m.worktree(node)
+    ctl, work = node_ctl(m, node), node_work(m, node)
+    branch = node_branch(m, node)
+    if not wt.exists():
+        base = run_git(parent, "rev-parse", "HEAD")
+        if subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],
+                          capture_output=True).returncode == 0:
+            raise OrcError(f"分支 {branch} 已经存在，但节点 worktree {wt} 不存在：不是 orc 留下的状态。把这条消息告诉用户。")
+        wt.parent.mkdir(parents=True, exist_ok=True)
+        run_git(repo, "worktree", "add", "-q", "-b", branch, str(wt), base)
+    else:
+        if run_git(wt, "symbolic-ref", "--short", "HEAD", check=False) != branch:
+            raise OrcError(f"{wt} 已经存在，但不在分支 {branch} 上：不是 orc 留下的。把这条消息告诉用户。")
+        manifest = read1(ctl / "worktrees.txt")
+        base = manifest.split("\t")[2] if manifest.count("\t") == 3 else run_git(wt, "merge-base", "HEAD", mission_branch(m))
+    wtr = os.path.realpath(wt)
+    ctl.mkdir(parents=True, exist_ok=True)
+    work.mkdir(parents=True, exist_ok=True)
+    row = f"{wtr}\t{branch}\t{base}\t{os.path.realpath(repo)}\n"
+    for d in (ctl, work):
+        write_atomic(d / "worktrees.txt", row)
+    write_atomic(ctl / "task-state-dir", os.path.realpath(work) + "\n")
+    if not (ctl / "generation").is_file():
+        write_atomic(ctl / "generation", "1\n")
+        write_atomic(ctl / "accepted-thread-id", str(__import__("uuid").uuid4()) + "\n")
+        write_atomic(ctl / "outcome-nonce", __import__("uuid").uuid4().hex + "\n")
+    for d in (ctl, work):
+        if not (d / "state").is_file():
+            write_atomic(d / "state", "ready\n")
+    write_atomic(work / "entry.json", json.dumps(approved_tasks(m)[node], ensure_ascii=False, indent=2) + "\n")
+    m.append("node-start", "orc step", node=node, base=base, branch=branch, worktree=wtr)
+    print(f"节点 {node}：已开出 {branch}（{wtr}）")
+
+
+def repo_git_dir(m: Mission) -> str:
+    common = Path(run_git(m.repo(), "rev-parse", "--git-common-dir"))
+    return os.path.realpath(common if common.is_absolute() else m.repo() / common)
+
+
+def done_acceptance(m: Mission, node: str) -> List[int]:
+    done = set()
+    for e in job_exits(m, node, "gate"):
+        if e.get("outcome") == "committed":
+            done.update(e.get("acceptance", []))
+    return sorted(done)
+
+
+def remaining_acceptance(m: Mission, node: str) -> List[int]:
+    n = len(approved_tasks(m)[node].get("acceptance", []))
+    return [i for i in range(1, n + 1) if i not in done_acceptance(m, node)]
+
+
+def acceptance_lines(m: Mission, node: str, which: Optional[List[int]] = None) -> str:
+    items = approved_tasks(m)[node].get("acceptance", [])
+    which = which if which is not None else list(range(1, len(items) + 1))
+    return "\n".join(f"{i}. {items[i - 1]}" for i in which if 1 <= i <= len(items))
+
+
+def executor_prompt(m: Mission, node: str, extra: Optional[str]) -> str:
+    task = approved_tasks(m)[node]
+    done = done_acceptance(m, node)
+    bullets = lambda xs: "\n".join(f"  - `{x}`" for x in xs) or "  - （无）"
+    acceptance = "\n".join(f"  {i}. {a}" + ("（已提交）" if i in done else "")
+                           for i, a in enumerate(task.get("acceptance", []), 1))
+    checks = "\n".join(f"  - `{c['id']}`（验收标准 {', '.join(map(str, c['acceptance']))}）：`{c['command']}`"
+                       for c in node_checks(m, node)) or "  - （无）"
+    values = {"{{MISSION}}": m.name, "{{NODE}}": node, "{{WORKTREE}}": os.path.realpath(m.worktree(node)),
+              "{{BRIEF_EXEC}}": (m.control / "brief-exec.md").read_text(encoding="utf-8").strip(),
+              "{{FILES}}": bullets(task.get("files", [])), "{{CONTRACTS}}": bullets(task.get("contracts", [])),
+              "{{CLAUSES}}": "、".join(task.get("clauses", [])) or "（无）", "{{ACCEPTANCE}}": acceptance,
+              "{{CHECKS}}": checks, "{{DESIGN}}": (m.control / "approved-design.md").read_text(encoding="utf-8").strip()}
+    text = (ORC_ROOT / "templates" / "executor-brief.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        text = text.replace(key, value)
+    return text + (f"\n\n---\n\n{extra}" if extra else "")
+
+
+def launch_executor(m: Mission, node: str, message: Optional[str], fresh: bool = False) -> None:
+    """后台启动执行会话的一轮。第一次和 fresh 时新开会话（fresh 时 generation 加 1），否则 --resume 同一个会话。"""
+    if shutil.which("claude") is None:
+        raise OrcError("PATH 里找不到 claude，启动不了执行会话 → 安装 Claude Code 后再运行 orc step。")
+    cfg, ctl = m.roles()["implement"], node_ctl(m, node)
+    if fresh:
+        write_atomic(ctl / "generation", f"{int(read1(ctl / 'generation')) + 1}\n")
+        write_atomic(ctl / "accepted-thread-id", str(__import__("uuid").uuid4()) + "\n")
+        write_atomic(ctl / "outcome-nonce", __import__("uuid").uuid4().hex + "\n")
+    session, generation = read1(ctl / "accepted-thread-id"), int(read1(ctl / "generation"))
+    used = any(s.get("session") == session for s in job_starts(m, node, "executor"))
+    mode = "resume" if used else "new"
+    prompt = message if used else executor_prompt(m, node, message)
+    wt = os.path.realpath(m.worktree(node))
+    # 实测（proposals/2026-11-07-stop-gate-implement.md）：沙箱里 Bash 写不了 worktree 以外（临时目录除外）、不能联网；
+    # 主仓库 .git denyWrite 后 git 只读，提交只能走提交关口和 broker；Write / Edit 用权限规则限制在 worktree 里
+    settings = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+                            "filesystem": {"denyWrite": [repo_git_dir(m)]}}}
+    tools = ["Read", "Glob", "Grep", "Bash"] + [f"{t}(/{wt}/**)" for t in ("Write", "Edit", "MultiEdit")]
+    argv = ["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
+            "--permission-mode", "default", f"--settings={json.dumps(settings)}", f"--allowedTools={','.join(tools)}"]
+    argv += ["--session-id", session] if mode == "new" else ["--resume", session]
+    # ORC_ROLE=implement：信任层的 Stop hook 据此放行未提交的改动（提交由 orc 做）；不写字节码和 pytest 缓存，免得弄脏 worktree
+    env = {"ORC_ROLE": "implement", "ORC_NODE": node, "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:cacheprovider"}
+    launch_job(m, "executor", node, argv, wt, prompt, env, session=session, mode=mode, generation=generation)
+    print(f"节点 {node}：已启动执行会话（{mode}，第 {generation} 代，模型 {cfg['model']}）")
+
+
+def validate_executor_result(m: Mission, node: str, obj: Optional[dict]) -> List[str]:
+    if obj is None:
+        return ["最后一条消息里没有 JSON 对象。结束一轮时最后只输出一个 JSON 对象（见 brief 的「怎么工作」）"]
+    status = obj.get("status")
+    task = approved_tasks(m)[node]
+    if status == "commit":
+        problems = []
+        acc, files, message = obj.get("acceptance"), obj.get("files"), obj.get("message")
+        n = len(task.get("acceptance", []))
+        if not isinstance(acc, list) or not all(isinstance(a, int) and not isinstance(a, bool) and 1 <= a <= n for a in acc):
+            problems.append(f"acceptance 必须是 1 到 {n} 之间的编号列表")
+        elif not acc and not (node_ctl(m, node) / "unresolved-rework").exists():
+            problems.append("acceptance 不能为空：写这次完成的验收标准编号（只有整体评审打回后的 rework 提交可以为空）")
+        if not isinstance(message, str) or not message.strip() or "\0" in message:
+            problems.append("message 必须是一句非空的提交说明")
+        actual = changed_paths(m.worktree(node))
+        if not actual:
+            problems.append("worktree 里没有任何改动，没有可提交的东西")
+        if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
+            problems.append("files 必须是文件路径列表")
+        elif set(files) != set(actual):
+            problems.append(f"files 和 worktree 里实际改动的文件不一致：你写的是 {sorted(set(files))}，实际是 {actual}。"
+                            "把多出来的文件删掉，或者把它们写进 files")
+        return problems
+    if status == "question":
+        q = obj.get("question")
+        return [] if isinstance(q, str) and q.strip() else ["question 必须是一个非空的问题"]
+    if status == "test-wrong":
+        ids = {c["id"] for c in node_checks(m, node)}
+        problems = []
+        if obj.get("check") not in ids:
+            problems.append(f"check 必须是你这个节点的冻结检查 id 之一：{sorted(ids)}")
+        if not isinstance(obj.get("reason"), str) or not obj["reason"].strip():
+            problems.append("reason 必须写明为什么认为测试本身有错")
+        return problems
+    return [f"status 只能是 commit、question 或 test-wrong，不是「{status}」"]
+
+
+# -- 提交关口和整体评审：后台任务，不拿生命周期锁（broker 和 integrate-task 自己拿）
+
+def write_card(m: Mission, node: str, category: str, detail: str, which: Optional[List[int]]) -> Path:
+    work = node_work(m, node)
+    k = len(list(work.glob("correction-*.md"))) + 1
+    labels = {"scope": "文件范围", "tests": "冻结的验收测试被改动", "checks": "冻结的检查没有通过", "drift": "对齐评审判定偏离（DRIFT）",
+              "too-large": "改动超过评审上限", "broker": "commit broker 拒绝", "worktree": "worktree 不干净"}
+    text = (f"# 纠偏单：节点 {node}，第 {k} 张\n\n## 被拒的原因：{labels.get(category, category)}\n\n{detail.strip()}\n\n"
+            f"## 相关验收标准（原文）\n\n{acceptance_lines(m, node, which or None) or '（无）'}\n\n"
+            "按这张纠偏单改。不要改测试或检查来让它通过；认为冻结的测试本身有错时，用 test-wrong 结束这一轮。\n")
+    path = work / f"correction-{k}.md"
+    write_atomic(path, text)
+    return path
+
+
+def call_review(m: Mission, node: str, wt: Path, diff: str, role: str, checks_text: str,
+                prev: Optional[str]) -> Tuple[str, str]:
+    """调用信任层的 northstar-review（和提交前 hook 同一个入口）。返回 (aligned | drift | too-large | unavailable, 原文)。"""
+    import tempfile
+    review = northstar_root() / "bin" / "northstar-review"
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        f.write(checks_text)
+        checks_file = f.name
+    argv = [str(review), "--entry", str(node_work(m, node) / "entry.json"),
+            "--design", str(m.control / "approved-design.md"), "--checks", checks_file, "--role", role]
+    if prev:
+        argv += ["--prev", prev]
+    try:
+        run = subprocess.run(argv, input=diff, cwd=str(wt), capture_output=True, text=True, timeout=REVIEW_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return "unavailable", f"northstar-review 没能运行（{error}）"
+    finally:
+        os.unlink(checks_file)
+    if run.returncode == 0:
+        return "aligned", run.stdout.strip()
+    if run.returncode == 1:
+        return "drift", run.stdout.strip()
+    if "超过评审上限" in run.stderr:
+        return "too-large", run.stderr.strip()
+    return "unavailable", (run.stderr or run.stdout).strip() or f"northstar-review 退出码 {run.returncode}"
+
+
+def prior_drift(m: Mission, node: str) -> Optional[str]:
+    """上一次评审被判 DRIFT（之后还没有 ALIGNED）时，返回它的原因：复审要用 review 模型并确认已经消除。"""
+    for e in reversed([e for e in m.events() if e.get("kind") == "review" and e.get("node") == node]):
+        return e.get("reason") if e.get("verdict") == "DRIFT" else None
+    return None
+
+
+def passed_checks(m: Mission, node: str) -> List[str]:
+    ids: List[str] = []
+    for e in job_exits(m, node, "gate"):
+        if e.get("outcome") == "committed":
+            ids += [cid for cid, ok in e.get("checks", {}).items() if ok and cid not in ids]
+    return ids
+
+
+def run_node_checks(m: Mission, wt: Path, ids: List[str], where: Path) -> Tuple[Dict[str, bool], List[dict], str]:
+    checks = [c for c in approved_checks(m)["checks"] if c["id"] in ids]
+    copy_worktree(wt, where)
+    try:
+        results = run_check_commands(where, checks)
+    finally:
+        shutil.rmtree(where, ignore_errors=True)
+    verdict = lambda r: "通过" if r["rc"] == 0 else f"没通过，退出码 {r['rc']}"
+    text = "\n".join(f"- {r['id']}（{r['command']}）：{verdict(r)}" for r in results)
+    return {r["id"]: r["rc"] == 0 for r in results}, results, text
+
+
+def failed_detail(results: List[dict]) -> str:
+    return "\n\n".join(f"检查 `{r['id']}`（`{r['command']}`）没通过，退出码 {r['rc']}。输出最后几行：\n\n```\n"
+                       + "\n".join(r["tail"]) + "\n```" for r in results if r["rc"] != 0)
+
+
+def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
+    """提交关口（STATE.md）：文件范围 → 测试哈希 → 检查 → 对齐评审 → 写提交请求、运行 broker。"""
+    task, approved = approved_tasks(m)[node], approved_checks(m)
+    wt = Path(os.path.realpath(m.worktree(node)))
+    work, ctl = node_work(m, node), node_ctl(m, node)
+    declared = result.get("acceptance", [])
+    out: dict = {"acceptance": declared, "checks": {}}
+
+    def reject(category: str, detail: str) -> dict:
+        card = write_card(m, node, category, detail, declared)
+        return {**out, "outcome": "rejected", "category": category, "reason": detail.strip().splitlines()[0][:300],
+                "card": str(card)}
+
+    actual = changed_paths(wt)
+    tests = set(approved["test_files"])
+    touched = sorted(set(actual) & tests)
+    if touched:
+        return reject("tests", "改动了冻结的验收测试（只能读，不能改、删、移动）：" + "、".join(touched))
+    outside = sorted(set(actual) - set(task.get("files", [])))
+    if outside:
+        return reject("scope", "改动了声明文件以外的文件：" + "、".join(outside) + "。只能改：" + "、".join(task.get("files", [])))
+    for rel, digest in approved["test_files"].items():
+        p = wt / rel
+        if p.is_symlink() or not p.is_file() or sha256_file(p) != digest:
+            return reject("tests", f"冻结的验收测试 {rel} 和签名时的哈希不一致")
+    if declared:
+        ids = [c["id"] for c in node_checks(m, node) if set(c["acceptance"]) & set(declared)]
+    else:
+        ids = [c["id"] for c in node_checks(m, node)]          # rework 提交：本节点全部检查
+    ids += [cid for cid in passed_checks(m, node) if cid not in ids]   # 此前通过的检查一起跑，防回退
+    out["checks"], results, checks_text = run_node_checks(m, wt, ids, jobs_dir(m) / f"{job}.copy")
+    if not all(out["checks"].values()):
+        return reject("checks", failed_detail(results))
+    diff = pending_diff(wt, actual)
+    prev = prior_drift(m, node)
+    verdict, text = call_review(m, node, wt, diff, "auto", checks_text, prev)
+    out["review"] = {"verdict": verdict, "text": text[:2000], "prev": bool(prev)}
+    if verdict == "drift":
+        return reject("drift", text)
+    if verdict == "too-large":
+        return reject("too-large", text + "\n\n评审不截断：按验收标准拆成更小的提交。")
+    if verdict == "unavailable":
+        return {**out, "outcome": "unavailable", "reason": text[:500]}
+    # 评审通过：写提交请求交给复用的 broker。diff_sha256 把提交绑定到评审过的字节
+    base = read1(ctl / "worktrees.txt").split("\t")[2]
+    clauses = task.get("clauses", [])
+    message = f"[{','.join(clauses)}] {node}：{result['message'].strip()}" if clauses else f"[orc] {node}：{result['message'].strip()}"
+    digest = hashlib.sha256(json.dumps({"job": job, "result": result}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    numbers = [int(p.stem.rsplit("-", 1)[1]) for p in work.glob("COMMIT-*-*.json") if p.stem.rsplit("-", 1)[1].isdigit()]
+    n = max(numbers, default=0) + 1
+    request = {"accepted_thread_id": read1(ctl / "accepted-thread-id"), "base_sha": base,
+               "diff_sha256": diff_sha256(wt, actual), "generation": int(read1(ctl / "generation")),
+               "message": message, "outcome_digest": digest, "outcome_nonce": read1(ctl / "outcome-nonce"),
+               "paths": actual, "protocol_version": 1, "task_id": node, "worktree": str(wt)}
+    write_atomic(ctl / "latest-outcome", digest + "\n")
+    for d in (ctl, work):
+        write_atomic(d / "state", "ready_for_commit\n")
+    write_atomic(work / f"COMMIT-REQUEST-{n}.json", json.dumps(request, ensure_ascii=False) + "\n")
+    try:
+        broker = subprocess.run(["bash", str(SCRIPTS / "commit-broker.sh"), "--mission-dir", os.path.realpath(work),
+                                 "--control-dir", os.path.realpath(ctl), "--once"],
+                                capture_output=True, text=True, timeout=600)
+        broker_err = (broker.stderr or broker.stdout).strip()
+    except subprocess.TimeoutExpired:
+        broker_err = "commit broker 超过 600 秒没有结束"
+    finally:
+        for d in (ctl, work):
+            write_atomic(d / "state", "ready\n")
+        (work / f"COMMIT-REQUEST-{n}.json").rename(work / f"processed-COMMIT-REQUEST-{n}.json")
+    done, rejected = work / f"COMMIT-DONE-{n}.json", work / f"COMMIT-REJECTED-{n}.json"
+    if done.is_file():
+        return {**out, "outcome": "committed", "sha": json.loads(done.read_text())["hash"], "files": actual,
+                "message": message}
+    if rejected.is_file():
+        return reject("broker", json.loads(rejected.read_text()).get("reason", "commit broker 拒绝了提交"))
+    return {**out, "outcome": "unavailable", "reason": f"commit broker 没有给出结论：{broker_err[-500:]}"}
+
+
+def run_submit(m: Mission, node: str, job: str) -> dict:
+    """整体评审（STATE.md）：节点最新提交上跑全部冻结检查，再用 review 模型对照签名的设计评审累计 diff。"""
+    wt = Path(os.path.realpath(m.worktree(node)))
+    base = read1(node_ctl(m, node) / "worktrees.txt").split("\t")[2]
+    head = run_git(wt, "rev-parse", "HEAD")
+    out: dict = {"head": head, "checks": {}}
+
+    def rework(category: str, detail: str) -> dict:
+        card = write_card(m, node, category, detail, None)
+        return {**out, "outcome": "rework", "category": category, "reason": detail.strip().splitlines()[0][:300],
+                "card": str(card)}
+
+    dirty = changed_paths(wt)
+    if dirty:
+        return rework("worktree", "worktree 里还有没提交的文件：" + "、".join(dirty) + "。删掉多余的文件，或者把它们作为一次提交交上来")
+    ids = [c["id"] for c in node_checks(m, node)]
+    out["checks"], results, checks_text = run_node_checks(m, wt, ids, jobs_dir(m) / f"{job}.copy")
+    if not all(out["checks"].values()):
+        return rework("checks", failed_detail(results))
+    diff = run_git(wt, "diff", "--no-color", "--no-renames", f"{base}..{head}")
+    verdict, text = call_review(m, node, wt, diff, "review", checks_text, None)
+    out["review"] = {"verdict": verdict, "text": text[:2000]}
+    if verdict == "aligned":
+        return {**out, "outcome": "aligned"}
+    if verdict == "drift":
+        return rework("drift", text)
+    return {**out, "outcome": "unavailable", "reason": text[:500]}
+
+
+def cmd_gate(args) -> int:
+    m = Mission(args.mission)
+    data = json.loads(sys.stdin.read())
+    if args.kind == "gate":
+        outcome = run_gate(m, data["node"], args.job, data["result"])
+    else:
+        outcome = run_submit(m, data["node"], args.job)
+    write_atomic(job_file(m, args.job, "result.json"), json.dumps(outcome, ensure_ascii=False) + "\n")
+    return 0
+
+
+def launch_gate(m: Mission, node: str, result: dict) -> None:
+    launch_job(m, "gate", node, orc_self("gate", "--kind", "gate", "--mission", m.name, "--job",
+                                         f"{node}.gate.{len(job_starts(m, node, 'gate')) + 1}"),
+               exec_dir(m), json.dumps({"node": node, "result": result}, ensure_ascii=False),
+               acceptance=result.get("acceptance", []))
+    print(f"节点 {node}：提交关口开始（验收标准 {result.get('acceptance', [])}）")
+
+
+def launch_submit(m: Mission, node: str) -> None:
+    launch_job(m, "submit", node, orc_self("gate", "--kind", "submit", "--mission", m.name, "--job",
+                                           f"{node}.submit.{len(job_starts(m, node, 'submit')) + 1}"),
+               exec_dir(m), json.dumps({"node": node}))
+    print(f"节点 {node}：整体评审开始")
+
+
+def launch_dispute(m: Mission, node: str, check_id: str, reason: str) -> None:
+    cfg = m.roles()["review"]
+    check = next(c for c in node_checks(m, node) if c["id"] == check_id)
+    last_gate = next((e for e in reversed(job_exits(m, node, "gate")) if check_id in e.get("checks", {})), None)
+    output = "（这个检查还没有在提交关口跑过）"
+    if last_gate and last_gate.get("card") and Path(last_gate["card"]).is_file():
+        output = Path(last_gate["card"]).read_text(encoding="utf-8")[-3000:]
+    values = {"{{MISSION}}": m.name, "{{NODE}}": node, "{{WORKTREE}}": os.path.realpath(m.worktree(node)),
+              "{{DESIGN}}": (m.control / "approved-design.md").read_text(encoding="utf-8").strip(),
+              "{{ENTRY}}": json.dumps(approved_tasks(m)[node], ensure_ascii=False, indent=2),
+              "{{CHECK}}": check_id, "{{COMMAND}}": check["command"],
+              "{{TEST_FILES}}": "、".join(f"`{p}`" for p in approved_checks(m)["test_files"]),
+              "{{OUTPUT}}": output, "{{REASON}}": reason}
+    prompt = (ORC_ROOT / "templates" / "dispute-brief.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        prompt = prompt.replace(key, value)
+    argv = ["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
+            "--permission-mode", "default", "--allowedTools=Read", "--session-id", str(__import__("uuid").uuid4())]
+    launch_job(m, "dispute", node, argv, os.path.realpath(m.worktree(node)), prompt, {"ORC_ROLE": "dispute"},
+               check=check_id)
+    print(f"节点 {node}：执行会话认为检查 {check_id} 有错，交给 review 模型判断")
+
+
+def launch_integrate(m: Mission, node: str) -> None:
+    """整体评审通过后：写复用脚本要的核验文件，后台运行 integrate-task.sh。"""
+    ctl, work, parent = node_ctl(m, node), node_work(m, node), parent_worktree(m)
+    head = run_git(m.worktree(node), "rev-parse", "HEAD")
+    tip = run_git(parent, "rev-parse", "HEAD")
+    review = next(e for e in reversed(job_exits(m, node, "submit")) if e.get("outcome") == "aligned")
+    write_atomic(work / "verification.sha", head + "\n")
+    write_atomic(ctl / "coordinator-verification.sha", head + "\n")
+    write_atomic(ctl / "coordinator-verification.md",
+                 f"# 节点 {node} 的整体评审\n\n提交 `{head}` 上全部冻结检查通过，对齐评审 ALIGNED（任务 {review['job']}）。\n")
+    write_atomic(ctl / "parent-verification.sha", tip + "\n")
+    # integrate-task.sh 的 --control-dir 是控制根目录（它自己拼 tasks/<node>），broker 的是节点的控制目录
+    argv = ["bash", str(SCRIPTS / "integrate-task.sh"), "--control-dir", os.path.realpath(m.control),
+            "--task-dir", os.path.realpath(work), "--mission", m.name, "--task-id", node,
+            "--parent-worktree", os.path.realpath(parent), "--expected-parent-tip", tip]
+    launch_job(m, "integrate", node, argv, os.path.realpath(parent), "", head=head, parent_tip=tip)
+    print(f"节点 {node}：开始集成到 {mission_branch(m)}")
+
+
+# -- 后台任务结束后的处理
+
+def finish_job(m: Mission, start: dict, status: str, rc: Optional[int], timed_out: bool = False) -> None:
+    node, type_, job = start["node"], start["type"], start["job"]
+    fields: dict = {"job": job, "type": type_, "node": node, "rc": rc}
+    if type_ == "executor":
+        if timed_out or status == "lost" or rc != 0:
+            why = "超时被结束" if timed_out else ("进程不见了，没有留下退出码" if status == "lost" else f"退出码 {rc}")
+            fields.update(outcome="failed", reason=why)
+        else:
+            text, error = claude_result(job_file(m, job, "out"))
+            obj = last_json_object(text) if text is not None else None
+            problems = [error] if error else validate_executor_result(m, node, obj)
+            if problems:
+                fields.update(outcome="invalid", problems=problems)
+            else:
+                fields.update(outcome=obj["status"], result=obj)
+    elif type_ in ("gate", "submit"):
+        path = job_file(m, job, "result.json")
+        if path.is_file():
+            result = json.loads(path.read_text(encoding="utf-8"))
+            fields.update(result)
+        else:
+            why = "超时被结束" if timed_out else f"异常结束（退出码 {rc}）"
+            err = read1(job_file(m, job, "err"))[-500:]
+            fields.update(outcome="unavailable", reason=f"{'提交关口' if type_ == 'gate' else '整体评审'}{why}：{err}")
+    elif type_ == "dispute":
+        text, error = (claude_result(job_file(m, job, "out")) if status == "done" and rc == 0
+                       else (None, "超时被结束" if timed_out else f"异常结束（退出码 {rc}）"))
+        obj = last_json_object(text) if text is not None else None
+        if error or not obj or obj.get("verdict") not in ("test-ok", "test-wrong"):
+            fields.update(outcome="unavailable", reason=error or "评审没有按格式给出 verdict")
+        else:
+            fields.update(outcome=obj["verdict"], reason=str(obj.get("reason", "")), check=start.get("check"))
+    elif type_ == "integrate":
+        if rc == 0 and read1(node_ctl(m, node) / "state") in INTEGRATED_SCRIPT_STATES:
+            fields.update(outcome="integrated", sha=read1(node_ctl(m, node) / "integrated_sha"))
+        else:
+            fields.update(outcome="failed", reason=read1(job_file(m, job, "err"))[-800:] or f"退出码 {rc}")
+    m.append("job-exit", "orc step", **fields)
+    # 给状态页和排查用的摘要事件（STATE.md 的 commit / review / correction / check）
+    if type_ in ("gate", "submit"):
+        for cid, ok in fields.get("checks", {}).items():
+            m.append("check", "orc step", node=node, id=cid, passed=ok, log=job)
+        review = fields.get("review")
+        if review and review.get("verdict") in ("aligned", "drift"):
+            m.append("review", "orc step", node=node, verdict="ALIGNED" if review["verdict"] == "aligned" else "DRIFT",
+                     reason=review.get("text", "")[:1000], stage="commit" if type_ == "gate" else "node")
+        if fields.get("outcome") == "committed":
+            m.append("commit", "orc step", node=node, sha=fields["sha"], files=fields.get("files", []))
+        if fields.get("card"):
+            m.append("correction", "orc step", node=node, count=gate_streak(m, node) if type_ == "gate" else 1,
+                     card=fields["card"])
+    print(f"节点 {node}：{type_} 结束（{fields.get('outcome')}）")
+
+
+def consecutive(exits: List[dict], bad: set, stop: Optional[set] = None) -> int:
+    count = 0
+    for e in reversed(exits):
+        if e.get("outcome") in bad:
+            count += 1
+        elif stop is None or e.get("outcome") in stop:
+            break
+    return count
+
+
+def gate_streak(m: Mission, node: str) -> int:
+    """连续被拒的次数：提交成功一次清零；评审服务出错不算。"""
+    return consecutive(job_exits(m, node, "gate"), {"rejected"}, {"committed"})
+
+
+def block_node(m: Mission, node: str, reason: str, question: str, qtype: str, resume: str) -> None:
+    q = m.ask(question, qtype, "orc step")
+    write_atomic(node_ctl(m, node) / "blocked", reason + "\n")
+    m.append("node-blocked", "orc step", node=node, question=q.stem, qtype=qtype, reason=reason, resume=resume)
+    print(f"节点 {node}：blocked（{reason}）")
+
+
+def discard_changes(m: Mission, node: str) -> Path:
+    """连续第 2 次被拒：未提交的改动存成补丁，worktree 回到上一次提交通过的状态。"""
+    wt, work = m.worktree(node), node_work(m, node)
+    patch = work / f"discarded-{len(list(work.glob('discarded-*.patch'))) + 1}.patch"
+    write_atomic(patch, pending_diff(wt, changed_paths(wt)))
+    run_git(wt, "reset", "-q", "--hard", "HEAD")
+    run_git(wt, "clean", "-fdq")
+    return patch
+
+
+def card_text(path: Optional[str]) -> str:
+    return Path(path).read_text(encoding="utf-8").strip() if path and Path(path).is_file() else "（没有纠偏单）"
+
+
+def enter_submitted(m: Mission, node: str) -> None:
+    work = node_work(m, node)
+    commits = [e for e in m.events() if e.get("kind") == "commit" and e.get("node") == node]
+    report = (f"# 节点 {node}\n\n全部验收标准都已提交：\n\n{acceptance_lines(m, node)}\n\n## 提交\n\n"
+              + "".join(f"- `{c['sha'][:12]}` {', '.join(c.get('files', []))}\n" for c in commits))
+    write_atomic(work / "report.md", report)
+    write_atomic(work / "state", "completed\n")
+    launch_submit(m, node)
+
+
+def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
+    """节点最近一件事已经结束（或刚开始、刚解除 blocked）：决定下一步，启动一个后台任务或让节点 blocked。"""
+    kind = last["kind"]
+    if kind == "node-start":
+        launch_executor(m, node, None)
+        return
+    if kind == "node-unblocked":
+        answer = Path(last["answer"]).read_text(encoding="utf-8").strip()
+        resume = last.get("resume")
+        if resume == "gate":
+            result = next(e for e in reversed(job_exits(m, node, "executor")) if e.get("outcome") == "commit")["result"]
+            launch_gate(m, node, result)
+        elif resume == "submit":
+            launch_submit(m, node)
+        elif resume == "integrate":
+            pass                                   # 由集成调度重新尝试
+        else:
+            launch_executor(m, node, f"用户（或 coordinator）的回答：\n\n{answer}\n\n据此继续；做完一条验收标准就按格式结束这一轮。",
+                            fresh=resume == "fresh")
+        return
+    type_, outcome = last["type"], last.get("outcome")
+    if type_ == "executor":
+        if outcome == "commit":
+            launch_gate(m, node, last["result"])
+        elif outcome == "question":
+            block_node(m, node, "执行会话提问", f"节点 {node} 的执行会话问：{last['result']['question']}", "ask-user", "executor")
+        elif outcome == "test-wrong":
+            launch_dispute(m, node, last["result"]["check"], last["result"]["reason"])
+        elif outcome == "invalid":
+            n = consecutive(job_exits(m, node, "executor"), {"invalid"})
+            if n <= RESULT_REPAIRS:
+                launch_executor(m, node, "orc 没能接受你这一轮的结果：\n" + "\n".join(f"- {p}" for p in last["problems"])
+                                + "\n\n修正后，最后只输出一个 JSON 对象结束这一轮。")
+            else:
+                block_node(m, node, "执行会话的结果连续不合格",
+                           f"节点 {node} 的执行会话连续 {n} 次没有按格式交结果：\n" + "\n".join(f"- {p}" for p in last["problems"])
+                           + "\n\n回答会原样发给执行会话。", "mediate", "executor")
+        elif outcome == "failed":
+            n = consecutive(job_exits(m, node, "executor"), {"failed"})
+            if n <= cfg["crash_retries"]:
+                launch_executor(m, node, f"上一轮异常结束（{last['reason']}）。先看一下 worktree 现在的状态，"
+                                         "继续当前这条验收标准；做完按格式结束这一轮。")
+            else:
+                block_node(m, node, "执行会话反复崩溃",
+                           f"节点 {node} 的执行会话连续 {n} 次异常结束（最近一次：{last['reason']}）。"
+                           "检查登录、代理和额度后回答「继续」，orc 会重试。", "ask-user", "executor")
+        return
+    if type_ == "gate":
+        if outcome == "committed":
+            ctl = node_ctl(m, node)
+            if (ctl / "unresolved-rework").exists():
+                (ctl / "unresolved-rework").unlink()
+            left = remaining_acceptance(m, node)
+            if not left:
+                enter_submitted(m, node)
+            else:
+                launch_executor(m, node, f"提交成功：`{last['sha'][:12]}`（验收标准 {last.get('acceptance')}）。"
+                                         f"还没提交的验收标准：\n\n{acceptance_lines(m, node, left)}\n\n"
+                                         "继续做下一条；做完一条就按格式结束这一轮。")
+        elif outcome == "rejected":
+            streak = gate_streak(m, node)
+            card = card_text(last.get("card"))
+            if streak >= STREAK_BLOCK:
+                block_node(m, node, f"连续 {streak} 次被拒，熔断",
+                           f"节点 {node} 连续 {streak} 次提交被拒，已熔断。最近一张纠偏单：\n\n{card}\n\n"
+                           "涉及目标或范围的，请升级给用户。回答会连同完整 brief 发给一个新的执行会话。", "mediate", "fresh")
+            elif streak >= STREAK_FRESH:
+                patch = discard_changes(m, node)
+                launch_executor(m, node, f"上一个执行会话连续 {streak} 次提交被拒，它的改动已撤回（存成 {patch}）。"
+                                         f"从上一次通过的提交重新开始。最近一张纠偏单：\n\n{card}", fresh=True)
+            else:
+                launch_executor(m, node, f"这次提交被拒了。纠偏单：\n\n{card}\n\n按纠偏单改，改完按格式结束这一轮。")
+        else:
+            block_node(m, node, "提交关口没能完成评审",
+                       f"节点 {node} 的提交关口没能完成，评审不降级、出错时不放行；排除问题后回答「重试」。\n\n"
+                       f"原因：{last.get('reason')}\n\n例如检查 review 模型的登录、代理和额度。回答「重试」后 orc 会重新跑提交关口。",
+                       "ask-user", "gate")
+        return
+    if type_ == "submit":
+        if outcome == "aligned":
+            return                                 # 等集成调度
+        if outcome == "rework":
+            ctl, work = node_ctl(m, node), node_work(m, node)
+            write_atomic(ctl / "unresolved-rework", last["card"] + "\n")
+            write_atomic(work / "state", "ready\n")
+            launch_executor(m, node, f"整体评审没通过，节点回到 rework。纠偏单：\n\n{card_text(last.get('card'))}\n\n"
+                                     "修好后按 commit 格式结束这一轮；acceptance 写这次修的验收标准编号，没有对应的就写 []。")
+        else:
+            block_node(m, node, "整体评审没能完成",
+                       f"节点 {node} 的整体评审没能完成，评审不降级、出错时不放行；排除问题后回答「重试」。\n\n"
+                       f"原因：{last.get('reason')}", "ask-user", "submit")
+        return
+    if type_ == "dispute":
+        if outcome == "test-ok":
+            launch_executor(m, node, f"独立评审认为冻结的检查 `{last.get('check')}` 没有错：{last.get('reason')}\n\n"
+                                     "继续修实现；做完按格式结束这一轮。")
+        elif outcome == "test-wrong":
+            block_node(m, node, "冻结的测试可能有错",
+                       f"节点 {node} 的冻结检查 `{last.get('check')}` 可能有错（执行会话和 review 模型都这样认为），"
+                       "改测试要回到写验证这一步，重新审阅、go、签名，由用户决定。\n\n"
+                       f"review 模型的理由：{last.get('reason')}\n\n回答会原样发给执行会话。", "ask-user", "executor")
+        else:
+            block_node(m, node, "判断测试对错的评审没能完成",
+                       f"节点 {node} 的执行会话认为检查 `{last.get('check')}` 有错，但 review 模型没能给出判断："
+                       f"{last.get('reason')}\n\n回答会原样发给执行会话。", "ask-user", "executor")
+        return
+    if type_ == "integrate" and outcome != "integrated":
+        block_node(m, node, "集成失败", f"节点 {node} 集成到 {mission_branch(m)} 失败：\n\n{last.get('reason')}\n\n"
+                   "排除问题后回答「重试」，orc 会重新集成。", "mediate", "integrate")
+
+
+def schedulable(tasks: Dict[str, dict], states: Dict[str, str], max_parallel: int) -> List[str]:
+    """这次可以启动的节点（STATE.md「调度」）：pending、前置都 integrated、声明文件不和已启动未集成的节点重叠、没到并发上限。"""
+    active = [n for n, s in states.items() if s not in ("pending", "integrated")]
+    claimed = {f for n in active for f in tasks[n].get("files", [])}
+    picked: List[str] = []
+    for node, task in tasks.items():
+        if states.get(node) != "pending" or len(active) + len(picked) >= max_parallel:
+            continue
+        if any(states.get(d) != "integrated" for d in task.get("depends_on", [])):
+            continue
+        if claimed & set(task.get("files", [])):
+            continue
+        picked.append(node)
+        claimed |= set(task.get("files", []))
+    return picked
+
+
+def record_node_states(m: Mission) -> None:
+    last: Dict[str, str] = {}
+    for e in m.events():
+        if e.get("kind") == "node-state":
+            last[e["node"]] = e["to"]
+    for node, state in m.node_states().items():
+        before = last.get(node, "pending")
+        if state != before:
+            m.append("node-state", "orc step", node=node, **{"from": before, "to": state})
+
+
+def recheck_integrated(m: Mission) -> Optional[str]:
+    """进入 reviewing 之前不只信日志：从协议文件重新算，每个节点都 integrated，且集成提交确实在 mission 分支上。"""
+    parent = parent_worktree(m)
+    if run_git(parent, "symbolic-ref", "--short", "HEAD", check=False) != mission_branch(m):
+        return f"父 worktree {parent} 不在 {mission_branch(m)} 上"
+    tip = run_git(parent, "rev-parse", "HEAD")
+    logged = {e["node"] for e in job_exits(m, type_="integrate") if e.get("outcome") == "integrated"}
+    for node in approved_tasks(m):
+        ctl = node_ctl(m, node)
+        if read1(ctl / "state") not in INTEGRATED_SCRIPT_STATES:
+            return f"节点 {node} 的控制文件不是 integrated"
+        sha = read1(ctl / "integrated_sha")
+        if not sha or subprocess.run(["git", "-C", str(parent), "merge-base", "--is-ancestor", sha, tip]).returncode != 0:
+            return f"节点 {node} 记录的集成提交 {sha[:12] or '（空）'} 不在 {mission_branch(m)} 上"
+        if node not in logged:
+            return f"节点 {node} 的协议文件是 integrated，但日志里没有它的集成记录"
+    return None
+
+
+def h_executing(m: Mission):
+    setup = exec_setup(m)
+    if setup is None:
+        return f"error mission {m.name} 在 executing，但没有 exec-setup 事件。这是 orc 的 bug；把 events.jsonl 给用户看。", False
+    cfg, tasks = setup["config"], approved_tasks(m)
+    # 1. 收尾结束了的后台任务（超时的会话先结束掉；提交关口、整体评审、集成内部各有超时）
+    for start in running_jobs(m):
+        status, rc = job_status(m, start)
+        timed_out = False
+        if status == "running":
+            if not session_overdue(start, cfg):
+                continue
+            kill_job(start)
+            timed_out = True
+        finish_job(m, start, status, rc, timed_out)
+    # 2. 已回答的 blocked 节点解除 blocked
+    answered = {e["id"]: e for e in m.events() if e.get("kind") == "answer"}
+    for node in tasks:
+        evs = node_events(m, node)
+        if evs and evs[-1]["kind"] == "node-blocked" and evs[-1]["question"] in answered:
+            (node_ctl(m, node) / "blocked").unlink(missing_ok=True)
+            m.append("node-unblocked", "orc step", node=node, question=evs[-1]["question"],
+                     answer=answered[evs[-1]["question"]]["file"], resume=evs[-1].get("resume"))
+    # 3. 每个节点：最近一件事结束了就决定下一步
+    busy = {s["node"] for s in running_jobs(m)}
+    for node in tasks:
+        evs = node_events(m, node)
+        if evs and node not in busy and evs[-1]["kind"] in ("node-start", "node-unblocked", "job-exit"):
+            decide(m, node, evs[-1], cfg)
+    record_node_states(m)
+    # 4. 有没回答的问题：mission 进入 blocked（一次一个）
+    for node in tasks:
+        evs = node_events(m, node)
+        if evs and evs[-1]["kind"] == "node-blocked" and evs[-1]["question"] not in answered:
+            m.transition("blocked", "orc step", reason=f"节点 {node}：{evs[-1]['reason']}",
+                         question=evs[-1]["question"], type=evs[-1]["qtype"])
+            return None, True
+    # 5. 集成：一次一个，按 DAG 顺序
+    if not [s for s in running_jobs(m) if s["type"] == "integrate"]:
+        for node in tasks:
+            evs = node_events(m, node)
+            if evs and evs[-1]["kind"] == "job-exit" and evs[-1]["type"] == "submit" and evs[-1].get("outcome") == "aligned" \
+                    or evs and evs[-1]["kind"] == "node-unblocked" and evs[-1].get("resume") == "integrate":
+                launch_integrate(m, node)
+                break
+    # 6. 调度新节点
+    for node in schedulable(tasks, m.node_states(), cfg["max_parallel"]):
+        start_node(m, node)
+        decide(m, node, node_events(m, node)[-1], cfg)
+    record_node_states(m)
+    # 7. 全部集成：重新判定后进入 reviewing
+    states = m.node_states()
+    if states and all(s == "integrated" for s in states.values()):
+        problem = recheck_integrated(m)
+        if problem:
+            return (f"error mission {m.name} 的节点都已集成，但重新核对协议文件时发现：{problem}。"
+                    "日志和协议文件对不上，不要继续；把这条消息告诉用户。"), False
+        m.transition("reviewing", "orc step", reason="全部节点已集成，协议文件重新核对一致")
+        print(f"mission {m.name}：executing → reviewing")
+        return None, True
+    if running_jobs(m):
+        return "wait", False
+    stuck = {n: s for n, s in states.items() if s != "integrated"}
+    return (f"error mission {m.name} 没有在运行的后台任务，也没有可以启动的节点（{stuck}）。"
+            "这是 orc 的 bug；把 events.jsonl 给用户看。"), False
+
+
 HANDLERS: Dict[str, Handler] = {
     "new": h_new,
     "planning": h_planning,
     "verifying": h_verifying,
     "plan-review": h_plan_review,
-    "approved": not_yet("阶段 4"),
-    "executing": not_yet("阶段 4"),
+    "approved": h_approved,
+    "executing": h_executing,
     "reviewing": not_yet("阶段 5"),
     "accepted": not_yet("阶段 5"),
     "blocked": h_blocked,
@@ -1498,13 +2532,25 @@ def cmd_wait(args) -> int:
     if not m.exists():
         raise OrcError(f"没有名为「{args.mission}」的 mission。")
     deadline = time.monotonic() + args.timeout
+    label = ""
     while time.monotonic() < deadline:
-        kind = {"planning": "planner", "verifying": "verifier"}.get(m.replay()["state"])
-        if kind is None or not agent_running(m, kind):
-            break
+        state = m.replay()["state"]
+        if state == "executing":
+            # 任何一个后台任务结束（或超时该被结束）就返回，让 coordinator 运行 orc step 处理
+            jobs = running_jobs(m)
+            setup = exec_setup(m)
+            if not jobs or any(job_status(m, s)[0] != "running" or (setup and session_overdue(s, setup["config"]))
+                               for s in jobs):
+                break
+            label = "后台任务（" + "、".join(s["job"] for s in jobs) + "）"
+        else:
+            kind = {"planning": "planner", "verifying": "verifier"}.get(state)
+            if kind is None or not agent_running(m, kind):
+                break
+            label = AGENTS[kind]["label"]
         time.sleep(1)
     else:
-        print(f"等了 {args.timeout} 秒，{AGENTS[kind]['label']}还在运行。")
+        print(f"等了 {args.timeout} 秒，{label}还在运行。")
         return 1
     print(f"next: 运行 orc step --mission {m.name}")
     return 0
@@ -1645,7 +2691,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p = sub.add_parser("go", help="用户说 go 之后冻结设计、计划和 DAG，等用户签名")
     p.add_argument("--mission", required=True)
     p.set_defaults(func=cmd_go)
-    p = sub.add_parser("wait", help="等后台的规划会话结束")
+    p = sub.add_parser("gate", help="（orc 内部用）提交关口或整体评审的后台任务")
+    p.add_argument("--kind", choices=("gate", "submit"), required=True)
+    p.add_argument("--mission", required=True)
+    p.add_argument("--job", required=True)
+    p.set_defaults(func=cmd_gate)
+    p = sub.add_parser("wait", help="等后台的会话或任务结束")
     p.add_argument("--mission", required=True)
     p.add_argument("--timeout", type=int, default=3600)
     p.set_defaults(func=cmd_wait)

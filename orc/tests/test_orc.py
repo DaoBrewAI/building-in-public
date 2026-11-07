@@ -57,7 +57,7 @@ class OrcCase(unittest.TestCase):
                     event = json.loads(line)
                 except ValueError:
                     continue            # 有的测试故意写坏日志
-                if isinstance(event, dict) and event.get("kind") in ("planner-start", "verifier-start"):
+                if isinstance(event, dict) and event.get("kind") in ("planner-start", "verifier-start", "job-start"):
                     try:
                         os.killpg(event["pid"], signal.SIGTERM)
                     except (ProcessLookupError, PermissionError):
@@ -356,7 +356,9 @@ class ApprovalReverified(OrcCase):
 
     def test_good_signature_and_hashes_pass_through(self):
         r = self.run_orc("step", "--mission", "m1")
-        self.assertIn("executing 阶段的流程还没有实现", self.next_line(r))
+        # 签名和哈希都通过，走到了执行流程（这里的 mission 是直接转到 executing 的，没有 exec-setup）
+        self.assertIn("没有 exec-setup 事件", self.next_line(r))
+        self.assertNotIn("签名", self.next_line(r))
 
     def test_tampered_frozen_file_stops_every_step(self):
         (self.mdir / "control" / "approved-design.md").write_text("design changed after go\n")
