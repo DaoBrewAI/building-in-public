@@ -88,6 +88,28 @@ for i in 2 3 4; do run_in '{}' "$SG"; done
 expect_out "第 4 次" "连续失败计数"
 run_in '{}' "$SG"; expect_rc 0 "连续 5 次失败后放行并通知用户"
 
+begin "stop-gate.sh：orc 的执行会话（ORC_ROLE=implement）"
+mission_repo 'echo CHECK-FAIL; exit 1'
+echo 42 > src/core/a.py; git add -A; git commit -qm "[N1] core 42"; narrate
+echo 43 > src/core/a.py
+run_in '{}' "$SG"; expect_rc 2 "普通会话有未提交改动时仍被拦下"
+export ORC_ROLE=plan
+run_in '{}' "$SG"; expect_rc 2 "其他 orc 角色有未提交改动时仍被拦下"
+export ORC_ROLE=implement
+run_in '{}' "$SG"; expect_rc 0 "执行会话有未提交改动时放行：提交由 orc 的提交关口和 broker 做"
+rm status/narrative.md
+run_in '{}' "$SG"; expect_rc 0 "执行会话不跑验收检查和进度报告：只有冻结的检查算数，由 orc 跑"
+git checkout -q -- src/core/a.py; narrate
+mkdir -p src/ui; echo ui > src/ui/b.py; git add -A; git commit -qm "[N1] 越界"
+run_in '{}' "$SG"
+expect_rc 2 "执行会话的越界改动照样被拦下"
+expect_out "越界：src/ui/b.py" "列出越界文件"
+git reset -q --hard HEAD~1
+echo x >> .northstar/NORTHSTAR.md
+run_in '{}' "$SG"; expect_rc 0 "签名不一致时照常直接结束并通知用户"
+git checkout -q -- .northstar/NORTHSTAR.md
+unset ORC_ROLE
+
 begin "stop-gate.sh：并行的 worktree 不共用检查日志"
 mission_repo 'sleep 1.5; echo A-FAIL-SHORT; exit 1'; RA="$R"
 echo 42 > src/core/a.py; git add -A; git commit -qm "[N1] a"; narrate

@@ -12,8 +12,12 @@ if ! /opt/northstar/bin/northstar verify >/dev/null 2>&1; then
   notify "签名校验失败：受保护文件被改动，需要你处理"
   exit 0
 fi
+# orc 的执行会话（启动时设 ORC_ROLE=implement，会话里的 agent 改不了自己进程的环境变量）提交不了：
+# 沙箱让主仓库 .git 只读，改动由 orc 的提交关口跑冻结的检查、做对齐评审后交给 broker 提交。
+# 所以它结束时一定有未提交的改动：第 2、4 条不适用；第 1 条签名和第 3 条越界照常（proposals/2026-11-07-stop-gate-implement.md）
+IMPL=0; [ "${ORC_ROLE:-}" = implement ] && IMPL=1
 # 2. 所有改动必须已提交（提交时都过了对齐评审）
-if [ -n "$(git status --porcelain -- . ':!status' ':!drafts' ':!proposals')" ]; then
+if [ "$IMPL" -eq 0 ] && [ -n "$(git status --porcelain -- . ':!status' ':!drafts' ':!proposals')" ]; then
   echo "NORTHSTAR：还有未提交的改动。按验收标准小步提交（每次提交都会经过对齐评审）后再结束。" >&2; exit 2
 fi
 # 3. 越界改动必须为零
@@ -23,6 +27,7 @@ if [ -f .northstar/missions/ACTIVE ]; then
     echo "NORTHSTAR 纠偏：$out。撤回这些越界改动后再结束。" >&2; exit 2
   fi
 fi
+[ "$IMPL" -eq 1 ] && exit 0
 # 4. 验收检查 + 进度报告
 ok=1
 if [ -f .northstar/checks/run_all.sh ]; then bash .northstar/checks/run_all.sh >"$LOG" 2>&1 || ok=0; else : >"$LOG"; fi

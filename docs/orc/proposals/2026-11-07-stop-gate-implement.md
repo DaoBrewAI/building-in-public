@@ -1,6 +1,6 @@
 # 提案：信任层的 Stop hook 对 orc 的执行会话放行「未提交的改动」
 
-状态：**等林翰决定**。要改信任层的 `stop-gate.sh`，改完要你重新 sudo 安装。
+状态：**林翰 2026-11-07 选 A**。`stop-gate.sh` 已改，测试已加（见文末「实测」和「实现」）；要你重新 sudo 安装才生效。
 
 ## 要解决的问题
 
@@ -32,3 +32,23 @@ orc 的执行会话不一样：
 
 - 选 A：改 `docs/orc/northstar-staging/hooks/stop-gate.sh` 和它的测试，你重新 sudo 安装。PLAN 阶段 4 的「启动子任务」一条注明这一点。
 - 选 B：阶段 4 加常驻进程和收件目录，「启动子任务」一条要重写。
+
+## 实测（2026-11-07，Claude Code 2.1.318，已签名的 northstar-trial 仓库的本地克隆）
+
+执行会话的配置：沙箱开、主仓库 `.git` denyWrite、Write / Edit 只放行 worktree，`ORC_ROLE=implement`，Opus effort low。
+
+| 操作 | 结果 |
+| --- | --- |
+| Write 写 worktree 里的文件 | 成功 |
+| Write 写 worktree 外 | 被拒（没有权限） |
+| Bash 写 worktree 外（另一个目录、家目录） | 被拒（`operation not permitted`） |
+| Bash 写 `/tmp` 下 | **成功**：沙箱默认放行临时目录。worktree 默认放在 `~/.orc-worktrees/`，不在临时目录里，节点之间写不到对方 |
+| `git add` / `git commit` | 失败：`Unable to create …/.git/worktrees/n1/index.lock` |
+| 联网（curl） | 被拒（沙箱的网络代理拒绝） |
+| `--resume` 同一个会话 | 回到同一个会话，记得上一轮的结果 |
+| 工作区有未提交改动时结束 | **Stop hook 连续拦了 9 次**，Claude Code 强制结束，结果为空 |
+
+## 实现
+
+- `stop-gate.sh`：`ORC_ROLE=implement` 时跳过第 2 条（未提交的改动）和第 4 条（验收检查、进度报告）；第 1 条签名、第 3 条越界照常。
+- `northstar-staging/tests/test_hooks.sh` 加一组测试：普通会话和其他 orc 角色有未提交改动时仍被拦；执行会话有未提交改动、进度报告不通过时放行；执行会话的越界改动照样被拦；签名不一致时照常结束并通知。
