@@ -487,12 +487,15 @@ def launch_planner(m: Mission, message: Optional[str], delivers: List[str]) -> N
     else:
         session, mode, prompt = starts[0]["session"], "resume", message
     write_atomic(runs / f"{n}.prompt", prompt)
-    settings = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False}}
-    # 只放行这些工具；Write / Edit 只能写规划工作目录（权限规则里 // 开头是绝对路径）。-p 模式下没放行的工具一律被拒
+    # 产品仓库只读。实测（2026-11-07）：--add-dir 会把目录加进沙箱的可写白名单，Bash 就能写产品仓库，
+    # 所以不用 --add-dir，并在沙箱里对产品仓库 denyWrite；Read / Grep / git log 照样能读代码（实测）
+    settings = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
+                            "filesystem": {"denyWrite": [os.path.realpath(m.repo())]}}}
+    # 只放行这些工具；Write / Edit 只能写规划工作目录（权限规则里 // 开头是绝对路径）。-p 模式下没放行的写入一律被拒
     tools = ["Read", "Glob", "Grep", "Bash"] + [f"{t}(/{work_real}/**)" for t in ("Write", "Edit", "MultiEdit")]
     argv = ["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
             "--permission-mode", "default", f"--settings={json.dumps(settings)}",
-            f"--add-dir={m.repo()}", f"--allowedTools={','.join(tools)}"]
+            f"--allowedTools={','.join(tools)}"]
     argv += ["--session-id", session] if mode == "new" else ["--resume", session]
     # 包装：会话结束时原子地写出退出码文件，orc 据此判断“结束了”
     wrapper = ('"$@" < "$ORC_RUN_IN" > "$ORC_RUN_OUT" 2> "$ORC_RUN_ERR"; '
