@@ -59,7 +59,15 @@ fake = pathlib.Path(os.environ["ORC_FAKE"])
 args = sys.argv[1:]
 get = lambda k: args[args.index(k) + 1] if k in args else None
 diff = sys.stdin.read()
+# 并行的提交关口会同时调用：用独占创建占一个编号，免得两次调用写进同一个文件
 n = len(list(fake.glob("review-call-*.json"))) + 1
+while True:
+    try:
+        fd = os.open(fake / f"review-call-{n}.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        break
+    except FileExistsError:
+        n += 1
+os.close(fd)
 (fake / f"review-call-{n}.json").write_text(json.dumps({
     "args": args, "role": get("--role"), "prev": get("--prev"), "cwd": os.getcwd(), "diff": diff,
     "checks": open(get("--checks")).read() if get("--checks") else None,
@@ -242,6 +250,8 @@ class HappyPath(ExecCase):
         self.assertEqual(by_job["a.gate.1"], {"ca"})                  # 只跑声明完成的第 1 条
         self.assertEqual(by_job["a.gate.2"], {"ca2", "ca"})           # 第 2 条，加上此前通过的
         self.assertEqual(by_job["a.submit.1"], {"ca", "ca2"})         # 整体评审跑本节点全部冻结检查
+        report = (self.mdir / "nodes" / "a" / "report.md").read_text()
+        self.assertIn("遗留问题", report)
         second = self.calls("exec-a")[1]
         self.assertIn("--resume", second["args"])                    # 下一条回到同一个会话
         self.assertEqual(second["session"], self.calls("exec-a")[0]["session"])
@@ -357,6 +367,8 @@ class Gate(ExecCase):
         fourth = self.calls("exec-a")[3]
         self.assertIn("--session-id", fourth["args"])
         self.assertIn("按设计只写 a", fourth["prompt"])
+        self.assertIn("已撤回", fourth["prompt"])                    # 熔断后重来，第 3 次被拒的改动也撤回
+        self.assertTrue((self.mdir / "nodes" / "a" / "discarded-2.patch").is_file())
 
     def test_one_success_resets_the_streak(self):
         self.simple(("a",), two_acceptance=True)

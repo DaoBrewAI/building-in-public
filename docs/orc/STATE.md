@@ -204,11 +204,11 @@ pending → running → submitted → integrated
 
 | `status` | 其他字段 | orc 怎么处理 |
 | --- | --- | --- |
-| `commit` | `acceptance`（这次完成的第几条，从 1 开始；rework 时可以为空）、`files`（改了哪些文件）、`message`（提交说明） | 交给提交关口 |
+| `commit` | `acceptance`（这次完成的第几条，从 1 开始；rework 时可以为空）、`files`（改了哪些文件）、`message`（提交说明）、`notes`（遗留问题，可以为空；写进节点的 `report.md`） | 交给提交关口 |
 | `question` | `question` | 节点 `blocked`，mission 进入 `blocked`（ask-user），回答发回同一个会话 |
 | `test-wrong` | `check`（检查 id）、`reason` | 交给 `review` 模型判断冻结的测试有没有错（见下） |
 
-格式不对、`files` 和 worktree 里实际改动的文件对不上，都算这一轮没完成，把问题发回同一个会话；连续 2 次就节点 `blocked`、mission `mediate`。
+格式不对、`files` 和 worktree 里实际改动的文件对不上，都算这一轮没完成，把问题发回同一个会话修，最多修 2 次；第 3 次还不对，节点 `blocked`、mission `mediate`。
 
 ### 提交关口（锁外的后台任务；`proposals/2026-11-07-commit-gate.md`）
 
@@ -224,7 +224,7 @@ pending → running → submitted → integrated
 
 - 第 1 次：纠偏单发回同一个会话。
 - 第 2 次：把 worktree 里未提交的改动存成补丁（`nodes/<node>/discarded-<n>.patch`），worktree 回到上一次提交通过的状态；新开会话（`generation` 加 1），发完整 brief 和纠偏单。
-- 第 3 次：节点 `blocked`，mission `mediate`。
+- 第 3 次：节点 `blocked`，mission `mediate`。裁决之后同样先撤回被拒的改动，再新开会话，带上裁决。
 - 提交成功一次，计数清零。
 
 纠偏单写在 `nodes/<node>/correction-<n>.md`：违反了什么（检查 id 和输出、N# 或设计的哪一节）、证据、相关验收标准的原文。
