@@ -8,6 +8,7 @@ $ORC_FAKE/publish 决定发布成功还是失败。
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -16,6 +17,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_orc import ORC, ORC_ROOT, OrcCase  # noqa: E402
+
+# 检查命令用的是 PATH 里的 python3，不是跑这些测试的解释器
+PYTEST_PY = shutil.which("python3") or sys.executable
+HAS_PYTEST = subprocess.run([PYTEST_PY, "-c", "import pytest"], capture_output=True).returncode == 0
+# 没装 pytest 的解释器：python -m pytest 会以退出码 1 退出，但 pytest 根本没运行
+NO_PYTEST_PY = "#!/bin/sh\necho \"$0: No module named pytest\" >&2\nexit 1\n"
 
 FAKE_CLAUDE = r'''#!/usr/bin/env python3
 import json, os, sys, time, pathlib
@@ -48,18 +55,31 @@ if os.environ.get("ORC_ROLE") == "verify":
     vs = [l for l in (fake / "vscript").read_text().splitlines() if l.strip()] if (fake / "vscript").exists() else []
     action = vs[n - 1] if n - 1 < len(vs) else "ok"
     test = work / "repo" / "tests" / "orc" / "test_export.sh"
-    def write(body, files=("tests/orc/test_export.sh",), acceptance=(1,)):
-        test.parent.mkdir(parents=True, exist_ok=True)
-        test.write_text(body)
+    def write(body, files=("tests/orc/test_export.sh",), acceptance=(1,), command="sh tests/orc/test_export.sh"):
+        path = work / "repo" / files[0] if files[0].endswith(".py") else test
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
         (work / "checks.json").write_text(json.dumps({"version": 1, "mission": os.environ["ORC_MISSION"],
             "test_files": list(files), "checks": [{"id": "export-writes-csv", "node": "export", "acceptance": list(acceptance),
-            "command": "sh tests/orc/test_export.sh", "expect_before": "fail"}]}))
+            "command": command, "expect_before": "fail"}]}))
+    py = (fake / "pytest-python").read_text().strip() if (fake / "pytest-python").exists() else "python3"
+    pytest_cmd = py + " -m pytest -q -p no:cacheprovider tests/orc/test_export_acceptance.py"
     if action.startswith("question:"):
         (work / "QUESTION.md").write_text(action.split(":", 1)[1])
     elif action == "ok":
         write("test -f src/export.py\n")
     elif action == "escape":
         write('echo x > "$ORC_FAKE/escaped"; curl -s -m 3 https://example.com > /dev/null && touch net-open; test -f src/export.py\n')
+    elif action == "pytest-collect":       # 文件开头导入还不存在的模块：收集阶段就报错，断言没有运行
+        write("from export import write_csv\n\ndef test_export():\n    assert write_csv() == 'a,b'\n",
+              files=("tests/orc/test_export_acceptance.py",), command=pytest_cmd)
+    elif action == "pytest-missing":       # 解释器里没有 pytest：退出码也是 1
+        write("def test_export():\n    from export import write_csv\n    assert write_csv() == 'a,b'\n",
+              files=("tests/orc/test_export_acceptance.py",),
+              command=pytest_cmd.replace(py + " ", "nopytest-python ", 1))
+    elif action == "pytest-assert":        # 在测试函数里导入：接口不存在时是这条测试失败
+        write("def test_export():\n    from export import write_csv\n    assert write_csv() == 'a,b'\n",
+              files=("tests/orc/test_export_acceptance.py",), command=pytest_cmd)
     elif action == "passing":
         write("true\n")                      # 实现之前就通过：什么也没测
     elif action == "overlap":
@@ -116,7 +136,8 @@ class PlanningCase(OrcCase):
         self.fake.mkdir()
         bin_ = self.tmp / "fakebin"
         bin_.mkdir()
-        for name, body in (("claude", FAKE_CLAUDE),):
+        (self.fake / "pytest-python").write_text(PYTEST_PY)
+        for name, body in (("claude", FAKE_CLAUDE), ("nopytest-python", NO_PYTEST_PY)):
             (bin_ / name).write_text(body.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1))
             (bin_ / name).chmod(0o755)
         ns = self.tmp / "ns"
@@ -381,6 +402,33 @@ class Verify(PlanningCase):
         self.assertIn("就通过了", second["prompt"])
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
+
+    @unittest.skipUnless(HAS_PYTEST, "PATH 里的 python3 没有 pytest")
+    def test_pytest_check_must_fail_on_an_assertion_not_on_collection(self):
+        self.vscript("pytest-collect", "pytest-missing", "pytest-assert")
+        mdir = self.to_plan_review("ok")
+        self.through_verify()
+        for _ in range(2):
+            r = self.step()
+            self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
+            self.wait()
+        first, second = [e for e in self.events(mdir) if e["kind"] == "verifier-exit"][:2]
+        for exit_ in (first, second):
+            self.assertEqual(exit_["outcome"], "invalid")
+            self.assertEqual(len(exit_["problems"]), 1, exit_["problems"])
+            self.assertIn("断言没有运行", exit_["problems"][0])
+        self.assertIn("退出码是 2", first["problems"][0])
+        self.assertIn("error during collection", first["problems"][0])       # 附上了 pytest 的输出
+        self.assertIn("退出码是 1", second["problems"][0])
+        self.assertIn("No module named pytest", second["problems"][0])
+        self.assertIn("--resume", self.vcalls()[1]["args"])
+        self.assertIn("断言没有运行", self.vcalls()[1]["prompt"])
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
+        result, = json.loads((mdir / "verify" / "results.json").read_text())["results"]
+        self.assertEqual(result["rc"], 1)
+        page = (self.tmp / "wt" / "m1" / "site" / "plan.html").read_text()
+        self.assertIn("1 failed", page)                                # 审阅页显示检查失败时的输出
 
     def test_bad_outputs_are_rejected_with_reasons_then_mediated(self):
         self.vscript("overlap", "uncovered", "nochecks")
