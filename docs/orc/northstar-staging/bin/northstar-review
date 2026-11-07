@@ -69,7 +69,9 @@ if [ -n "$role" ]; then
     echo "NORTHSTAR：$MODELS 里没有完整的 [$role]（cli、model）→ 修正 orc/config/models.toml 后让用户重新运行 install.sh。" >&2; exit 2; }
 fi
 case "$reviewer" in
-  claude) cmd=(claude -p); [ -n "$model" ] && cmd+=(--model "$model") ;;
+  # 评审只读材料、下结论：关掉全部工具（--tools ""）。实测（2026-11-07）：不关的话，评审会话结束时被 Stop hook
+  # 以「还有未提交的改动」拦下（评审时改动本来就还没提交），它就开始跑命令，循环了两百多次
+  claude) cmd=(claude -p --tools ""); [ -n "$model" ] && cmd+=(--model "$model") ;;
   codex)  cmd=(codex exec --sandbox read-only); [ -n "$model" ] && cmd+=(-m "$model") ;;
   *) echo "northstar-review：--reviewer 只能是 claude 或 codex" >&2; exit 2 ;;
 esac
@@ -101,7 +103,15 @@ $diff
 任一项不符就判 DRIFT。${prev:+上一次被判定偏离的原因是：$prev。请特别确认它已经消除。}
 第一行只输出 ALIGNED 或 DRIFT。若 DRIFT，第二行写违反的是哪条 N# 或设计的哪一节，以及原因；第三行写涉及的文件和行号。"
 
-out=$("${cmd[@]}" "$prompt" 2>/dev/null)
+# claude 评审在一个空的临时目录里运行，不在仓库里（proposals/2026-11-07-reviewer-stop-hook.md）：
+# 它需要的材料都在提示词里；在仓库里运行时，评审时改动还没提交，Stop hook 会一直不让它结束。
+# 不在有 .northstar/ 的仓库里，Stop hook 第一行就放行，hook 本身不用改。codex exec 要求在 git 仓库里运行，保持原样
+rundir=.
+if [ "$reviewer" = claude ]; then
+  rundir=$(mktemp -d "${TMPDIR:-/tmp}/northstar-review.XXXXXX") || { echo "northstar-review：建不了临时目录" >&2; exit 2; }
+fi
+out=$(cd "$rundir" && "${cmd[@]}" "$prompt" 2>/dev/null)
+[ "$rundir" = . ] || rmdir "$rundir" 2>/dev/null || true
 v=$(grep -m1 -oE '^(ALIGNED|DRIFT)' <<<"$out")
 [ -n "$v" ] || { echo "NORTHSTAR：对齐评审没有返回结果。稍后重试提交；持续失败就停止并告诉用户。" >&2; exit 2; }
 printf '%s\n' "$out"

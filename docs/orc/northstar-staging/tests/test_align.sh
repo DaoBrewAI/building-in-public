@@ -150,6 +150,9 @@ verdict ALIGNED
 run_in $'+42\n' "$NR" --entry "$T/node.md" --design "$T/approved-design.md" --checks "$T/checks.txt" --reviewer claude
 expect_rc 0 "ALIGNED 退出码 0"
 expect_true 'grep -q "D7 节点条目" "$T/last-prompt" && grep -q "node: n1" "$T/last-prompt" && grep -q "check core42: PASS" "$T/last-prompt"' "评审看到设计、节点条目和检查结果"
+expect_true 'grep -qx "\[--tools\]" "$T/reviewer-argv" && [ "$(grep -A1 -x "\[--tools\]" "$T/reviewer-argv" | tail -1)" = "[]" ]' "claude 评审关掉全部工具（--tools \"\"）"
+expect_true '[ "$(cat "$T/reviewer-cwd")" != "$(pwd -P)" ] && [ ! -d "$(cat "$T/reviewer-cwd")/.northstar" ] && ! git -C "$(cat "$T/reviewer-cwd")" rev-parse 2>/dev/null' "claude 评审在仓库外的空目录里运行：Stop hook 不会拦它"
+expect_true '[ ! -d "$(cat "$T/reviewer-cwd")" ]' "临时目录用完删掉"
 verdict "${DRIFT[@]}"
 run_in $'+42\n' "$NR" --entry "$T/node.md" --reviewer claude
 expect_rc 1 "DRIFT 退出码 1"

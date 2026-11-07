@@ -44,6 +44,8 @@ setup_env() {
 #!/bin/sh
 # 假评审：记录被调用的命令和 prompt，输出 \$T/verdict 的内容
 echo "$r" >> "$T/reviewer-calls"
+pwd -P > "$T/reviewer-cwd"
+for a; do printf '[%s]\n' "\$a"; done > "$T/reviewer-argv"
 model=; prev=
 for a; do [ "\$prev" = --model ] || [ "\$prev" = -m ] && model="\$a"; prev="\$a"; done
 echo "$r \$model" >> "$T/reviewer-models"
