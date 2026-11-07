@@ -396,6 +396,7 @@ class Verify(PlanningCase):
         settings = json.loads(next(a for a in args if a.startswith("--settings="))[len("--settings="):])
         self.assertEqual(settings["sandbox"]["filesystem"]["denyWrite"], [os.path.realpath(self.repo)])
         self.assertNotIn("# 计划", v["prompt"])
+        self.assertIn("检查挂在哪个节点上", v["prompt"])                     # 检查只能依赖本节点和前置节点
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
         ready = [e for e in self.events(mdir) if e["kind"] == "verify-ready"][0]
