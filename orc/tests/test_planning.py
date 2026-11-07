@@ -124,7 +124,12 @@ print(json.dumps({"type": "result", "is_error": False, "session_id": session, "r
 '''
 
 FAKE_NORTHSTAR = r'''#!/bin/sh
-# 假 northstar：verify-mission 在 $ORC_FAKE/sig-ok 存在且 control 里有签名文件时通过
+# 假 northstar：verify（产品仓库的 NORTHSTAR 签名）在 $ORC_FAKE/ns-unsigned 不存在时通过；
+# verify-mission 在 $ORC_FAKE/sig-ok 存在且 control 里有签名文件时通过
+if [ "$1" = verify ]; then
+  [ -f "$ORC_FAKE/ns-unsigned" ] && { echo "缺少签名，请运行 northstar seal" >&2; exit 1; }
+  exit 0
+fi
 [ "$1" = verify-mission ] && [ -f "$ORC_FAKE/sig-ok" ] && [ -f "$2/approved.sha256.sig" ]
 '''
 
@@ -194,6 +199,19 @@ class PlanningCase(OrcCase):
         self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
         self.wait()
         return mdir
+
+
+class NorthstarSigned(PlanningCase):
+    def test_unsigned_northstar_stops_before_planning(self):
+        (self.fake / "ns-unsigned").write_text("")
+        r, mdir = self.new()
+        self.assertIn("NORTHSTAR 签名校验没有通过", self.next_line(r))
+        self.assertIn("northstar seal", self.next_line(r))
+        self.assertEqual((mdir / "state").read_text().strip(), "new")
+        self.assertEqual(self.calls(), [])                         # 没有启动规划会话
+        (self.fake / "ns-unsigned").unlink()
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)   # 签好后接着走
 
 
 class LaunchAndWait(PlanningCase):
