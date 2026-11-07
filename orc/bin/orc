@@ -1715,6 +1715,8 @@ def validate_executor_result(m: Mission, node: str, obj: Optional[dict]) -> List
             problems.append("acceptance 不能为空：写这次完成的验收标准编号（只有整体评审打回后的 rework 提交可以为空）")
         if not isinstance(message, str) or not message.strip() or "\0" in message:
             problems.append("message 必须是一句非空的提交说明")
+        if not isinstance(obj.get("notes", ""), str):
+            problems.append("notes（遗留问题）必须是字符串，没有就写空字符串")
         actual = changed_paths(m.worktree(node))
         if not actual:
             problems.append("worktree 里没有任何改动，没有可提交的东西")
@@ -2082,8 +2084,11 @@ def card_text(path: Optional[str]) -> str:
 def enter_submitted(m: Mission, node: str) -> None:
     work = node_work(m, node)
     commits = [e for e in m.events() if e.get("kind") == "commit" and e.get("node") == node]
+    notes = [e["result"].get("notes", "").strip() for e in job_exits(m, node, "executor")
+             if e.get("outcome") == "commit" and e["result"].get("notes", "").strip()]
     report = (f"# 节点 {node}\n\n全部验收标准都已提交：\n\n{acceptance_lines(m, node)}\n\n## 提交\n\n"
-              + "".join(f"- `{c['sha'][:12]}` {', '.join(c.get('files', []))}\n" for c in commits))
+              + "".join(f"- `{c['sha'][:12]}` {', '.join(c.get('files', []))}\n" for c in commits)
+              + "\n## 执行会话报告的遗留问题\n\n" + ("".join(f"- {n}\n" for n in notes) or "（无）\n"))
     write_atomic(work / "report.md", report)
     write_atomic(work / "state", "completed\n")
     launch_submit(m, node)
@@ -2105,9 +2110,14 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
             launch_submit(m, node)
         elif resume == "integrate":
             pass                                   # 由集成调度重新尝试
+        elif resume == "fresh":
+            # 熔断后从上一次通过的提交重来：被拒的改动先存成补丁撤回，再新开会话
+            patch = discard_changes(m, node) if changed_paths(m.worktree(node)) else None
+            undo = f"上一个会话被拒的改动已撤回（存成 {patch}）。" if patch else ""
+            launch_executor(m, node, f"{undo}从上一次通过的提交重新开始。用户（或 coordinator）的裁决：\n\n{answer}\n\n"
+                                     "据此继续；做完一条验收标准就按格式结束这一轮。", fresh=True)
         else:
-            launch_executor(m, node, f"用户（或 coordinator）的回答：\n\n{answer}\n\n据此继续；做完一条验收标准就按格式结束这一轮。",
-                            fresh=resume == "fresh")
+            launch_executor(m, node, f"用户（或 coordinator）的回答：\n\n{answer}\n\n据此继续；做完一条验收标准就按格式结束这一轮。")
         return
     type_, outcome = last["type"], last.get("outcome")
     if type_ == "executor":
