@@ -31,7 +31,7 @@
 | `REUSE.md` | 旧 orchestrator 每个脚本的去向：直接复用、参考重写、不要 |
 | `northstar-staging/` | 信任层的全部文件，已写好并通过冒烟测试 |
 | `slim/SKILL.md` | coordinator 的薄 skill 草稿 |
-| `slim/config/models.toml` | 模型角色配置 |
+| `orc/config/models.toml`（仓库根目录） | 模型角色配置，唯一写模型名的地方（原 `slim/config/models.toml`，阶段 2 移过去） |
 
 ## 阶段总览
 
