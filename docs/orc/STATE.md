@@ -149,7 +149,7 @@ pending → running → submitted → integrated
 
 **`plan-review`**：
 
-1. orc 用 `plan/` 生成审阅页 HTML，交给发布适配层，发布到 Sites 的 `/plan`。
+1. orc 用 `plan/` 生成审阅页 HTML，交给发布适配层，发布成仅本人可见的 Claude Artifact（`claude -p`，只放行 Read 和 Artifact）。页面变了就带原链接更新，链接不变。
 2. 发布成功后写 `published` 事件，发布回执记在 `publish.json`。回执里的哈希和当前页面一致时，不重复发布。
 3. 输出 `next: go-gate <链接>`。
 4. 发布失败时输出 `next: error`。**不能拿本地文件代替链接去要 go。**

@@ -659,7 +659,7 @@ def h_planning(m: Mission):
             "这是 orc 的 bug；把 events.jsonl 给用户看。", False)
 
 
-# ---------------------------------------------------------------- 审阅页与发布（Sites）
+# ---------------------------------------------------------------- 审阅页与发布（Claude Artifacts）
 
 def md_to_html(text: str) -> str:
     """够用的 Markdown：标题、列表、代码块、段落、行内代码和粗体。全部先转义。"""
@@ -733,17 +733,23 @@ def render_review(m: Mission) -> str:
                     f"<td>{cell(t.get('verification', []))}</td></tr>")
     constraints = read("northstar-constraints.md")
     request = (m.dir / "request.md").read_text(encoding="utf-8").strip()
-    return f"""<!doctype html>
-<html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>审阅：{_h.escape(m.name)}</title>
+    return f"""<title>{_h.escape(m.name)} 计划审阅</title>
+<meta name="claude:viewport-fit-sides" content="cover">
 <style>
-:root{{--bg:#fff;--fg:#1b1b1b;--muted:#666;--line:#ddd;--code:#f4f4f4}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#151515;--fg:#eee;--muted:#aaa;--line:#333;--code:#222}}}}
-body{{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,system-ui,sans-serif;margin:0 auto;max-width:960px;padding:16px}}
-h1{{font-size:1.5em}} h2{{border-top:1px solid var(--line);padding-top:1em}} code,pre{{background:var(--code);border-radius:4px}}
-pre{{padding:8px;overflow-x:auto}} table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}}
+/* 单列文档：顶部是要签名的哈希和 DAG，往下是设计和计划全文 */
+:root{{--bg:#fbfbfa;--fg:#1d1f22;--muted:#5f646b;--line:#dcdfe3;--code:#eef0f2;--accent:#2b5fab}}
+@media (prefers-color-scheme:dark){{:root:not([data-theme="light"]){{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;color-scheme:dark}}}}
+:root[data-theme="dark"]{{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;color-scheme:dark}}
+body{{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}}
+main{{max-width:960px;margin:0 auto;padding-block:16px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}}
+h1{{font-size:1.5em;text-wrap:balance}} h2{{border-top:1px solid var(--line);padding-top:1em;text-wrap:balance}}
+a{{color:var(--accent)}} code,pre{{background:var(--code);border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:.9em}}
+code{{overflow-wrap:anywhere}} pre{{padding:8px;overflow-x:auto}} pre code{{overflow-wrap:normal}}
+blockquote{{margin:0;padding-left:12px;border-left:3px solid var(--line);color:var(--muted)}}
+table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}}
 .wrap{{overflow-x:auto}} .muted{{color:var(--muted)}}
-</style></head><body>
+</style>
+<main>
 <h1>计划审阅：{_h.escape(m.name)}</h1>
 <p class="muted">由 orc 根据规划会话的产出生成。说 go 之后，下面三个文件会原样冻结，你用 Touch ID 签名的就是它们的哈希。</p>
 <h2>请求（原话）</h2><blockquote>{_h.escape(request)}</blockquote>
@@ -757,23 +763,44 @@ pre{{padding:8px;overflow-x:auto}} table{{border-collapse:collapse;width:100%;fo
 {('<h2>建议加入 NORTHSTAR 的关键约束</h2>' + md_to_html(constraints)) if constraints.strip() else ''}
 <h2>设计</h2>{md_to_html(read('design.md'))}
 <h2>计划</h2>{md_to_html(read('plan.md'))}
-</body></html>
+</main>
 """
 
 
-def run_publisher(site: Path) -> dict:
-    """发布适配层：Sites 只能经由 Codex 的连接器工具发布（没有独立 CLI 或 API），所以用 codex exec 跑固定步骤。"""
-    if shutil.which("codex") is None:
-        raise OrcError("PATH 里找不到 codex，发布不了审阅页（Sites 只能通过 Codex 发布）→ 安装并登录 Codex 后再运行 orc step。")
-    prompt = (ORC_ROOT / "templates" / "publish-sites.md").read_text(encoding="utf-8")
-    argv = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write",
-            "-c", "sandbox_workspace_write.network_access=true", prompt]
+def run_publisher(m: Mission, site: Path, page: str, url: Optional[str]) -> dict:
+    """发布适配层：用 claude -p 的 Artifact 工具把 orc 生成的网页发布成仅本人可见的 Claude Artifact。
+
+    发布会话只放行 Read 和 Artifact：它只读这一个文件、发布，不写任何东西。已经发布过的页面带上原链接更新，链接不变。
+    """
+    if shutil.which("claude") is None:
+        raise OrcError("PATH 里找不到 claude，发布不了审阅页 → 安装并登录 Claude Code 后再运行 orc step。")
+    if url:
+        target = (f"这个页面已经发布过，链接是 {url}。先用 Artifact 的 `action: \"read\"` 读这个链接，"
+                  "再带上同一个 `url` 发布，更新同一个链接，不要新建；不传 `icon`。")
+    else:
+        target = "这是第一次发布：不传 `url`，`icon` 用 `checklist`。"
+    prompt = (ORC_ROOT / "templates" / "publish-artifact.md").read_text(encoding="utf-8")
+    for key, value in (("{{PAGE}}", page), ("{{TARGET}}", target),
+                       ("{{DESCRIPTION}}", f"orc mission {m.name} 的计划审阅页：设计、计划、任务 DAG 和要签名的哈希。")):
+        prompt = prompt.replace(key, value)
+    cfg = m.roles()["plan"]
+    argv = ["claude", "-p", "--model", cfg["model"], "--effort", "low", "--output-format", "json",
+            "--permission-mode", "default", "--allowedTools=Read,Artifact"]
+    env = dict(os.environ, ORC_ROLE="publish", ORC_MISSION=m.name)
     try:
-        run = subprocess.run(argv, cwd=str(site), capture_output=True, text=True, timeout=900)
+        run = subprocess.run(argv, cwd=str(site), input=prompt, capture_output=True, text=True,
+                             timeout=600, env=env)
     except subprocess.TimeoutExpired as error:
-        raise OrcError("Sites 发布超时（15 分钟）。不要拿本地文件代替链接；稍后再运行 orc step 重试。") from error
+        raise OrcError("审阅页发布超时（10 分钟）。不要拿本地文件代替链接；稍后再运行 orc step 重试。") from error
+    text = run.stdout
+    try:
+        envelope = json.loads(text)
+        if isinstance(envelope, dict) and "result" in envelope:
+            text = str(envelope.get("result") or "")
+    except ValueError:
+        pass
     result = {}
-    for line in reversed(run.stdout.splitlines()):
+    for line in reversed(text.splitlines()):
         line = line.strip()
         if line.startswith("{") and line.endswith("}"):
             try:
@@ -781,9 +808,10 @@ def run_publisher(site: Path) -> dict:
                 break
             except ValueError:
                 continue
-    if not result.get("url", "").startswith("https://"):
+    if not str(result.get("url", "")).startswith("https://claude.ai/"):
         detail = result.get("error") or (run.stderr.strip().splitlines() or ["没有输出发布结果"])[-1]
-        raise OrcError(f"Sites 发布失败（{detail[:200]}）。不要拿本地文件代替链接去要 go；检查 Codex 登录和 Sites 插件后再运行 orc step。")
+        raise OrcError(f"审阅页发布失败（{str(detail)[:200]}）。不要拿本地文件代替链接去要 go；"
+                       "检查 Claude Code 登录后再运行 orc step。")
     return result
 
 
@@ -795,15 +823,11 @@ def ensure_published(m: Mission, route: str, html_text: str) -> str:
     if current.get("sha256") == digest:
         return current["url"]
     site = m.site_dir()
-    (site / "dist" / route).mkdir(parents=True, exist_ok=True)
-    write_atomic(site / "dist" / route / "index.html", html_text)
-    links = "".join(f'<li><a href="/{r}/">{r}</a></li>' for r in sorted({*receipts.keys(), route} - {"project_id"}))
-    write_atomic(site / "dist" / "index.html",
-                 f'<!doctype html><meta charset="utf-8"><title>{m.name}</title><h1>{m.name}</h1><ul>{links}</ul>\n')
-    result = run_publisher(site)
+    site.mkdir(parents=True, exist_ok=True)
+    page = f"{route}.html"
+    write_atomic(site / page, html_text)
+    result = run_publisher(m, site, page, current.get("url"))
     receipts[route] = {"url": result["url"], "sha256": digest, "at": now()}
-    if result.get("project_id"):
-        receipts["project_id"] = result["project_id"]
     write_atomic(receipts_path, json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
     m.append("published", "orc step", route=route, url=result["url"], sha256=digest)
     return result["url"]
@@ -1157,8 +1181,8 @@ def cmd_doctor(args) -> int:
     elif models:
         results.append(("skip", "模型可用", "没有实测（会消耗额度）→ 需要时运行 orc doctor --live"))
 
-    # 5. Sites 发布：publish 适配层在阶段 3 实现
-    results.append(("warn", "Sites 发布", "publish 适配层还没有实现（PLAN 阶段 3）"))
+    # 5. 审阅页发布：用 claude -p 的 Artifact 工具，靠上面的 claude 检查；实测会新建一个 Artifact，这里不做
+    results.append(("skip", "审阅页发布", "Claude Artifacts（claude -p 的 Artifact 工具）；没有实测，实测会新建一个 Artifact"))
 
     width = max(len(r[1]) for r in results)
     for level, name, note in results:

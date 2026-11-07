@@ -527,7 +527,7 @@ class Doctor(OrcCase):
         r = self.run_orc("doctor", env=env)
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertNotIn("FAIL", r.stdout)
-        self.assertIn("warn  Sites 发布", r.stdout)
+        self.assertIn("skip  审阅页发布", r.stdout)
         self.assertIn("orc doctor --live", r.stdout)
         self.assertIn("skip  命令：codex", r.stdout)       # 没有角色用 codex 时不要求安装
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """阶段 3：规划会话、审阅页发布、go 关口与签名。python3 orc/tests/test_planning.py
 
-规划会话（claude）、发布（codex）、签名校验（northstar）都换成可编排的假命令：
+规划会话和发布（都是 claude -p）、签名校验（northstar）都换成可编排的假命令：
 $ORC_FAKE/script 每行决定第几次规划运行做什么；$ORC_FAKE/publish 决定发布成功还是失败。
 """
 import json
@@ -22,6 +22,19 @@ args = sys.argv[1:]
 if "-p" not in args:
     sys.exit(2)
 prompt = sys.stdin.read()
+if os.environ.get("ORC_ROLE") == "publish":
+    # 假发布：记下调用，检查网页文件在当前目录里，输出和 claude -p --output-format json 一样的信封
+    calls = fake / "publish-calls"
+    calls.write_text((calls.read_text() if calls.exists() else "") + json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt}) + "\n")
+    mode = (fake / "publish").read_text().strip() if (fake / "publish").exists() else "ok"
+    if not pathlib.Path("plan.html").is_file():
+        line = json.dumps({"error": "no plan.html"})
+    elif mode == "ok":
+        line = json.dumps({"url": "https://claude.ai/code/artifact/fake-plan"})
+    else:
+        line = json.dumps({"error": "Artifact tool unavailable"})
+    print(json.dumps({"type": "result", "is_error": False, "result": "发布好了。\n" + line}))
+    sys.exit(0)
 n = len(list(fake.glob("call-*.json"))) + 1
 session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
 (fake / f"call-{n}.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt,
@@ -52,21 +65,6 @@ elif action == "crash":
 print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "done"}))
 '''
 
-FAKE_CODEX = r'''#!/usr/bin/env python3
-import json, os, sys, pathlib
-fake = pathlib.Path(os.environ["ORC_FAKE"])
-calls = fake / "publish-calls"
-calls.write_text(calls.read_text() + os.getcwd() + "\n" if calls.exists() else os.getcwd() + "\n")
-mode = (fake / "publish").read_text().strip() if (fake / "publish").exists() else "ok"
-if not pathlib.Path("dist/plan/index.html").is_file():
-    print(json.dumps({"error": "no dist/plan/index.html"})); sys.exit(0)
-print("working...")
-if mode == "ok":
-    print(json.dumps({"url": "https://plan.example.invalid/plan", "project_id": "proj-1"}))
-else:
-    print(json.dumps({"error": "Sites connector unavailable"}))
-'''
-
 FAKE_NORTHSTAR = r'''#!/bin/sh
 # 假 northstar：verify-mission 在 $ORC_FAKE/sig-ok 存在且 control 里有签名文件时通过
 [ "$1" = verify-mission ] && [ -f "$ORC_FAKE/sig-ok" ] && [ -f "$2/approved.sha256.sig" ]
@@ -80,7 +78,7 @@ class PlanningCase(OrcCase):
         self.fake.mkdir()
         bin_ = self.tmp / "fakebin"
         bin_.mkdir()
-        for name, body in (("claude", FAKE_CLAUDE), ("codex", FAKE_CODEX)):
+        for name, body in (("claude", FAKE_CLAUDE),):
             (bin_ / name).write_text(body.replace("#!/usr/bin/env python3", f"#!{sys.executable}", 1))
             (bin_ / name).chmod(0o755)
         ns = self.tmp / "ns"
@@ -196,19 +194,47 @@ class Outputs(PlanningCase):
     def test_valid_outputs_go_to_plan_review_and_publish(self):
         mdir = self.to_plan_review("ok")
         r = self.step()
-        self.assertEqual(self.next_line(r), "next: go-gate https://plan.example.invalid/plan", r.stdout + r.stderr)
+        self.assertEqual(self.next_line(r), "next: go-gate https://claude.ai/code/artifact/fake-plan", r.stdout + r.stderr)
         self.assertEqual((mdir / "state").read_text().strip(), "plan-review")
         for f in ("design.md", "plan.md", "task-dag.json"):
             self.assertTrue((mdir / "plan" / f).is_file(), f)
         kinds = [e["kind"] for e in self.events(mdir)]
         self.assertIn("plan-ready", kinds)
         self.assertIn("published", kinds)
-        page = (self.tmp / "wt" / "m1" / "site" / "dist" / "plan" / "index.html").read_text()
+        page = (self.tmp / "wt" / "m1" / "site" / "plan.html").read_text()
+        self.assertTrue(page.startswith("<title>m1 计划审阅</title>"))   # Artifact 约定：不带 doctype，title 在最前
         self.assertIn("用 CSV", page)
         self.assertIn("导出 CSV", page)               # DAG 的验收标准出现在审阅页
         r2 = self.step()                               # 页面没变：不重复发布
         self.assertEqual(self.next_line(r2), self.next_line(r))
         self.assertEqual(len((self.fake / "publish-calls").read_text().splitlines()), 1)
+
+    def publish_calls(self):
+        return [json.loads(l) for l in (self.fake / "publish-calls").read_text().splitlines()]
+
+    def test_publisher_only_reads_and_publishes(self):
+        mdir = self.to_plan_review("ok")
+        self.step()
+        call = self.publish_calls()[0]
+        args = call["args"]
+        self.assertIn("--allowedTools=Read,Artifact", args)
+        self.assertFalse(any(a.startswith(("--add-dir", "--dangerously")) for a in args), args)
+        models = json.loads((mdir / "models.json").read_text())["roles"]
+        self.assertEqual(args[args.index("--model") + 1], models["plan"]["model"])
+        self.assertEqual(os.path.realpath(call["cwd"]), os.path.realpath(self.tmp / "wt" / "m1" / "site"))
+        self.assertIn("`plan.html`", call["prompt"])
+        self.assertIn("第一次发布", call["prompt"])
+
+    def test_changed_page_updates_the_same_artifact(self):
+        mdir = self.to_plan_review("ok")
+        self.step()
+        (mdir / "plan" / "plan.md").write_text("# 计划\n1. 导出\n2. 筛选\n")
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: go-gate https://claude.ai/code/artifact/fake-plan")
+        calls = self.publish_calls()
+        self.assertEqual(len(calls), 2)
+        self.assertIn("https://claude.ai/code/artifact/fake-plan", calls[1]["prompt"])   # 带原链接更新，不新建
+        self.assertNotIn("第一次发布", calls[1]["prompt"])
 
     def test_invalid_outputs_are_sent_back_then_mediated(self):
         mdir = self.to_plan_review("bad", "bad", "bad")
@@ -250,7 +276,7 @@ class Publish(PlanningCase):
         mdir = self.to_plan_review("ok")
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: error "), r.stdout)
-        self.assertIn("Sites", self.next_line(r))
+        self.assertIn("审阅页发布失败", self.next_line(r))
         self.assertNotIn("go-gate", r.stdout)
         self.assertEqual((mdir / "state").read_text().strip(), "plan-review")
         (self.fake / "publish").write_text("ok")
