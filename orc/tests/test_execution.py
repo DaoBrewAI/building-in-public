@@ -370,6 +370,19 @@ class Gate(ExecCase):
         self.assertIn("已撤回", fourth["prompt"])                    # 熔断后重来，第 3 次被拒的改动也撤回
         self.assertTrue((self.mdir / "nodes" / "a" / "discarded-2.patch").is_file())
 
+    def test_acceptance_already_satisfied_is_confirmed_by_checks_without_a_commit(self):
+        """真实运行里遇到的：第一次提交顺带满足了第二条验收标准，第二轮没有可改的东西。"""
+        self.simple(("a",), two_acceptance=True)
+        self.script("a", commit({"a.txt": "a\n", "a2.txt": "a2\n"}, [1]), commit({}, [2]))
+        r = self.drive()
+        self.reached_reviewing(r)
+        second = self.ev("job-exit", type="gate")[1]
+        self.assertEqual(second["outcome"], "satisfied")
+        self.assertEqual(set(second["checks"]), {"ca2", "ca"})             # 用冻结的检查确认
+        self.assertEqual(len(self.ev("commit")), 1)                         # 没有新提交
+        self.assertEqual([c["role"] for c in self.calls("review")], ["auto", "review"])   # 没有 diff，不评审
+        self.assertIn("`files` 写 `[]`", self.calls("exec-a")[0]["prompt"])      # brief 里写明了这种情况怎么交
+
     def test_one_success_resets_the_streak(self):
         self.simple(("a",), two_acceptance=True)
         self.script("review", "DRIFT 一", "ALIGNED", "DRIFT 二", "ALIGNED")
