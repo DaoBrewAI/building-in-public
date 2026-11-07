@@ -42,6 +42,7 @@ FORWARD = {  # 合法的状态转换（STATE.md「mission 状态」）
     "accepted": {"cleaned"},
 }
 INTEGRATED_SCRIPT_STATES = {"integrated", "cleanup_pending", "collected"}
+ROLES = ("implement", "plan", "review", "review_light")   # 见 orc/config/models.toml
 
 
 class OrcError(Exception):
@@ -153,19 +154,39 @@ def resolve_models(path: Path = MODELS_TOML) -> dict:
     except Exception as error:  # tomllib 的解析错误
         raise OrcError(f"models.toml 解析失败：{error}。按文件里的注释修正格式。") from error
     roles = {}
-    for role, required in (("implement", ("cli", "model", "effort")),
-                           ("plan_review", ("cli", "model", "effort"))):
+    for role in ROLES:
         section = data.get(role)
         if not isinstance(section, dict):
             raise OrcError(f"models.toml 缺少 [{role}] 段。照模板补上这个角色。")
-        missing = [k for k in required if not section.get(k)]
+        missing = [k for k in ("cli", "model", "effort") if not section.get(k)]
         if missing:
             raise OrcError(f"models.toml 的 [{role}] 缺少 {', '.join(missing)}。")
+        if section["cli"] not in ("claude", "codex"):
+            raise OrcError(f"models.toml 的 [{role}] 写的 cli 是「{section['cli']}」：cli 只能是 claude 或 codex。")
         roles[role] = {k: str(v) for k, v in section.items()}
-    if roles["implement"]["cli"] == roles["plan_review"]["cli"]:
-        raise OrcError("models.toml 里 implement 和 plan_review 用了同一个 CLI。交叉评审要求两家不同：implement 用 codex，plan_review 用 claude。")
+    implement, review = roles["implement"]["model"], roles["review"]
+    # 重要的评审要独立：不能由写代码的同一个模型来审，也不能在不可用时降级成它
+    if review["model"] == implement:
+        raise OrcError(f"models.toml 里 [review] 和 [implement] 都是 {implement}：重要的评审不能用 implement 的模型（等于自己审自己）。给 review 换一个更强的模型。")
+    if review.get("fallback") == implement:
+        raise OrcError(f"models.toml 的 [review] fallback 是 {implement}：重要的评审不能降级成 implement 的模型。删掉 fallback，不可用时 orc 会停下来问你。")
+    threshold = review.get("deep_review_over_lines", "")
+    if not threshold.isdigit() or int(threshold) <= 0:
+        raise OrcError(f"models.toml 的 [review] deep_review_over_lines 必须是正整数（写成带引号的字符串，例如 \"300\"），现在是「{threshold}」。")
     return {"source": str(path), "sha256": hashlib.sha256(raw).hexdigest(),
             "resolved_at": now(), "roles": roles}
+
+
+def review_role(stage: str, diff_lines: int, prior_drift: bool, threshold: int) -> str:
+    """评审分级（流程交给代码）：重要、复杂的用 review，其余用 review_light。
+    node = 节点进入 submitted 时的整体评审；final = 最终审查；commit = 每次提交前的对齐评审。"""
+    if stage in ("node", "final"):
+        return "review"
+    if stage != "commit":
+        raise OrcError(f"不认识的评审阶段 {stage}。这是 orc 的 bug。")
+    if prior_drift or diff_lines > threshold:
+        return "review"
+    return "review_light"
 
 
 # ---------------------------------------------------------------- mission
@@ -595,17 +616,24 @@ def cmd_doctor(args) -> int:
         models = None
         check("模型配置：models.toml", False, str(error))
 
-    # 3. 命令
-    for cmd in ("git", "jq", "codex", "claude"):
+    # 3. 命令：codex / claude 只在有角色用它时才要求
+    used = {cfg["cli"] for cfg in models["roles"].values()} if models else {"claude", "codex"}
+    for cmd in ("git", "jq", "claude", "codex"):
+        if cmd in ("claude", "codex") and cmd not in used:
+            results.append(("skip", f"命令：{cmd}", "models.toml 里没有角色用它"))
+            continue
         check(f"命令：{cmd}", shutil.which(cmd) is not None, f"PATH 里找不到 {cmd} → 安装后再运行 orc doctor")
 
-    # 4. 模型可用（会消耗额度，只在 --live 时实测）
+    # 4. 模型可用（会消耗额度，只在 --live 时实测；同一个模型只调用一次）
     if models and args.live:
+        by_model: Dict[Tuple[str, str], List[str]] = {}
         for role, cfg in models["roles"].items():
-            if cfg["cli"] == "codex":
-                argv = ["codex", "exec", "--skip-git-repo-check", "-m", cfg["model"], "只回复 ok"]
+            by_model.setdefault((cfg["cli"], cfg["model"]), []).append(role)
+        for (cli, model), role_names in by_model.items():
+            if cli == "codex":
+                argv = ["codex", "exec", "--skip-git-repo-check", "-m", model, "只回复 ok"]
             else:
-                argv = ["claude", "-p", "--model", cfg["model"], "只回复 ok"]
+                argv = ["claude", "-p", "--model", model, "只回复 ok"]
             try:
                 run = subprocess.run(argv, capture_output=True, text=True, timeout=180)
                 # 必须有一整行就是 ok（忽略大小写和首尾空白）；"token limit" 这类含 ok 子串的输出不算
@@ -613,7 +641,7 @@ def cmd_doctor(args) -> int:
                 detail = (run.stderr or run.stdout).strip().splitlines()[-1:] or ["无输出"]
             except (OSError, subprocess.TimeoutExpired) as error:
                 ok, detail = False, [str(error)]
-            check(f"模型可用：{role}（{cfg['model']}）", ok,
+            check(f"模型可用：{model}（{'、'.join(role_names)}）", ok,
                   f"{' '.join(argv[:-1])} 没有返回 ok（{detail[0][:160]}）→ 检查登录、代理和额度")
     elif models:
         results.append(("skip", "模型可用", "没有实测（会消耗额度）→ 需要时运行 orc doctor --live"))
