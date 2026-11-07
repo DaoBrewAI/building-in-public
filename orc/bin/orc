@@ -679,6 +679,40 @@ def check_sandbox_argv(root: Path, command: str) -> List[str]:
     return ["sandbox-exec", "-p", profile, "sh", "-c", command]
 
 
+PYTEST_RC = {2: "中断，通常是收集阶段报错", 3: "pytest 内部错误", 4: "用法错误或找不到要跑的测试", 5: "没收集到测试"}
+
+
+def is_pytest_command(command: str) -> bool:
+    """命令里调用了 pytest（`pytest …`、`py.test …` 或 `python… -m pytest …`）。"""
+    import shlex
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    return any(os.path.basename(w) in ("pytest", "py.test") or (w == "-m" and i + 1 < len(words) and words[i + 1] == "pytest")
+               for i, w in enumerate(words))
+
+
+PYTEST_FAILED_RE = re.compile(r"\b\d+ failed\b")
+
+
+def pytest_failed(tail: List[str]) -> bool:
+    """输出末尾有 pytest 的「N failed」汇总：pytest 真的运行了，并且有测试没通过。"""
+    return any(PYTEST_FAILED_RE.search(line) for line in tail)
+
+
+def expected_before(check: dict, rc: Optional[int], tail: List[str]) -> bool:
+    """实现之前的结果是否符合预期。pytest 的 fail 检查必须失败在断言上：退出码 1，且输出里有「N failed」。
+    只看退出码不够：收集阶段报错是 2，解释器里没装 pytest 时 python -m pytest 也是 1。"""
+    if rc is None:
+        return False
+    if check["expect_before"] == "pass":
+        return rc == 0
+    if is_pytest_command(check["command"]):
+        return rc == 1 and pytest_failed(tail)
+    return rc != 0
+
+
 def run_checks(m: Mission, base: str, test_src: Path, test_files: List[str], checks: List[dict], where: Path) -> List[dict]:
     """在一份干净的 base 提交上，只放入测试文件，逐条运行检查。返回每条的结果。"""
     if where.exists():
@@ -699,7 +733,7 @@ def run_checks(m: Mission, base: str, test_src: Path, test_files: List[str], che
             rc, tail = run.returncode, (run.stdout + run.stderr).strip().splitlines()[-8:]
         except subprocess.TimeoutExpired:
             rc, tail = None, [f"超过 {CHECK_TIMEOUT} 秒没有结束"]
-        ok = (rc == 0) if check["expect_before"] == "pass" else (rc not in (0, None))
+        ok = expected_before(check, rc, tail)
         results.append({"id": check["id"], "expect_before": check["expect_before"], "rc": rc, "ok": ok, "tail": tail})
     return results
 
@@ -795,8 +829,13 @@ def validate_verify_outputs(m: Mission, work: Path) -> Tuple[List[str], dict]:
         tail = "\n    ".join(r["tail"]) or "无输出"
         if r["rc"] is None:
             problems.append(f"检查 {r['id']} 超时（{CHECK_TIMEOUT} 秒）")
-        elif r["expect_before"] == "fail":
+        elif r["expect_before"] == "fail" and r["rc"] == 0:
             problems.append(f"检查 {r['id']} 在还没实现的代码上就通过了：它没有测到新行为。改测试，让它在实现之前失败")
+        elif r["expect_before"] == "fail":
+            why = PYTEST_RC.get(r["rc"]) or ("输出里没有 pytest 的「N failed」汇总，pytest 可能根本没有运行" if r["rc"] == 1
+                                             else "不是测试失败")
+            problems.append(f"检查 {r['id']} 是 pytest 命令，实现之前的退出码是 {r['rc']}（{why}）：断言没有运行，"
+                            f"这个失败证明不了测试测得对。把被测接口放到测试函数里面导入，让它失败在断言上：\n    {tail}")
         else:
             problems.append(f"检查 {r['id']} 标成 pass（已有行为），但在现在的代码上失败了（退出码 {r['rc']}）：\n    {tail}")
     return problems, {"base": base, "results": results, "test_files": test_files}
@@ -1082,6 +1121,8 @@ def render_verification(m: Mission) -> str:
         r = results.get(c["id"], {})
         before = ("实现前应失败，实际失败" if c["expect_before"] == "fail" else "已有行为，实际通过") \
             + f"（退出码 {r.get('rc')}）"
+        if r.get("tail"):
+            before += f"<details><summary>输出</summary><pre><code>{_h.escape(chr(10).join(r['tail']))}</code></pre></details>"
         acc = "<br>".join(f"{a}. {_h.escape(acceptance[c['node']][a - 1])}" for a in c["acceptance"])
         rows.append(f"<tr><td><code>{_h.escape(c['id'])}</code></td><td><code>{_h.escape(c['node'])}</code></td>"
                     f"<td>{acc}</td><td><code>{_h.escape(c['command'])}</code></td><td>{before}</td></tr>")

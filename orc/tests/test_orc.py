@@ -610,5 +610,39 @@ class Doctor(OrcCase):
         self.assertIn("有 2 项未通过", r.stdout)
 
 
+
+class CheckExpectations(unittest.TestCase):
+    """实现之前的检查结果：pytest 的 fail 检查必须失败在断言上。"""
+
+    def setUp(self):
+        self.orc = load_orc()
+
+    def test_pytest_commands_are_recognized(self):
+        for cmd in ("pytest -q tests/a.py", "python3 -m pytest tests", "/opt/py/bin/python3.12 -m pytest -x",
+                    "py.test tests", "/usr/local/bin/pytest tests/a.py::test_x"):
+            self.assertTrue(self.orc.is_pytest_command(cmd), cmd)
+        for cmd in ("sh tests/a.sh", "npm test", "python3 -m unittest tests", "python3 tests/pytest_like.py", "echo pytest-ish"):
+            self.assertFalse(self.orc.is_pytest_command(cmd), cmd)
+
+    def test_pytest_fail_check_needs_rc_1_and_a_failed_summary(self):
+        check = {"expect_before": "fail", "command": "python3 -m pytest -q tests/a.py"}
+        ok = self.orc.expected_before
+        self.assertTrue(ok(check, 1, ["FAILED tests/a.py::test_x", "1 failed in 0.01s"]))
+        self.assertTrue(ok(check, 1, ["2 failed, 3 passed in 0.10s"]))
+        self.assertFalse(ok(check, 1, ["python3: No module named pytest"]))      # pytest 没有运行
+        self.assertFalse(ok(check, 2, ["Interrupted: 1 error during collection", "1 error in 0.07s"]))
+        self.assertFalse(ok(check, 4, ["ERROR: found no collectors for tests/a.py::test_x"]))
+        self.assertFalse(ok(check, 5, ["no tests ran in 0.01s"]))
+        self.assertFalse(ok(check, 0, ["1 passed in 0.01s"]))
+        self.assertFalse(ok(check, None, ["超时"]))
+
+    def test_other_fail_checks_and_pass_checks_only_use_the_exit_code(self):
+        ok = self.orc.expected_before
+        self.assertTrue(ok({"expect_before": "fail", "command": "sh tests/a.sh"}, 2, []))
+        self.assertFalse(ok({"expect_before": "fail", "command": "sh tests/a.sh"}, 0, []))
+        self.assertTrue(ok({"expect_before": "pass", "command": "python3 -m pytest tests"}, 0, []))
+        self.assertFalse(ok({"expect_before": "pass", "command": "python3 -m pytest tests"}, 1, ["1 failed"]))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
