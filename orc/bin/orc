@@ -1731,10 +1731,13 @@ def repo_git_dir(m: Mission) -> str:
     return os.path.realpath(common if common.is_absolute() else m.repo() / common)
 
 
+DONE_OUTCOMES = ("committed", "satisfied")     # satisfied：验收标准已被之前的提交满足，检查确认过，没有新提交
+
+
 def done_acceptance(m: Mission, node: str) -> List[int]:
     done = set()
     for e in job_exits(m, node, "gate"):
-        if e.get("outcome") == "committed":
+        if e.get("outcome") in DONE_OUTCOMES:
             done.update(e.get("acceptance", []))
     return sorted(done)
 
@@ -1815,8 +1818,10 @@ def validate_executor_result(m: Mission, node: str, obj: Optional[dict]) -> List
         if not isinstance(obj.get("notes", ""), str):
             problems.append("notes（遗留问题）必须是字符串，没有就写空字符串")
         actual = changed_paths(m.worktree(node))
-        if not actual:
-            problems.append("worktree 里没有任何改动，没有可提交的东西")
+        if not actual and isinstance(files, list) and files:
+            problems.append("worktree 里没有任何改动，但 files 不是空的")
+        if not actual and not acc:
+            problems.append("worktree 里没有任何改动，也没有写已经满足的验收标准：没有可提交、可确认的东西")
         if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
             problems.append("files 必须是文件路径列表")
         elif set(files) != set(actual):
@@ -1889,7 +1894,7 @@ def prior_drift(m: Mission, node: str) -> Optional[str]:
 def passed_checks(m: Mission, node: str) -> List[str]:
     ids: List[str] = []
     for e in job_exits(m, node, "gate"):
-        if e.get("outcome") == "committed":
+        if e.get("outcome") in DONE_OUTCOMES:
             ids += [cid for cid, ok in e.get("checks", {}).items() if ok and cid not in ids]
     return ids
 
@@ -1944,6 +1949,9 @@ def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     out["checks"], results, checks_text = run_node_checks(m, wt, ids, jobs_dir(m) / f"{job}.copy")
     if not all(out["checks"].values()):
         return reject("checks", failed_detail(results))
+    if not actual:
+        # 这条验收标准已经被之前的提交满足：冻结的检查确认过，没有 diff 可评审，也没有东西可提交
+        return {**out, "outcome": "satisfied"}
     diff = pending_diff(wt, actual)
     prev = prior_drift(m, node)
     verdict, text = call_review(m, node, wt, diff, "auto", checks_text, prev)
@@ -2154,7 +2162,7 @@ def consecutive(exits: List[dict], bad: set, stop: Optional[set] = None) -> int:
 
 def gate_streak(m: Mission, node: str) -> int:
     """连续被拒的次数：提交成功一次清零；评审服务出错不算。"""
-    return consecutive(job_exits(m, node, "gate"), {"rejected"}, {"committed"})
+    return consecutive(job_exits(m, node, "gate"), {"rejected"}, set(DONE_OUTCOMES))
 
 
 def block_node(m: Mission, node: str, reason: str, question: str, qtype: str, resume: str) -> None:
@@ -2244,7 +2252,7 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
                            "检查登录、代理和额度后回答「继续」，orc 会重试。", "ask-user", "executor")
         return
     if type_ == "gate":
-        if outcome == "committed":
+        if outcome in DONE_OUTCOMES:
             ctl = node_ctl(m, node)
             if (ctl / "unresolved-rework").exists():
                 (ctl / "unresolved-rework").unlink()
@@ -2252,7 +2260,9 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
             if not left:
                 enter_submitted(m, node)
             else:
-                launch_executor(m, node, f"提交成功：`{last['sha'][:12]}`（验收标准 {last.get('acceptance')}）。"
+                done = (f"提交成功：`{last['sha'][:12]}`" if outcome == "committed"
+                        else "冻结的检查确认它已经被之前的提交满足（没有改动，不提交）")
+                launch_executor(m, node, f"{done}（验收标准 {last.get('acceptance')}）。"
                                          f"还没提交的验收标准：\n\n{acceptance_lines(m, node, left)}\n\n"
                                          "继续做下一条；做完一条就按格式结束这一轮。")
         elif outcome == "rejected":
