@@ -8,6 +8,7 @@ import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -34,14 +35,32 @@ class OrcCase(unittest.TestCase):
         self.repo = self.tmp / "product"
         self.repo.mkdir()
         subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        self.env = dict(os.environ, ORC_HOME=str(self.home),
-                        GIT_CONFIG_GLOBAL=str(self.tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1")
+        # 阶段 3 起，进入 planning 会在后台启动规划会话（claude）。这里放一个只会等待的假 claude，
+        # 绝不调用真实模型；tearDown 时按 planner-start 事件里的 pid 结束它们
+        basebin = self.tmp / "basebin"
+        basebin.mkdir()
+        (basebin / "claude").write_text("#!/bin/sh\nexec sleep 300\n")
+        (basebin / "claude").chmod(0o755)
+        self.env = dict(os.environ, ORC_HOME=str(self.home), ORC_WORKTREES=str(self.tmp / "worktrees"),
+                        GIT_CONFIG_GLOBAL=str(self.tmp / "gitconfig"), GIT_CONFIG_NOSYSTEM="1",
+                        PATH=f"{basebin}:{os.environ['PATH']}")
         (self.tmp / "gitconfig").write_text("")
         self._saved = {k: os.environ.get(k) for k in ("ORC_HOME",)}
         os.environ["ORC_HOME"] = str(self.home)
         self.orc = load_orc()
 
     def tearDown(self):
+        for events in self.home.glob("missions/*/events.jsonl"):
+            for line in events.read_text().splitlines():
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue            # 有的测试故意写坏日志
+                if isinstance(event, dict) and event.get("kind") == "planner-start":
+                    try:
+                        os.killpg(event["pid"], signal.SIGTERM)
+                    except (ProcessLookupError, PermissionError):
+                        pass
         for k, v in self._saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -68,16 +87,16 @@ class OrcCase(unittest.TestCase):
 
 class StepNew(OrcCase):
     def test_new_mission_reaches_planning_with_correct_next(self):
+        # 阶段 3 起：进入 planning 后启动规划会话，next 是 wait（阶段 2 时是“规划未实现”的 error）
         r, mdir = self.new()
         self.assertIn("new → planning", r.stdout)
-        self.assertTrue(self.next_line(r).startswith("next: error 规划会话还没有实现（PLAN 阶段 3）"), r.stdout)
-        self.assertIn("orc step --mission m1", self.next_line(r))
+        self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
         self.assertEqual(r.stdout.strip().splitlines()[-1], self.next_line(r), "next: 必须是最后一行")
         self.assertEqual((mdir / "state").read_text().strip(), "planning")
         self.assertEqual((mdir / "request.md").read_text().strip(), "Add CSV export")
         self.assertEqual((mdir / "repo").read_text().strip(), str(self.repo))
         kinds = [(e["kind"], e.get("to")) for e in self.events(mdir)]
-        self.assertEqual(kinds, [("created", None), ("state", "planning")])
+        self.assertEqual(kinds, [("created", None), ("state", "planning"), ("planner-start", None)])
         for sub in ("control", "control/tasks", "nodes", "questions", "answers", "plan"):
             self.assertTrue((mdir / sub).is_dir(), sub)
 
@@ -95,12 +114,12 @@ class StepNew(OrcCase):
         bad.write_text("[implement]\n")
         env = dict(self.env, ORC_MODELS_TOML=str(bad))
         r = self.run_orc("step", "--mission", "m1", env=env)
-        self.assertIn("规划会话还没有实现", r.stdout)
+        self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
         self.assertEqual(json.loads((mdir / "models.json").read_text())["roles"], models["roles"])
 
     def test_generated_name_and_default_repo(self):
         r = self.run_orc("step", "--new", "Fix the login bug")
-        self.assertEqual(r.returncode, 1)   # 停在 planning（规划未实现）时 next 是 error
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)   # 规划会话在后台运行：next: wait
         names = os.listdir(self.home / "missions")
         self.assertEqual(len(names), 1)
         self.assertRegex(names[0], r"^\d{8}-\d{6}-fix-the-login-bug$")
@@ -137,7 +156,7 @@ class StepRepeatAndResume(OrcCase):
         r1 = self.run_orc("step", "--mission", "m1")
         r2 = self.run_orc("step", "--mission", "m1")
         self.assertEqual(r1.stdout, r2.stdout)
-        self.assertEqual((r1.returncode, r2.returncode), (1, 1))
+        self.assertEqual((r1.returncode, r2.returncode), (0, 0))   # 规划会话在跑：两次都是 next: wait
         self.assertEqual((mdir / "events.jsonl").read_text(), before)
 
     def test_interrupted_after_event_before_state_is_repaired_from_log(self):
@@ -212,7 +231,7 @@ class Transitions(OrcCase):
         self.assertIn("blocked → planning", r.stdout)
         self.assertEqual((mdir / "state").read_text().strip(), "planning")
         kinds = [e["kind"] for e in self.events(mdir)]
-        self.assertEqual(kinds, ["created", "state", "ask", "state", "answer", "state"])
+        self.assertEqual(kinds, ["created", "state", "planner-start", "ask", "state", "answer", "state"])
 
     def test_answer_refusals(self):
         self.new("m1")
@@ -240,10 +259,11 @@ class ForgedLog(OrcCase):
 
     def test_jump_to_accepted_is_rejected(self):
         _, mdir = self.new()
+        forged_line = len((mdir / "events.jsonl").read_text().splitlines()) + 1
         self.forge(mdir, **{"from": "planning", "to": "accepted"})
         r = self.run_orc("step", "--mission", "m1")
         self.assertIn("不是合法的状态转换", self.next_line(r))
-        self.assertIn("第 3 行", self.next_line(r))
+        self.assertIn(f"第 {forged_line} 行", self.next_line(r))
         r = self.run_orc("status")
         self.assertNotIn("m1  accepted", r.stdout)
         self.assertIn("m1  日志无法回放", r.stdout)

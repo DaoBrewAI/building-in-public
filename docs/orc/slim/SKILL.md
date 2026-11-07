@@ -23,10 +23,11 @@ Run `orc step --mission <name>` (or `orc step --new "<user request>"`), read the
 | `next:` | What you do |
 | --- | --- |
 | `ask-user <question>` | Ask the user exactly that, then `orc answer "<their reply>"`. |
-| `go-gate <plan URL>` | Send the user the URL. When they say go, tell them to run `northstar approve-mission <control-dir>` in their own terminal (Touch ID). Then `orc step`. |
+| `go-gate <plan URL>` | Send the user the URL. If they want changes, `orc revise --mission <m> "<their words>"`. When they say go, `orc go --mission <m>`. |
+| `sign <control-dir>` | Tell the user to run `northstar approve-mission <control-dir>` in their own terminal (Touch ID). After they confirm, `orc step`. |
 | `mediate <file>` | Answer the child's or planner's question (see Judgement). `orc answer --file <file> "<answer>"`. |
 | `report <status URL>` | Give the user the status URL and a two-line summary of what it shows. |
-| `wait` | Nothing to do. Stop until `orc` wakes you. |
+| `wait` | Run `orc wait --mission <m>` in the background; when it returns, `orc step`. |
 | `error <message>` | Tell the user the message once. Do not improvise a fix. |
 
 ## Judgement — the only rules you hold

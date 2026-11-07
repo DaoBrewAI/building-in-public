@@ -84,10 +84,12 @@
 ## 阶段 3：规划与 go
 
 - [ ] **【Claude Code】** 规划阶段：`orc` 用 `plan` 模型（`claude -p`）启动规划会话，产出 `design.md`、`plan.md`、`task-dag.json` 和审阅页 HTML。DAG 每个节点必须带：声明的文件、验收标准、对应的 NORTHSTAR 条款、所属组件、依赖。用复用的 `validate-task-dag.sh` 校验（含节点间文件不重叠的检查）。
+  - 实现说明（阶段 3）：审阅页 HTML 由 `orc` 根据规划产出生成，不交给规划会话写，这样页面上显示的就是将来冻结、签名的那几份文件，哈希也一并列出。会话怎么启动、怎么等待、怎么提问、怎么修，见 STATE.md「规划与 go」。
   - 外部 PRD 在规划时并入 `design.md`，随冻结文件一起签名；评审只认签名的设计。
   - NORTHSTAR 尽量少加，只写方向；规划会话从设计里挑出少数"违反了就等于换了设计"的关键决定（例如"模型之前不准有按原话匹配的分支"），起草成 N# 约束放进 `drafts/NORTHSTAR.md`，由你 `northstar seal`。
 - [ ] **【Claude Code】** 规划中需要问你的问题，`orc` 输出 `ask-user`；你的回答经 `orc answer` 写回，再恢复同一个规划会话。
 - [ ] **【Claude Code】** 调研 OpenAI Sites 怎样从脚本发布（命令行、API，或者只能通过 Codex 发布）。写成一个独立的 `publish` 适配层，`orc` 只调用它。把调研结论写进 PR。
+  - 调研结论（2026-11-07）：Sites 通过 ChatGPT 的 Sites 连接器发布（`create_site`、`save_version_and_deploy_private` 等连接器工具），这些工具只有 Codex 里才有。没有独立的 CLI 或公开 API。所以适配层只能用 `codex exec` 执行固定的发布步骤（`orc/templates/publish-sites.md`）：每个 mission 一个 Site，路由 `/plan`、`/status`，只用仅本人可见的访问范围；页面没变就不重复发布；发布失败时不拿本地文件代替。
 - [ ] **【你】** 确认 Sites 发布方式可行；如果只能通过 Codex 发布，确认可以接受用 `codex exec` 执行固定的发布步骤。
 - [ ] **【Claude Code】** go 关口：审阅页发布到 Sites 的 `/plan`；`orc` 输出 `go-gate <链接>`；你说 go 后冻结四个文件、生成 `approved.sha256`，然后等你签名；`verify-approved-authority.py` 先调用 `northstar verify-mission` 校验签名，再校验哈希。签名无效时进不了 `approved`。
 - [ ] **【你】** 在测试 mission 里走一遍：看审阅页，说 go，运行 `northstar approve-mission <control 目录>`，按 Touch ID。
