@@ -2,9 +2,11 @@
 
 `orc` 的所有机械流程都按这一页读写状态。规则只有三条：
 
-1. **状态的唯一来源是 `events.jsonl`。** `state` 文件只是缓存；两者不一致时以日志里最后一条状态事件为准，`orc` 每次运行先对齐。
+1. **状态的唯一来源是 `events.jsonl`。** `state` 文件只是缓存；`orc` 每次运行先从头回放日志、再对齐缓存。回放时**逐条校验**每个状态事件：`from` 必须等于上一状态，转换必须在下表里；有一条不合法就报错停下（`next: error …第 N 行…`），不按它走。
 2. **所有改动都在同一把锁里。** 用复用的 `coordinator_lifecycle_lock.py`，锁文件在 mission 的 `control/` 下；commit broker 和 integrate-task 也拿这把锁，所以 orc、broker、集成三者互斥。
 3. **只追加，不改写。** 事件只追加；冻结文件只在 go 之后写一次；mission 记录的模型不再改变。
+4. **只有 orc 能写 mission 目录。** 信任层的 guard 拦截 agent 工具对 `$ORC_HOME`（默认 `~/.orc`）的写入，不管当前仓库有没有 `.northstar/`。文本匹配挡不住刻意绕过，所以还有第 5 条。
+5. **go 之后每一步都重新验签。** mission 处于 `approved`、`executing`、`reviewing`、`accepted`（或从这些状态进入 `blocked`）时，每次 `orc step` 先跑 `northstar verify-mission` 和 `verify-approved-authority.py`；任一失败就 `next: error`，不执行任何流程。伪造一串合法的状态事件也绕不过签名。
 
 ## mission 目录
 
@@ -47,7 +49,7 @@ new → planning → plan-review → approved → executing → reviewing → ac
 | `reviewing` | 最终审查（阶段 5） | 审查通过，状态页已发布 | `accepted` |
 | `accepted` | 已验收 | 清理完成 | `cleaned` |
 | `cleaned` | 终态 | — | — |
-| `blocked` | 需要用户决定（熔断、升级给用户的问题） | `orc answer` 写回回答 | 进入 blocked 之前的状态 |
+| `blocked` | 需要用户或 coordinator 决定（熔断、升级的问题）。**进入时必须带一个问题**（状态事件的 `question` 字段），只能经 `block()` 进入 | **这个问题**有了 `answer` 事件（别的问题的回答不算） | 进入 blocked 之前的状态 |
 | `failed` | 不可恢复的错误，终态 | — | — |
 
 只有上表里的转换是合法的；`orc` 遇到其他转换直接报错，不写日志。
@@ -86,7 +88,7 @@ pending → running → submitted → integrated
 | `kind` | 额外字段 |
 | --- | --- |
 | `created` | `request`、`repo`、`models`（models.json 的 sha256） |
-| `state` | `from`、`to`、`reason`（可选） |
+| `state` | `from`、`to`、`reason`（可选）；进入 `blocked` 时另有 `question`（问题 id）和 `type`（ask-user / mediate） |
 | `node-state` | `node`、`from`、`to` |
 | `commit` | `node`、`sha`、`files` |
 | `review` | `node`、`verdict`（ALIGNED / DRIFT）、`reason` |

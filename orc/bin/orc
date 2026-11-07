@@ -48,6 +48,31 @@ class OrcError(Exception):
     """可以直接告诉 coordinator 的错误：消息里写明错在哪、该怎么做。"""
 
 
+APPROVED_STATES = {"approved", "executing", "reviewing", "accepted"}   # 每次 step 都重新校验签名和哈希
+
+
+def illegal_transition(ctx: dict, to: str, event: dict) -> Optional[str]:
+    """回放日志和写新事件共用的合法性判断。合法返回 None，否则返回原因。"""
+    current = ctx["state"]
+    if current in TERMINAL:
+        return f"{current} 是终态"
+    if to in FORWARD.get(current, set()) or to == "failed":
+        return None
+    if to == "blocked":
+        if current == "blocked":
+            return "已经在 blocked"
+        if not event.get("question"):
+            return "进入 blocked 必须带一个问题"
+        return None
+    if current == "blocked":
+        if to != ctx["blocked_from"]:
+            return f"blocked 只能回到进入前的 {ctx['blocked_from']}"
+        if ctx["question"] not in ctx["answered"]:
+            return f"问题 {ctx['question']} 还没有回答"
+        return None
+    return "状态表里没有这条转换"
+
+
 # ---------------------------------------------------------------- 小工具
 
 def now() -> str:
@@ -168,17 +193,46 @@ class Mission:
             self._lock_fd = None
 
     # -- 事件日志：状态的唯一来源
-    def events(self) -> List[dict]:
+    def numbered_events(self) -> List[Tuple[int, dict]]:
         out = []
         if self.events_path.is_file():
             for n, line in enumerate(self.events_path.read_text(encoding="utf-8").splitlines(), 1):
                 if not line.strip():
                     continue
                 try:
-                    out.append(json.loads(line))
+                    out.append((n, json.loads(line)))
                 except json.JSONDecodeError as error:
                     raise OrcError(f"{self.events_path} 第 {n} 行不是合法 JSON（{error}）。这个文件只能追加，不要手改；把那一行恢复原样。") from error
         return out
+
+    def events(self) -> List[dict]:
+        return [e for _, e in self.numbered_events()]
+
+    def replay(self) -> dict:
+        """逐条回放状态事件：from 必须等于上一状态，转换必须合法（STATE.md）。
+        不合法就报错停下，不按它走——日志在 agent 可写的目录里，被追加伪造的事件时要能发现。"""
+        ctx = {"state": "new", "blocked_from": None, "question": None, "qtype": None, "answered": set()}
+        for n, e in self.numbered_events():
+            kind = e.get("kind")
+            if kind == "answer":
+                ctx["answered"].add(e.get("id"))
+            if kind != "state":
+                continue
+            frm, to = e.get("from"), e.get("to")
+            where = f"{self.events_path} 第 {n} 行"
+            if frm != ctx["state"]:
+                raise OrcError(f"{where}：状态事件写的是从 {frm} 转到 {to}，但当时的状态是 {ctx['state']}。"
+                               "日志被改过或写坏了，orc 不按它走；停下来告诉用户。")
+            problem = illegal_transition(ctx, to, e)
+            if problem:
+                raise OrcError(f"{where}：{frm} → {to} 不是合法的状态转换（{problem}）。"
+                               "日志被改过或写坏了，orc 不按它走；停下来告诉用户。")
+            if to == "blocked":
+                ctx.update(blocked_from=frm, question=e["question"], qtype=e.get("type", "ask-user"))
+            elif frm == "blocked":
+                ctx.update(blocked_from=None, question=None, qtype=None)
+            ctx["state"] = to
+        return ctx
 
     def append(self, kind: str, by: str, **fields) -> dict:
         event = {"ts": now(), "mission": self.name, "kind": kind, "by": by, **fields}
@@ -189,11 +243,7 @@ class Mission:
         return event
 
     def state_from_events(self) -> str:
-        state = "new"
-        for e in self.events():
-            if e.get("kind") == "state":
-                state = e["to"]
-        return state
+        return self.replay()["state"]
 
     def reconcile(self) -> str:
         """state 文件只是缓存：和日志不一致时（比如中断在写日志和写 state 之间）按日志补齐。"""
@@ -207,25 +257,30 @@ class Mission:
     def state(self) -> str:
         return self.state_from_events()
 
-    def transition(self, to: str, by: str, reason: Optional[str] = None) -> None:
-        current = self.state
-        legal = (to in FORWARD.get(current, set())
-                 or (to in {"blocked", "failed"} and current not in TERMINAL | {"blocked"})
-                 or (current == "blocked" and to == self.blocked_from()))
-        if not legal:
-            raise OrcError(f"不允许从 {current} 转到 {to}（见 docs/orc/STATE.md 的状态表）。这是 orc 的 bug，不要手改状态；把这条消息告诉用户。")
-        fields = {"from": current, "to": to}
+    def transition(self, to: str, by: str, reason: Optional[str] = None, **extra) -> None:
+        if to == "blocked" and "question" not in extra:
+            raise OrcError("进入 blocked 必须同时给用户一个问题：用 block()，不要直接 transition 到 blocked。这是 orc 的 bug。")
+        ctx = self.replay()
+        current = ctx["state"]
+        fields = {"from": current, "to": to, **extra}
         if reason:
             fields["reason"] = reason
+        problem = illegal_transition(ctx, to, fields)
+        if problem:
+            raise OrcError(f"不允许从 {current} 转到 {to}（{problem}；见 docs/orc/STATE.md 的状态表）。这是 orc 的 bug，不要手改状态；把这条消息告诉用户。")
         self.append("state", by, **fields)       # 先写日志
         write_atomic(self.state_path, to + "\n")  # 再更新缓存；中断在中间时下次 reconcile 补齐
 
+    def block(self, reason: str, question: str, qtype: str, by: str) -> Path:
+        """进入 blocked 的唯一入口：问题和状态一起写。离开 blocked 需要这个问题的 answer 事件。"""
+        if qtype not in ("ask-user", "mediate"):
+            raise OrcError(f"问题类型只能是 ask-user 或 mediate，不是 {qtype}。这是 orc 的 bug。")
+        path = self.ask(question, qtype, by)
+        self.transition("blocked", by, reason=reason, question=path.stem, type=qtype)
+        return path
+
     def blocked_from(self) -> Optional[str]:
-        last = None
-        for e in self.events():
-            if e.get("kind") == "state" and e.get("to") == "blocked":
-                last = e.get("from")
-        return last
+        return self.replay()["blocked_from"]
 
     # -- 问答
     def open_questions(self) -> List[Path]:
@@ -285,16 +340,25 @@ def create_mission(request: str, repo: Optional[str], name: Optional[str]) -> Mi
         slug = "-".join(words[:4])[:40].strip("-") or "mission"
         name = f"{_dt.datetime.now():%Y%m%d-%H%M%S}-{slug}"
     mission = Mission(name)
-    if mission.dir.exists():
+    if mission.exists():
         raise OrcError(f"mission「{name}」已经存在。继续它用 orc step --mission {name}；新建就换一个 --name。")
-    for sub in ("", "control", "control/tasks", "nodes", "questions", "answers", "plan"):
-        (mission.dir / sub).mkdir(parents=True, exist_ok=sub != "")
-    write_atomic(mission.dir / "request.md", request.rstrip() + "\n")
-    write_atomic(mission.dir / "repo", repo_real + "\n")
-    models_text = json.dumps(models, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    write_atomic(mission.dir / "models.json", models_text)
-    mission.append("created", "orc step", request=request, repo=repo_real,
-                   models=hashlib.sha256(models_text.encode()).hexdigest())
+    if mission.dir.exists():
+        # 上一次新建在写 events.jsonl 之前中断：这是 orc 自己留下的半成品，没有任何事件，直接接管
+        shutil.rmtree(mission.dir)
+        print(f"接管上次没建完的 mission 目录 {mission.dir}（里面还没有 events.jsonl）")
+    try:
+        for sub in ("", "control", "control/tasks", "nodes", "questions", "answers", "plan"):
+            (mission.dir / sub).mkdir(parents=True, exist_ok=sub != "")
+        write_atomic(mission.dir / "request.md", request.rstrip() + "\n")
+        write_atomic(mission.dir / "repo", repo_real + "\n")
+        models_text = json.dumps(models, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        write_atomic(mission.dir / "models.json", models_text)
+        mission.append("created", "orc step", request=request, repo=repo_real,
+                       models=hashlib.sha256(models_text.encode()).hexdigest())
+    except BaseException:
+        if not mission.exists():          # 还没写进 events.jsonl：清掉，免得留下不能 step 也不能重建的目录
+            shutil.rmtree(mission.dir, ignore_errors=True)
+        raise
     write_atomic(mission.state_path, "new\n")
     return mission
 
@@ -324,13 +388,36 @@ def not_yet(phase: str) -> Handler:
 
 
 def h_blocked(m: Mission):
-    pending = m.open_questions()
-    if pending:
-        return f"ask-user {pending[0].read_text().strip()}", False
-    back = m.blocked_from()
-    m.transition(back, "orc step", reason="用户已回答")
+    ctx = m.replay()
+    qid, back = ctx["question"], ctx["blocked_from"]
+    qfile = m.dir / "questions" / f"{qid}.md"
+    if not qfile.is_file():
+        return (f"error mission {m.name} 停在 blocked，但它的问题文件 {qfile} 不见了。"
+                "不要手动解除 blocked；把这条消息告诉用户。"), False
+    if qid not in ctx["answered"]:
+        if ctx["qtype"] == "mediate":
+            return f"mediate {qfile}", False
+        return f"ask-user {qfile.read_text().strip()}", False
+    m.transition(back, "orc step", reason=f"问题 {qid} 已回答")
     print(f"mission {m.name}：blocked → {back}")
     return None, True
+
+
+def verify_approval(m: Mission) -> Optional[str]:
+    """go 之后冻结的文件：每次都重新校验签名（northstar verify-mission）和哈希（verify-approved-authority.py）。"""
+    control = os.path.realpath(m.control)
+    northstar = Path(os.environ.get("ORC_NORTHSTAR_ROOT", "/opt/northstar")) / "bin" / "northstar"
+    sig = subprocess.run([str(northstar), "verify-mission", control], capture_output=True, text=True)
+    if sig.returncode != 0:
+        return (f"error mission {m.name} 冻结设计的签名校验失败（{northstar} verify-mission {control}）。"
+                "冻结文件或签名被改过，或签名不是你的；不要继续执行，把这条消息告诉用户。")
+    hashes = subprocess.run([sys.executable, str(SCRIPTS / "verify-approved-authority.py"), "--control-dir", control],
+                            capture_output=True, text=True)
+    if hashes.returncode != 0:
+        detail = (hashes.stderr.strip().splitlines() or ["无输出"])[-1]
+        return (f"error mission {m.name} 的冻结文件和签名时的哈希不一致（{detail}）。"
+                "go 之后的设计、计划、DAG 不能改；不要继续执行，把这条消息告诉用户。")
+    return None
 
 
 def h_terminal(m: Mission):
@@ -357,7 +444,13 @@ HANDLERS: Dict[str, Handler] = {
 def step(mission: Mission) -> Next:
     with mission:
         for _ in range(len(MISSION_STATES) + 1):   # 一次 step 可以连过几个不需要等待的状态
-            nxt, cont = HANDLERS[mission.state](mission)
+            ctx = mission.replay()
+            effective = ctx["blocked_from"] if ctx["state"] == "blocked" else ctx["state"]
+            if effective in APPROVED_STATES:
+                problem = verify_approval(mission)
+                if problem:
+                    return problem
+            nxt, cont = HANDLERS[ctx["state"]](mission)
             if not cont:
                 return nxt or "wait"
         return "error orc step 在一次运行里转了太多次状态。这是 orc 的 bug，把 events.jsonl 给用户看。"
@@ -427,7 +520,12 @@ def cmd_status(args) -> int:
     for m in missions:
         events = m.events()
         created = next((e for e in events if e.get("kind") == "created"), {})
-        print(f"{m.name}  {m.state}  创建于 {created.get('ts', '?')}  仓库 {created.get('repo', '?')}")
+        try:
+            state = m.state
+        except OrcError as error:
+            print(f"{m.name}  日志无法回放  {error}")
+            continue
+        print(f"{m.name}  {state}  创建于 {created.get('ts', '?')}  仓库 {created.get('repo', '?')}")
         if args.mission:
             models = json.loads((m.dir / "models.json").read_text())["roles"]
             print("  模型：" + "，".join(f"{r}={v['model']}" for r, v in models.items()))
@@ -490,7 +588,8 @@ def cmd_doctor(args) -> int:
                 argv = ["claude", "-p", "--model", cfg["model"], "只回复 ok"]
             try:
                 run = subprocess.run(argv, capture_output=True, text=True, timeout=180)
-                ok = run.returncode == 0 and "ok" in run.stdout.lower()
+                # 必须有一整行就是 ok（忽略大小写和首尾空白）；"token limit" 这类含 ok 子串的输出不算
+                ok = run.returncode == 0 and any(l.strip().lower() == "ok" for l in run.stdout.splitlines())
                 detail = (run.stderr or run.stdout).strip().splitlines()[-1:] or ["无输出"]
             except (OSError, subprocess.TimeoutExpired) as error:
                 ok, detail = False, [str(error)]
