@@ -1098,10 +1098,10 @@ def render_review(m: Mission) -> str:
     return f"""<title>{_h.escape(m.name)} 计划审阅</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
-/* 单列文档：顶部是要签名的哈希和 DAG，往下是设计和计划全文 */
-:root{{--bg:#fbfbfa;--fg:#1d1f22;--muted:#5f646b;--line:#dcdfe3;--code:#eef0f2;--accent:#2b5fab}}
-@media (prefers-color-scheme:dark){{:root:not([data-theme="light"]){{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;color-scheme:dark}}}}
-:root[data-theme="dark"]{{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;color-scheme:dark}}
+/* 先一图看懂（图为主），再是要签名的哈希、DAG、验收测试、设计和计划全文 */
+:root{{--bg:#fbfbfa;--fg:#1d1f22;--muted:#5f646b;--line:#dcdfe3;--code:#eef0f2;--accent:#2b5fab;--card:#ffffff;--ok:#1f7a4d;--okbg:#e3f2ea}}
+@media (prefers-color-scheme:dark){{:root:not([data-theme="light"]){{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;--card:#1d2024;--ok:#6fcf9b;--okbg:#1d3328;color-scheme:dark}}}}
+:root[data-theme="dark"]{{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;--card:#1d2024;--ok:#6fcf9b;--okbg:#1d3328;color-scheme:dark}}
 body{{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}}
 main{{max-width:960px;margin:0 auto;padding-block:16px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}}
 h1{{font-size:1.5em;text-wrap:balance}} h2{{border-top:1px solid var(--line);padding-top:1em;text-wrap:balance}}
@@ -1110,11 +1110,26 @@ code{{overflow-wrap:anywhere}} pre{{padding:8px;overflow-x:auto}} pre code{{over
 blockquote{{margin:0;padding-left:12px;border-left:3px solid var(--line);color:var(--muted)}}
 table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}}
 .wrap{{overflow-x:auto}} .muted{{color:var(--muted)}}
+.flow{{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}} .step{{padding:4px 10px;border-radius:999px;border:1px solid var(--line);font-size:14px;color:var(--muted)}}
+.step.done{{background:var(--okbg);color:var(--ok);border-color:transparent}} .step.you{{background:var(--accent);color:var(--bg);border-color:transparent;font-weight:600}}
+.stats{{display:flex;flex-wrap:wrap;gap:16px;margin-bottom:12px;color:var(--muted)}} .stats b{{color:var(--fg);font-size:1.3em}}
+.board{{display:flex;align-items:center;gap:12px;overflow-x:auto;padding-bottom:8px}} .layer{{display:flex;flex-direction:column;gap:12px}}
+.arrow{{font-size:28px;color:var(--accent);flex:none}} .card{{border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:240px;max-width:340px;background:var(--card)}}
+.ch{{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:6px}} .ch b{{font-size:1.05em}}
+.clause{{font-size:12px;padding:1px 6px;border-radius:999px;background:var(--code);color:var(--accent)}}
+.file{{font:12px ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:4px;background:var(--code);margin-right:4px;display:inline-block}}
+.acc{{list-style:none;margin:8px 0;padding:0;display:flex;flex-direction:column;gap:4px}} .acc li{{display:flex;align-items:center;gap:6px;font-size:14px}}
+.num{{flex:none;width:20px;height:20px;border-radius:50%;background:var(--accent);color:var(--bg);font-size:12px;display:grid;place-items:center}}
+.at{{flex:1;min-width:0}} .pills{{display:flex;gap:3px;flex:none}}
+.pill{{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;font-size:11px}} .pill.new{{background:var(--ok);color:var(--bg)}} .pill.keep{{background:var(--line);color:var(--fg)}}
+.dep{{font-size:12px;color:var(--muted)}} .legend{{font-size:13px;color:var(--muted)}}
+@media (max-width:640px){{.board{{flex-direction:column;align-items:stretch}} .arrow{{transform:rotate(90deg);align-self:center}} .card{{max-width:none}}}}
 </style>
 <main>
 <h1>计划审阅：{_h.escape(m.name)}</h1>
 <p class="muted">由 orc 根据规划会话和验证会话的产出生成。说 go 之后，设计、计划、DAG 和下面的验收测试会原样冻结，你用 Touch ID 签名的就是它们的哈希。</p>
 <h2>请求（原话）</h2><blockquote>{_h.escape(request)}</blockquote>
+{render_overview(m)}
 <h2>核对用的哈希</h2>
 <table><tr><th>文件</th><th>sha256</th></tr>
 <tr><td>设计 design.md</td><td><code>{sha('design.md')}</code></td></tr>
@@ -1128,6 +1143,69 @@ table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px so
 <h2>计划</h2>{md_to_html(read('plan.md'))}
 </main>
 """
+
+
+def render_overview(m: Mission) -> str:
+    """「一图看懂」：按依赖分层画出节点卡片，每张卡片是声明文件、验收标准和对应的检查（图为主，字为辅）。"""
+    import html as _h
+    plan, vdir = m.dir / "plan", m.dir / "verify"
+    if not (plan / "task-dag.json").is_file():
+        return ""
+    tasks = json.loads((plan / "task-dag.json").read_text(encoding="utf-8")).get("tasks", [])
+    checks = json.loads((vdir / "checks.json").read_text(encoding="utf-8"))["checks"] if (vdir / "checks.json").is_file() else []
+    results = ({r["id"]: r for r in json.loads((vdir / "results.json").read_text(encoding="utf-8"))["results"]}
+               if (vdir / "results.json").is_file() else {})
+    depth: Dict[str, int] = {}
+
+    def level(t: dict, seen=()) -> int:
+        if t["id"] not in depth:
+            deps = [d for d in t.get("depends_on", []) if d not in seen]
+            by_id = {x["id"]: x for x in tasks}
+            depth[t["id"]] = 1 + max((level(by_id[d], seen + (t["id"],)) for d in deps if d in by_id), default=-1)
+        return depth[t["id"]]
+    for t in tasks:
+        level(t)
+    short = lambda text, n=46: text if len(text) <= n else text[:n - 1] + "…"
+    cards: Dict[int, List[str]] = {}
+    for t in tasks:
+        acc = []
+        for i, text in enumerate(t.get("acceptance", []), 1):
+            pills = []
+            for c in checks:
+                if c["node"] != t["id"] or i not in c["acceptance"]:
+                    continue
+                r = results.get(c["id"], {})
+                kind = "new" if c["expect_before"] == "fail" else "keep"
+                ok = "✓" if r.get("ok") else ("✗" if r else "")
+                tip = f"{c['id']}：{c['command']}（实现前{'应失败' if kind == 'new' else '应通过'}，退出码 {r.get('rc')}）"
+                pills.append(f'<span class="pill {kind}" title="{_h.escape(tip)}">{ok}</span>')
+            acc.append(f'<li><span class="num">{i}</span><span class="at" title="{_h.escape(text)}">{_h.escape(short(text))}</span>'
+                       f'<span class="pills">{"".join(pills)}</span></li>')
+        files = "".join(f'<span class="file">{_h.escape(f)}</span>' for f in t.get("files", []))
+        clauses = "".join(f'<span class="clause">{_h.escape(c)}</span>' for c in t.get("clauses", []))
+        deps = "、".join(t.get("depends_on", []))
+        cards.setdefault(depth[t["id"]], []).append(
+            f'<div class="card"><div class="ch"><b>{_h.escape(t["id"])}</b>{clauses}</div>'
+            f'<div class="files">{files}</div><ol class="acc">{"".join(acc)}</ol>'
+            + (f'<div class="dep">等 {_h.escape(deps)} 集成后开始</div>' if deps else '<div class="dep">一开始就能做</div>')
+            + '</div>')
+    layers = '<div class="arrow" aria-hidden="true">→</div>'.join(
+        f'<div class="layer">{"".join(cards[d])}</div>' for d in sorted(cards))
+    n_new = sum(1 for c in checks if c["expect_before"] == "fail")
+    n_ok = sum(1 for c in checks if results.get(c["id"], {}).get("ok"))
+    flow = "".join(f'<span class="step {cls}">{_h.escape(label)}</span>' for label, cls in (
+        ("规划", "done"), ("验收测试", "done" if results else ""), ("你看这页、说 go", "you"), ("你签名", "you"),
+        ("执行：每条验收标准一次提交", ""), ("集成", "")))
+    return (f'<h2>一图看懂</h2><div class="flow">{flow}</div>'
+            f'<div class="stats"><span><b>{len(tasks)}</b> 个节点</span>'
+            f'<span><b>{sum(len(t.get("acceptance", [])) for t in tasks)}</b> 条验收标准</span>'
+            f'<span><b>{len(checks)}</b> 个检查（{n_new} 个测新行为）</span>'
+            f'<span><b>{n_ok}/{len(checks)}</b> 实现前结果符合预期</span></div>'
+            f'<div class="board">{layers}</div>'
+            '<p class="legend"><span class="pill new">✓</span> 测新行为：实现前已确认会失败　'
+            '<span class="pill keep">✓</span> 守住已有行为：实现前已确认通过　'
+            '<span class="file">文件</span> 节点只能改这些文件　<span class="clause">N1</span> 服务的 NORTHSTAR 条款。'
+            '把手指或鼠标放在验收标准、圆点上能看到全文和检查命令；完整文字在下面各节。</p>')
 
 
 def render_verification(m: Mission) -> str:

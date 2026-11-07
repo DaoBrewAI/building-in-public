@@ -402,6 +402,9 @@ class Verify(PlanningCase):
         self.assertEqual(ready["results"], {"export-writes-csv": 1})     # 实际运行过，实现前失败
         page = (self.tmp / "wt" / "m1" / "site" / "plan.html").read_text()
         self.assertIn("验收测试", page)
+        self.assertLess(page.index("一图看懂"), page.index("核对用的哈希"))      # 图为主的一节放在最前面
+        self.assertIn('<div class="card"><div class="ch"><b>export</b>', page)  # 每个节点一张卡片
+        self.assertIn('<span class="pill new"', page)                           # 验收标准旁边是对应的检查
         self.assertIn("test -f src/export.py", page)                       # 测试全文在审阅页上
         self.assertIn(models["review"]["model"], page)
 
