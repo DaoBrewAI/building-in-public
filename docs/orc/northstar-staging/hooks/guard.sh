@@ -28,9 +28,11 @@ orc_phys="$(cd "$orc_home" 2>/dev/null && pwd -P || echo "$orc_home")"
 deny_orc() { echo "NORTHSTAR 保护：orc 的 mission 状态（$orc_home）只能由 orc 命令改写。用 orc step / orc answer，不要直接写这些文件。" >&2; exit 2; }
 case "$tool" in
   Bash|shell|exec_command|local_shell)
-    ORC_RE='(~|\$HOME|\$\{HOME\})/\.orc([/[:space:]"]|$)|\$ORC_HOME|\$\{ORC_HOME\}'
-    if { grep -qE "$ORC_RE" <<<"$cmd" || grep -qF -e "$orc_home" -e "$orc_phys" <<<"$cmd"; } \
-       && grep -qE "$WRITE" <<<"$wcmd"; then deny_orc; fi ;;
+    # 按整段路径匹配：后面紧跟的不能是名字字符，所以 ~/.orc-worktrees（节点 worktree）不算 ~/.orc
+    esc() { sed 's/[][\.*^$+?(){}|/]/\\&/g' <<<"$1"; }
+    ORC_RE="(~|\\\$HOME|\\\$\\{HOME\\})/\\.orc([^[:alnum:]_.-]|\$)|\\\$ORC_HOME|\\\$\\{ORC_HOME\\}"
+    ORC_RE="$ORC_RE|$(esc "$orc_home")([^[:alnum:]_.-]|\$)|$(esc "$orc_phys")([^[:alnum:]_.-]|\$)"
+    if grep -qE "$ORC_RE" <<<"$cmd" && grep -qE "$WRITE" <<<"$wcmd"; then deny_orc; fi ;;
   *)
     if [ -z "$files" ]; then   # 认不出要写的路径：退回整段匹配
       grep -qF -e "$orc_home/" -e "$orc_phys/" <<<"$payload" && deny_orc

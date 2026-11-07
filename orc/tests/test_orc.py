@@ -372,6 +372,36 @@ class CreateLeftovers(OrcCase):
         self.assertFalse((self.home / "missions" / "m1").exists())
 
 
+class WorktreeLocation(OrcCase):
+    """复核意见：节点 worktree 不能在 $ORC_HOME 下，否则 guard 会拦住节点里的所有写入。"""
+
+    def test_default_is_outside_orc_home(self):
+        os.environ.pop("ORC_WORKTREES", None)
+        saved = os.environ.get("HOME")
+        os.environ["HOME"] = str(self.tmp / "h")
+        try:
+            os.environ["ORC_HOME"] = str(self.tmp / "h" / ".orc")
+            self.assertEqual(self.orc.Mission("m1").worktree("n1"), self.tmp / "h" / ".orc-worktrees" / "m1" / "n1")
+        finally:
+            os.environ["HOME"] = saved
+            os.environ["ORC_HOME"] = str(self.home)
+
+    def test_worktrees_inside_orc_home_are_refused(self):
+        for inside in (self.home, self.home / "missions" / "m1" / "worktrees"):
+            os.environ["ORC_WORKTREES"] = str(inside)
+            try:
+                with self.assertRaises(self.orc.OrcError) as ctx:
+                    self.orc.worktrees_root()
+                self.assertIn("不能放在 $ORC_HOME", str(ctx.exception))
+            finally:
+                os.environ.pop("ORC_WORKTREES", None)
+        os.environ["ORC_WORKTREES"] = str(self.tmp / "elsewhere")
+        try:
+            self.assertEqual(self.orc.worktrees_root(), self.tmp / "elsewhere")
+        finally:
+            os.environ.pop("ORC_WORKTREES", None)
+
+
 class NodeStates(OrcCase):
     def test_node_states_are_derived_from_protocol_files(self):
         _, mdir = self.new()
@@ -469,6 +499,16 @@ class Doctor(OrcCase):
         (fakebin / "codex").write_text("#!/bin/sh\necho '  OK  '\n")
         r = self.run_orc("doctor", "--live", env=env)
         self.assertIn("ok  模型可用：implement", r.stdout)
+
+    def test_worktrees_inside_orc_home_fail_doctor(self):
+        env = self.fake_install()
+        env["ORC_WORKTREES"] = str(self.home / "worktrees")
+        r = self.run_orc("doctor", env=env)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FAIL  节点 worktree 位置", r.stdout)
+        env["ORC_WORKTREES"] = str(self.tmp / "wt")
+        r = self.run_orc("doctor", env=env)
+        self.assertIn("ok  节点 worktree 位置", r.stdout)
 
     def test_missing_trust_layer_fails_with_fix(self):
         env = self.fake_install()

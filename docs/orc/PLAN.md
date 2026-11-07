@@ -111,6 +111,7 @@
 - [ ] **【Claude Code】** 整体评审：节点进入 `submitted` 时，先跑本节点全部验收检查和测试（结果写进 `events.jsonl`），不通过直接回到 `rework`，不调用模型；通过后用 `northstar-review` 拿整个节点的累计 diff 和检查结果对照签名的设计再评审一次；DRIFT 时节点回到 `rework`，纠偏单同上。
 - [ ] **【Claude Code】** 纠偏和 rework 尽量回到同一个 codex 会话（用 codex exec 的会话恢复功能）；不可用时新开会话，附上完整 brief 和纠偏单。
 - [ ] **【Claude Code】** 集成：复用 `integrate-task.sh`，在复用的生命周期锁内按顺序合并，不改写历史。
+- [ ] **【Claude Code】** 进入 `reviewing` 前重新判定，不只信 `events.jsonl`：日志回放只拦不合法的转换，伪造一条合法转换（`from` 写对）仍能通过；guard 也只认字面路径（`cd ~ && echo x >> .orc/...` 这类相对路径能绕过）。所以 `orc` 要从协议文件重新算：每个节点 `control/tasks/<node>/state` 是 integrated，且它的 merge commit 确实在父分支上。算出来的结果和日志不一致时停下，`next: error`。
 - [ ] **【Claude Code】** 为以上每个分支写契约测试，包括：两个不重叠节点同时运行、重叠节点被排队、DRIFT 三次熔断、子任务超时、两个节点同时集成被锁串行化、检查不通过时不调用评审模型、只跑声明完成的检查加此前通过的检查、整体评审 DRIFT 时节点回到 `rework`、超长 diff 被拒而不是截断。
 - [ ] **【你】** 审 PR。
 
@@ -118,7 +119,8 @@
 
 ## 阶段 5：验收、状态页、清理
 
-- [ ] **【Claude Code】** 最终审查：全部节点集成后，`plan_review` 模型对合并后的代码做一次整体审查，对照材料是签名的设计文件、NORTHSTAR 和全部检查结果（`events.jsonl` 里的检查记录）；发现的问题按节点路由回 rework。
+- [ ] **【Claude Code】** 最终审查：全部节点集成后，`plan_review` 模型对合并后的代码做一次整体审查，对照材料是签名的设计文件、NORTHSTAR 和全部检查结果；发现的问题按节点路由回 rework。
+- [ ] **【Claude Code】** 进入 `accepted` 前重新判定，不只信 `events.jsonl` 里的检查记录：`orc` 在合并后的代码上重新跑全部验收检查和测试，并确认 PR 的 CI（`northstar / verify` 和隐藏考题）通过；任何一项和日志对不上就停下，`next: error`。
 - [ ] **【你】** 写隐藏考题，放在 agent 读不到的地方（私有仓库，或 GitHub secret）。不能放进 `.northstar/`：它对 agent 可读，`inject.sh` 还会把它注入会话。
 - [ ] **【Claude Code】** CI 增加隐藏考题 job：用 agent 没有的凭证（GitHub secret）取考题并运行，只回报通过或失败，不回报内容；加进 main 的 required check。
   - 省分钟数：只在 PR 不是草稿时运行（触发事件含 `ready_for_review`），之后每次推送照常跑；设 `timeout-minutes`

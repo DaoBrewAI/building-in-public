@@ -38,6 +38,22 @@ for with_ns in no yes; do
 done
 run_in "$(write_p Write "$T/h/.orc/missions/t1/state")" env -u ORC_HOME HOME="$T/h" "$G"
 expect_rc 2 "没设 ORC_HOME 时保护默认的 ~/.orc"
+
+begin "guard：节点 worktree（默认 ~/.orc-worktrees）里写代码放行，mission 状态照样拦"
+# 节点 worktree 不在 $ORC_HOME 下（STATE.md）；guard 不给任何路径开例外，只是按整段路径匹配，.orc-worktrees 不算 .orc
+H="$T/h"; WT="$H/.orc-worktrees/t1/n1"; mkdir -p "$WT" "$H/.orc/missions/t1"
+git init -q "$WT"; cd "$WT"
+hg() { run_in "$1" env -u ORC_HOME HOME="$H" "$G"; }
+hg "$(write_p Write "$WT/src/a.py")";                     expect_rc 0 "worktree 里 Write 代码文件放行"
+hg "$(write_p Edit "$WT/README.md")";                     expect_rc 0 "worktree 里 Edit 放行"
+hg "$(patch_p $'*** Begin Patch\n*** Add File: '"$WT"$'/src/b.py\n+x\n*** End Patch')"; expect_rc 0 "worktree 里 apply_patch 放行"
+for c in "echo x > src/a.py" "echo x > $WT/src/a.py" 'echo x > ~/.orc-worktrees/t1/n1/a.py' 'rm -f $HOME/.orc-worktrees/t1/n1/tmp.txt'; do
+  hg "$(bash_p "$c")"; expect_rc 0 "worktree 里放行：$c"
+done
+hg "$(write_p Write "$H/.orc/missions/t1/events.jsonl")"; expect_rc 2 "在 worktree 里写 mission 状态文件照样拦"
+hg "$(bash_p "echo x >> $H/.orc/missions/t1/events.jsonl")"; expect_rc 2 "在 worktree 里用命令写 mission 状态照样拦"
+hg "$(bash_p 'echo x >> ~/.orc/missions/t1/events.jsonl')"; expect_rc 2 "在 worktree 里用 ~/.orc 写 mission 状态照样拦"
+cd "$T"
 unset ORC_HOME
 
 begin "guard：签名与绕过类命令"
