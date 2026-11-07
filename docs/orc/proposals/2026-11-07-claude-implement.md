@@ -47,6 +47,17 @@
 
 参考：<https://code.claude.com/docs/en/sandboxing>。用户报告过同类现象：claudeissues.com 上的 issue 64792、62551、46000。
 
+## 实测 2：`--add-dir` 会放开 Bash 写入（2026-11-07，阶段 3 规划会话）
+
+规划会话最初用 `--add-dir <产品仓库>` 让它能读代码，同时用权限规则把 Write / Edit 限定在工作目录。之后做了一次对抗测试：明确要它写产品仓库。
+
+| 配置 | Write 写产品仓库 | Bash `echo x > 产品仓库/…` | Read / Grep / `git -C` 读产品仓库 |
+| --- | --- | --- | --- |
+| `--add-dir` 产品仓库 | 被拒（没有权限） | **写成了** | 能读 |
+| 不用 `--add-dir`，沙箱对产品仓库 `denyWrite` | 被拒（没有权限） | 被拒（`operation not permitted`） | **能读** |
+
+原因：文档写明，沙箱允许写工作目录和 `--add-dir` 加入的目录。所以 **`--add-dir` 加入的目录对 Bash 是可写的**。规划会话已改为第二种配置。阶段 4 的执行会话同理：只有本节点的 worktree 可写，其余目录一律不用 `--add-dir`，需要保护的路径设 `denyWrite`。
+
 ## 阶段 4 怎么用（写进 PLAN）
 
 orc 用 `claude -p` 启动执行会话，带一份只给这次会话用的设置：

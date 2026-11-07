@@ -126,8 +126,8 @@ pending → running → submitted → integrated
 **规划会话**：`plan` 角色，`claude -p` 在后台运行。
 
 - **工作目录**：`~/.orc-worktrees/<mission>/plan-work/`，不在 `$ORC_HOME` 里，因为 guard 不让 agent 写 `$ORC_HOME`。
-- **可读**：用 `--add-dir` 加入产品仓库，规划会话能读代码。
-- **可写**：Write / Edit 只放行 `plan-work/`。Bash 在沙箱里跑，只能写 `plan-work/` 和临时目录。
+- **可读**：规划会话能读产品仓库的代码（Read、Grep、`git -C`）。
+- **可写**：Write / Edit 只放行 `plan-work/`。Bash 在沙箱里跑，只能写 `plan-work/` 和临时目录；产品仓库在沙箱里 `denyWrite`。**不用 `--add-dir`**：实测它会把目录加进沙箱的可写白名单。
 - **记录**：会话 id、pid 和每次运行的序号写进 `planner-start` 事件。包装脚本在会话结束时写 `.runs/<n>.rc`。
 - **判断状态**：有 rc 文件，就是“结束了”；没有 rc 文件但进程还在，就是“在运行”；没有 rc 文件、进程也不在，就是“丢了”，按失败处理。拿不准时一律当它还在运行，不重复启动。
 

@@ -145,7 +145,10 @@ class LaunchAndWait(PlanningCase):
         allowed = next(a.split("=", 1)[1] for a in args if a.startswith("--allowedTools="))
         self.assertIn(f"Write(/{os.path.realpath(work)}/**)", allowed)
         self.assertNotIn(str(self.repo), allowed, "产品仓库不在可写范围")
-        self.assertIn(f"--add-dir={self.repo}", args)
+        # 实测（2026-11-07）：--add-dir 会把目录加进沙箱的可写白名单，Bash 能写产品仓库。
+        # 所以不用 --add-dir，并对产品仓库 denyWrite；读代码不受影响（Read / Grep / git log 实测可用）
+        self.assertFalse([a for a in args if a.startswith("--add-dir")], "不能用 --add-dir")
+        self.assertIn(os.path.realpath(self.repo), settings["sandbox"]["filesystem"]["denyWrite"])
         self.assertEqual(args[args.index("--permission-mode") + 1], "default")
         self.assertEqual((c["role"], c["mission"]), ("plan", "m1"))
         self.assertIn("Add CSV export", c["prompt"])
