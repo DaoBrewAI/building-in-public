@@ -1,0 +1,8 @@
+# orc/config/orc.toml
+# 执行阶段的参数。mission 进入 executing 时 orc 读一次，记进 exec-setup 事件，运行中的 mission 不受改动影响。
+# 值都写成带引号的字符串（和 models.toml 一样，老版本 Python 的最小解析器只认字符串）。
+
+[execution]
+max_parallel             = "3"    # 同时运行的节点数上限
+session_timeout_seconds  = "3600" # 执行会话的一轮（以及判断测试对错的评审会话）最多跑多少秒；超时按崩溃处理。按实测耗时调整
+crash_retries            = "1"    # 执行会话崩溃（退出码非 0、进程不见了、超时）后重试几次，再失败节点进入 blocked
