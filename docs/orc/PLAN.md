@@ -18,7 +18,7 @@
 | 模型 | **2026-11-07 改**（见 `proposals/2026-11-07-claude-implement.md`）：实现和规划用 Claude Opus（目前 `claude-opus-5-5`）；重要、复杂的评审用 Claude 当前最强（目前 `claude-fable-5-1`，不降级，不能和实现用同一个模型），简单评审用 Opus。分级规则写在代码里。按"最强"由用户手动更新，名字只写在 `config/models.toml` |
 | 子任务 | **2026-11-07 改**：`claude -p`（Claude Code 无界面模式）后台运行，每个任务一个独立 worktree；开沙箱，主仓库 `.git` 设 denyWrite |
 | 并发 | 第一版就支持并行：DAG 里声明文件互不重叠、前置都已集成的节点同时跑；集成按顺序加锁 |
-| 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单 |
+| 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单。**2026-11-07 改**（见 `proposals/2026-11-07-commit-gate.md`）：对齐评审在 broker 之前的提交关口里做（锁外），broker 只提交评审过的字节（`diff_sha256` 绑定），复用的 broker 脚本不改 |
 | 验证 | **2026-11-07 加**（见 `proposals/2026-11-07-tests-before-implement.md`）：验收测试和检查在设计之后、实现之前，由一个独立的会话写好（`review` 角色的模型，和执行用的不同；看不到规划过程和计划）。每个检查都要先在当前代码上实际跑一遍：测新行为的必须失败。测试随设计、计划一起冻结签名；执行阶段只能读、不能改，只有这些检查算数 |
 | 给人看的页面 | **2026-11-07 改**（见 `proposals/2026-11-07-review-page-artifacts.md`）：计划审阅页和状态页都发布成仅本人可见的 Claude Artifact，手机和电脑都能看。原来是 OpenAI Sites。**2026-11-07 加**（见 `proposals/2026-11-07-cross-mission-review.md`）：另有一个全产品的汇总页，也是 Artifact，链接不变，每完成一个 mission 更新一次 |
 | 产品设计和 phase | **2026-11-07 加**（见 `proposals/2026-11-07-cross-mission-review.md`）：四层，产品设计文档 → NORTHSTAR → phase → mission。orc 从产品设计文档起草画布（组件、连线、组件对应的目录），写成 `.northstar/architecture.json`，用户签名后 agent 改不了；DAG 节点的组件只能从画布里选。orc 按 phase 文档里的依赖启动 mission。每个 mission 合进主线前做一次跨 mission 评审（`review` 模型，不降级）：默认以已合并的为准，冲突就退回重做；只有签名设计里「推翻的已有决定」一节写明的才放行。mission 的 `scope` 和 `forbid` 由信任层硬拦截，不进 NORTHSTAR |
@@ -108,7 +108,7 @@
 - [ ] **【Claude Code】** 启动子任务：每个节点一个 worktree；用 `claude -p` 在其中运行，模型和 effort 取自 mission 里记录的 `implement` 角色。会话设置：`sandbox.enabled`、`failIfUnavailable`、`allowUnsandboxedCommands:false`、`filesystem.denyWrite` 主仓库 `.git`（git 只读，提交必须走 broker）、网络按需放行；Edit / Write 用权限规则限制在自己的 worktree 里（先实测，见提案）；环境变量 `ORC_ROLE=implement`、`ORC_NODE=<node>`。brief 只给：任务、验收标准原文、声明文件、"每完成一条验收标准就发一次提交请求"。worktree 里放入冻结的验收测试（`control/approved-tests/`，执行会话可读不可改）。
 - [ ] **【Claude Code】** 进程监管：记录 PID、开始时间、退出码；超时按 Astra 的实际耗时设定，写进配置；崩溃按配置重试一次，再失败则节点进入 `blocked`。
 - [ ] **【Claude Code】** 子任务结果：要求子任务最后输出结构化结果（改了哪些文件、对应哪条验收标准、遗留问题），由 `orc` 按固定格式校验；校验不过视为未完成。
-- [ ] **【Claude Code】** commit broker（复用）在文件范围校验之后加对齐评审：调用 `northstar-review`（和提交前 hook `align.sh` 是同一个评审入口、同样的输入），按评审分级选模型（上一次 DRIFT 后的复审、改动超过 `deep_review_over_lines` 行用 `review`，其余用 `review_light`；`review` 不可用时不降级，节点进入 `blocked` 问用户），对照 NORTHSTAR、签名的 `design.md`、本节点的 DAG 条目（声明文件、验收标准、条款）和这次的 diff，回答两个问题：方向有没有偏、做法是不是照设计。任一项不符判 DRIFT。
+- [ ] **【Claude Code】** 提交关口（2026-11-07 改，见 `proposals/2026-11-07-commit-gate.md`；在锁外运行，通过后才写提交请求交给复用的 commit broker，评审过的改动用 `diff_sha256` 绑定）：文件范围校验之后做对齐评审：调用 `northstar-review`（和提交前 hook `align.sh` 是同一个评审入口、同样的输入），按评审分级选模型（上一次 DRIFT 后的复审、改动超过 `deep_review_over_lines` 行用 `review`，其余用 `review_light`；`review` 不可用时不降级，节点进入 `blocked` 问用户），对照 NORTHSTAR、签名的 `design.md`、本节点的 DAG 条目（声明文件、验收标准、条款）和这次的 diff，回答两个问题：方向有没有偏、做法是不是照设计。任一项不符判 DRIFT。
   - 冻结的验收测试不能改：提交里只要动了 `approved-checks.json` 列出的测试文件，broker 直接拒绝；跑检查前先按签名的哈希核对 worktree 里的测试文件，对不上就拒绝。
   - 评审前先跑检查：broker 跑这次提交声明完成的验收标准对应的检查（按冻结的 `approved-checks.json` 的检查 id，在沙箱里运行），加上本节点此前已经通过的检查（防回退），结果写进 `events.jsonl`。不通过直接拒绝，不调用模型；通过后把检查结果连同 diff 交给评审（`--checks`）
   - 冻结的检查失败、执行会话认为是测试本身有错时（2026-11-07 加，见 `proposals/2026-11-07-check-failure-reasons.md`）：执行会话不能改测试，写 `BLOCKED`，写明哪个检查、输出、为什么认为测试有错；orc 把它连同设计、DAG、测试全文和检查输出交给 `review` 模型判断。判定测试没错：带着理由发回执行会话继续修实现；判定测试有错：停下来问用户，改测试要回到写验证这一步，重新审阅、go、签名
