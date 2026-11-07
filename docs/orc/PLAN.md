@@ -19,7 +19,7 @@
 | 子任务 | **2026-11-07 改**：`claude -p`（Claude Code 无界面模式）后台运行，每个任务一个独立 worktree；开沙箱，主仓库 `.git` 设 denyWrite |
 | 并发 | 第一版就支持并行：DAG 里声明文件互不重叠、前置都已集成的节点同时跑；集成按顺序加锁 |
 | 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单 |
-| 给人看的页面 | 计划审阅页和状态页都发布到 OpenAI Sites，手机和电脑都能看 |
+| 给人看的页面 | **2026-11-07 改**（见 `proposals/2026-11-07-review-page-artifacts.md`）：计划审阅页和状态页都发布成仅本人可见的 Claude Artifact，手机和电脑都能看。原来是 OpenAI Sites |
 | 签名 | 单台 Mac，Secretive + Touch ID；你说 go 之后用 `northstar approve-mission` 签名 |
 | 默认参数 | 每次提交最多 8 个文件；同一节点连续偏离 3 次熔断；并发上限写在配置里 |
 
@@ -40,9 +40,9 @@
 | 0 准备 | 材料就位，确认前提 | 建签名密钥，确认 Astra 和 codex exec 可用 | 见阶段 0 |
 | 1 信任层 | 签名、hook、CI 终审装好 | 审阅、sudo 安装、GitHub 设置 | 验收全部通过 |
 | 2 骨架 | 新仓库结构、复用脚本搬入、状态模型、`orc` 骨架 | 审 PR | 搬入的旧测试全部通过 |
-| 3 规划与 go | 规划 → 审阅页上 Sites → 你说 go → 签名 | 确认 Sites 发布方式；签一次名 | 未签名进不了执行 |
+| 3 规划与 go | 规划 → 审阅页发布成 Artifact → 你说 go → 签名 | 确认发布方式；签一次名 | 未签名进不了执行 |
 | 4 并行执行 | 调度、子任务、broker 对齐评审、纠偏、集成 | 审 PR | 并行与纠偏的契约测试全部通过 |
-| 5 验收与状态页 | 最终审查、派生状态页上 Sites、清理 | 审 PR，抽查状态页 | 状态页每条可追溯 |
+| 5 验收与状态页 | 最终审查、派生状态页发布成 Artifact、清理 | 审 PR，抽查状态页 | 状态页每条可追溯 |
 | 6 试运行 | 薄 skill，玩具仓库端到端，再跑一个真实小 mission | 跑真实 mission | 全流程无人工修补 |
 
 ---
@@ -76,7 +76,7 @@
   - 一份只追加的事件日志 `events.jsonl`：每次状态变化、提交、评审结论、纠偏都记一行，状态页和排查都从它读
   - mission 开始时把 `config/models.toml` 解析出的模型写进 mission 目录，之后不再改变
 - [ ] **【Claude Code】** 写 `orc` 骨架（Python）：`orc step --new "<请求>"` / `orc step --mission <m>`、`orc answer`、`orc status`、`orc doctor`。`step` 每次读状态、执行一段机械流程、打印一行 `next:`，可以重复执行（同一状态下重复运行结果相同），中断后再跑一次就能接上。所有拒绝和报错都写明"错在哪、该怎么做"。
-- [ ] **【Claude Code】** `orc doctor` 检查：信任层已安装、models.toml 里的模型可用、角色用到的命令（claude，有角色用 codex 时也查 codex）存在、Sites 发布可用。
+- [ ] **【Claude Code】** `orc doctor` 检查：信任层已安装、models.toml 里的模型可用、角色用到的命令（claude，有角色用 codex 时也查 codex）存在、审阅页发布可用。
 - [ ] **【你】** 审 PR。
 
 **完成标志**：搬入的旧测试全部通过；`orc step` 在空 mission 上能走到 `planning` 并打印正确的 `next:`。
@@ -90,8 +90,9 @@
 - [ ] **【Claude Code】** 规划中需要问你的问题，`orc` 输出 `ask-user`；你的回答经 `orc answer` 写回，再恢复同一个规划会话。
 - [ ] **【Claude Code】** 调研 OpenAI Sites 怎样从脚本发布（命令行、API，或者只能通过 Codex 发布）。写成一个独立的 `publish` 适配层，`orc` 只调用它。把调研结论写进 PR。
   - 调研结论（2026-11-07）：Sites 通过 ChatGPT 的 Sites 连接器发布（`create_site`、`save_version_and_deploy_private` 等连接器工具），这些工具只有 Codex 里才有。没有独立的 CLI 或公开 API。所以适配层只能用 `codex exec` 执行固定的发布步骤（`orc/templates/publish-sites.md`）：每个 mission 一个 Site，路由 `/plan`、`/status`，只用仅本人可见的访问范围；页面没变就不重复发布；发布失败时不拿本地文件代替。
-- [ ] **【你】** 确认 Sites 发布方式可行；如果只能通过 Codex 发布，确认可以接受用 `codex exec` 执行固定的发布步骤。
-- [ ] **【Claude Code】** go 关口：审阅页发布到 Sites 的 `/plan`；`orc` 输出 `go-gate <链接>`；你说 go 后冻结四个文件、生成 `approved.sha256`，然后等你签名；`verify-approved-authority.py` 先调用 `northstar verify-mission` 校验签名，再校验哈希。签名无效时进不了 `approved`。
+  - **2026-11-07 改**：用户决定不用 Sites，改用 Claude Artifacts（执行已经换成 Claude Code，不再为发布保留 Codex）。适配层改为 `claude -p` 只放行 Read 和 Artifact 两个工具，读 orc 生成的页面、发布成仅本人可见的 Artifact（`orc/templates/publish-artifact.md`）；每个 mission 每种页面一个 Artifact，页面变了带原链接更新，链接不变。已真实发布一次（见 proposal）。
+- [ ] **【你】** 确认发布方式：2026-11-07 用户决定改用 Claude Artifacts。
+- [ ] **【Claude Code】** go 关口：审阅页发布成 Artifact；`orc` 输出 `go-gate <链接>`；你说 go 后冻结四个文件、生成 `approved.sha256`，然后等你签名；`verify-approved-authority.py` 先调用 `northstar verify-mission` 校验签名，再校验哈希。签名无效时进不了 `approved`。
 - [ ] **【你】** 在测试 mission 里走一遍：看审阅页，说 go，运行 `northstar approve-mission <control 目录>`，按 Touch ID。
 - [ ] **【你】** 审 PR。
 
@@ -127,7 +128,7 @@
 - [ ] **【Claude Code】** CI 增加隐藏考题 job：用 agent 没有的凭证（GitHub secret）取考题并运行，只回报通过或失败，不回报内容；加进 main 的 required check。
   - 省分钟数：只在 PR 不是草稿时运行（触发事件含 `ready_for_review`），之后每次推送照常跑；设 `timeout-minutes`
   - 不用标签触发（agent 的 token 有 PR 写权限，能自己加减标签）；不加 `paths` 过滤（required check 被过滤掉时 PR 会一直合不进去）
-- [ ] **【Claude Code】** 状态页由脚本生成：每个 DAG 节点一行，不能省略；状态和测试结果来自 `events.jsonl` 和 `orc` 自己运行的验证记录；架构图按组件着色；agent 只写说明，每条带可核对的引用（沿用 `northstar-status` 的校验规则）。发布到 Sites 的 `/status`。
+- [ ] **【Claude Code】** 状态页由脚本生成：每个 DAG 节点一行，不能省略；状态和测试结果来自 `events.jsonl` 和 `orc` 自己运行的验证记录；架构图按组件着色；agent 只写说明，每条带可核对的引用（沿用 `northstar-status` 的校验规则）。发布成 Artifact（每个 mission 一个状态页，链接不变）。
 - [ ] **【Claude Code】** "完成"之前必须有最新的状态页；`orc` 在没有状态页时不会输出 `report`。
 - [ ] **【Claude Code】** 清理：对已集成的节点执行 `git worktree remove` 并删除分支，只动 `orc` 自己记录过的 worktree 和分支；先输出清单，再执行。
 - [ ] **【你】** 审 PR，打开状态页抽查两三条能否追溯到证据。

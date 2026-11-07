@@ -22,7 +22,7 @@
 | `scripts/spawn-worker.sh` | 启动规划和评审阶段 | 改为按 models.toml 用 `claude -p` 启动 |
 | `scripts/orchestrator-gc.sh`（2,325 行） | 清理已完成 mission 的资源 | 新版状态都在文件里，清理只删 orc 记录过的 worktree 和分支 |
 | `hooks/codex-continuation*`（约 100KB） | 上下文压缩后的续接 | 新版 `orc step` 可以从断点续跑，压缩后再跑一次就接上，不再需要 |
-| `skills/orchestrating/references/html-sites-delivery.md` | 发布到 OpenAI Sites | 保留思路，改成独立的 publish 适配层 |
+| `skills/orchestrating/references/html-sites-delivery.md` | 发布到 OpenAI Sites | 保留思路，改成独立的 publish 适配层；2026-11-07 起发布目标改为 Claude Artifacts |
 
 ## 不要了
 

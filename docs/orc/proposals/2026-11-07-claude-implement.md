@@ -79,4 +79,4 @@ orc 用 `claude -p` 启动执行会话，带一份只给这次会话用的设置
 
 - 信任层：`align.sh` 不再按“谁写的交给另一家审”选评审，改为 `northstar-review --role auto`；模型从 `/opt/northstar/models.toml` 读，由 `install.sh` 从 `orc/config/models.toml` 复制。改完要重新 sudo 安装。
 - `orc doctor`：codex 只在有角色用它时才检查；`--live` 时每个模型只调用一次。
-- Sites 发布仍然是 OpenAI Sites。如果调研结果是只能通过 Codex 发布，Codex 就保留，专门用于发布。
+- ~~Sites 发布仍然是 OpenAI Sites。如果调研结果是只能通过 Codex 发布，Codex 就保留，专门用于发布。~~ 2026-11-07 改为 Claude Artifacts，见 `2026-11-07-review-page-artifacts.md`。
