@@ -424,7 +424,23 @@ Next = str
 Handler = Callable[[Mission], Tuple[Optional[Next], bool]]   # (next 行, 是否继续执行下一个状态)
 
 
+def northstar_unsigned(repo: Path) -> Optional[str]:
+    """产品仓库的 NORTHSTAR 签名校验（northstar verify）。不通过时返回给用户看的说明。
+    信任层在每个会话启动时也做这项校验，不通过就要求 agent 停下：规划、执行之前先拦住，免得白跑。"""
+    northstar = Path(os.environ.get("ORC_NORTHSTAR_ROOT", "/opt/northstar")) / "bin" / "northstar"
+    run = subprocess.run([str(northstar), "verify"], cwd=str(repo), capture_output=True, text=True)
+    if run.returncode == 0:
+        return None
+    detail = (run.stderr or run.stdout).strip().splitlines()[-1:] or ["无输出"]
+    return (f"产品仓库 {repo} 的 NORTHSTAR 签名校验没有通过（{detail[0]}）。"
+            f"请用户在自己的终端进入 {repo}，运行 northstar seal，核对改动后输入 SEAL 并按 Touch ID；签好后让 agent 提交（[NS] ...），再运行 orc step。")
+
+
 def h_new(m: Mission):
+    if (m.repo() / ".northstar").is_dir():
+        problem = northstar_unsigned(m.repo())
+        if problem:
+            return f"error {problem}", False
     m.transition("planning", "orc step")
     print(f"mission {m.name}：new → planning")
     return None, True
@@ -1499,6 +1515,9 @@ def setup_execution(m: Mission) -> dict:
     if not (repo / ".northstar" / "NORTHSTAR.md").is_file():
         raise OrcError(f"产品仓库 {repo} 没有 .northstar/NORTHSTAR.md：每次提交前的对齐评审（northstar-review）要对照它。"
                        "先让用户在产品仓库 northstar init 并签好 NORTHSTAR，再运行 orc step。")
+    problem = northstar_unsigned(repo)
+    if problem:
+        raise OrcError(problem)
     approved = approved_checks(m)
     base, branch, parent = approved["base"], mission_branch(m), parent_worktree(m)
     exists = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"],

@@ -572,6 +572,15 @@ class Recheck(ExecCase):
 
 
 class Setup(ExecCase):
+    def test_unsigned_northstar_stops_before_execution(self):
+        self.simple(("a",))
+        (self.fake / "ns-unsigned").write_text("")
+        r = self.step()
+        self.assertIn("NORTHSTAR 签名校验没有通过", self.next_line(r))
+        self.assertEqual((self.mdir / "state").read_text().strip(), "approved")
+        self.assertEqual(self.ev("job-start"), [])
+        self.assertEqual(self.git("branch", "--list", "orc/m1"), "")   # 没有开 mission 分支
+
     def test_product_repo_without_northstar_stops_with_a_clear_error(self):
         self.simple(("a",))
         subprocess.run(["git", "-C", str(self.repo), "rm", "-rq", ".northstar"], check=True)

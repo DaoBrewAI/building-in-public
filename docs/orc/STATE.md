@@ -188,7 +188,7 @@ pending → running → submitted → integrated
 
 ### 进入 `executing` 时一次性准备
 
-- 产品仓库必须有 `.northstar/NORTHSTAR.md`：对齐评审（`northstar-review`）要读它。没有就 `next: error`。
+- 产品仓库必须有 `.northstar/NORTHSTAR.md`，而且签名有效（`northstar verify`）：对齐评审（`northstar-review`）要读它，信任层也会在每个会话启动时校验签名，不通过就让 agent 停下。不满足就 `next: error`，请用户签名。`new → planning` 时也做同样的签名校验（仓库有 `.northstar/` 时），免得规划白跑。
 - 读 `orc/config/orc.toml` 的 `[execution]`（并发上限、执行会话超时、崩溃重试次数），写进 `exec-setup` 事件，之后不变。
 - 从产品仓库当前提交开出 **mission 分支** `orc/<mission>`，放在父 worktree `~/.orc-worktrees/<mission>/integration/`。orc 把冻结的验收测试（`control/approved-tests/`）提交到这个分支上（提交说明 `[orc] 冻结的验收测试`）。节点都从这个分支开出来，所以测试在节点里是**已跟踪的文件**：执行会话改了它，就是改了声明文件以外的文件，提交关口和 broker 都会拒绝。
 
