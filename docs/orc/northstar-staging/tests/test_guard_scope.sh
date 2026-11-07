@@ -16,6 +16,30 @@ new_repo
 guard "$(bash_p 'northstar seal')";               expect_rc 0 "无 .northstar 时不拦截"
 guard "$(write_p Write "$PWD/.northstar/x")";     expect_rc 0 "无 .northstar 时写入放行"
 
+begin "guard：orc 的 mission 状态目录（\$ORC_HOME，默认 ~/.orc）只能由 orc 自己写"
+export ORC_HOME="$T/orc-home"; OH="$ORC_HOME"; mkdir -p "$OH/missions/t1"
+for with_ns in no yes; do
+  new_repo; [ "$with_ns" = yes ] && { mkdir -p .northstar; echo x > .northstar/NORTHSTAR.md; }
+  guard "$(write_p Write "$OH/missions/t1/events.jsonl")"; expect_rc 2 "拦截 Write \$ORC_HOME 下的文件（仓库有 .northstar：$with_ns）"
+  expect_out "只能由 orc 命令改写" "说明为什么拦（仓库有 .northstar：$with_ns）"
+  guard "$(write_p Edit "$OH/missions/t1/state")";        expect_rc 2 "拦截 Edit \$ORC_HOME 下的文件（仓库有 .northstar：$with_ns）"
+  guard "$(patch_p $'*** Begin Patch\n*** Update File: '"$OH"$'/missions/t1/state\n@@\n-planning\n+accepted\n*** End Patch')"
+  expect_rc 2 "拦截 apply_patch 改 \$ORC_HOME 下的文件（仓库有 .northstar：$with_ns）"
+  for c in "echo x >> $OH/missions/t1/events.jsonl" 'echo x >> $ORC_HOME/missions/t1/events.jsonl' \
+           'echo x >> ${ORC_HOME}/missions/t1/events.jsonl' 'echo x >> ~/.orc/missions/t1/events.jsonl' \
+           'rm -rf $HOME/.orc/missions/t1' "python3 -c \"open('$OH/missions/t1/state','w')\""; do
+    guard "$(bash_p "$c")"; expect_rc 2 "拦截（仓库有 .northstar：$with_ns）：$c"
+  done
+  for c in "cat $OH/missions/t1/events.jsonl" 'tail -n 5 ~/.orc/missions/t1/events.jsonl 2>/dev/null' \
+           'orc step --mission t1' 'orc answer "继续"' 'orc status'; do
+    guard "$(bash_p "$c")"; expect_rc 0 "放行（仓库有 .northstar：$with_ns）：$c"
+  done
+  guard "$(write_p Write "$PWD/src/a.py")"; expect_rc 0 "放行普通文件（仓库有 .northstar：$with_ns）"
+done
+run_in "$(write_p Write "$T/h/.orc/missions/t1/state")" env -u ORC_HOME HOME="$T/h" "$G"
+expect_rc 2 "没设 ORC_HOME 时保护默认的 ~/.orc"
+unset ORC_HOME
+
 begin "guard：签名与绕过类命令"
 new_repo; mkdir -p .northstar; echo x > .northstar/NORTHSTAR.md
 for c in 'northstar seal' 'northstar start m1' 'northstar finish' 'northstar approve-mission /tmp/c' \

@@ -2,7 +2,6 @@
 # /opt/northstar/hooks/guard.sh —— PreToolUse，Claude Code 与 Codex 共用
 # 文本匹配：挡得住误操作，挡不住刻意绕过；真正的保证在签名和 CI
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-[ -d .northstar ] || exit 0
 payload=$(cat)
 deny() { echo "NORTHSTAR 保护：$1。目标需要调整时，把提案写进 proposals/ 并停止，等待人工处理。" >&2; exit 2; }
 # 目录名后面不要求 /：rm -rf .northstar、mv .northstar x 也要拦
@@ -18,9 +17,35 @@ files="$(grep -v '^$' <<<"$files")"
 case "$tool" in
   Bash|shell|exec_command|local_shell)
     cmd=$(jq -r '.tool_input.command | if type=="array" then join(" ") else (. // "") end' <<<"$payload" 2>/dev/null || echo "$payload")
+    # 只读不算写：丢到 /dev/null、2>&1 这类重定向去掉后再判断
+    wcmd=$(sed -E 's#(&|[0-9]*)>>?[[:space:]]*/dev/null##g; s#[0-9]*>&[0-9-]+##g' <<<"$cmd") ;;
+esac
+
+# —— orc 的 mission 状态（$ORC_HOME，默认 ~/.orc）只能由 orc 命令写。
+#    不管当前仓库有没有 .northstar 都要拦：状态由 events.jsonl 推出，agent 改得了它就改得了 mission 走到哪一步
+orc_home="${ORC_HOME:-$HOME/.orc}"; orc_home="${orc_home%/}"
+orc_phys="$(cd "$orc_home" 2>/dev/null && pwd -P || echo "$orc_home")"
+deny_orc() { echo "NORTHSTAR 保护：orc 的 mission 状态（$orc_home）只能由 orc 命令改写。用 orc step / orc answer，不要直接写这些文件。" >&2; exit 2; }
+case "$tool" in
+  Bash|shell|exec_command|local_shell)
+    ORC_RE='(~|\$HOME|\$\{HOME\})/\.orc([/[:space:]"]|$)|\$ORC_HOME|\$\{ORC_HOME\}'
+    if { grep -qE "$ORC_RE" <<<"$cmd" || grep -qF -e "$orc_home" -e "$orc_phys" <<<"$cmd"; } \
+       && grep -qE "$WRITE" <<<"$wcmd"; then deny_orc; fi ;;
+  *)
+    if [ -z "$files" ]; then   # 认不出要写的路径：退回整段匹配
+      grep -qF -e "$orc_home/" -e "$orc_phys/" <<<"$payload" && deny_orc
+    fi
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      case "$f" in "~/"*) f="$HOME/${f#\~/}" ;; esac
+      case "$f" in "$orc_home"|"$orc_home"/*|"$orc_phys"|"$orc_phys"/*) deny_orc ;; esac
+    done <<<"$files" ;;
+esac
+
+[ -d .northstar ] || exit 0
+case "$tool" in
+  Bash|shell|exec_command|local_shell)
     grep -qE "$BYPASS" <<<"$cmd" && deny "禁止签名或绕过校验的命令"
-    # 受保护文件只读：丢到 /dev/null、2>&1 这类重定向不算写入
-    wcmd=$(sed -E 's#(&|[0-9]*)>>?[[:space:]]*/dev/null##g; s#[0-9]*>&[0-9-]+##g' <<<"$cmd")
     grep -qE "$PROTECTED" <<<"$cmd" && grep -qE "$WRITE" <<<"$wcmd" && deny "禁止用命令写入受保护文件" ;;
   *)  # 写文件类工具：Edit / Write / MultiEdit / NotebookEdit / apply_patch
     # 只看要写的路径，不看内容：普通文件里提到受保护路径不算；认不出路径时才退回整段匹配
