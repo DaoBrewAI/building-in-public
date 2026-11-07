@@ -217,7 +217,7 @@ pending → running → submitted → integrated
 1. **文件范围**：worktree 里实际改动的文件都在本节点的 `files` 里；动了冻结的验收测试直接拒绝。
 2. **测试哈希**：worktree 里每个冻结的测试文件，和 `brief-exec.md` 里签名的哈希一致。
 3. **检查**：跑这次声明完成的验收标准对应的冻结检查，加上本节点此前已经通过的检查。在 worktree 当前内容的副本上、沙箱里运行（同阶段 3：只能写副本、不能联网、每条最多 300 秒），必须全部通过。不通过就拒绝，**不调用评审模型**。
-4. **对齐评审**：`northstar-review --role auto`，工作目录是节点的 worktree，输入是本节点的 DAG 条目、签名的 `approved-design.md`、检查结果和这次的 diff；上一次被判 DRIFT 时带上 `--prev`。退出码 0 ALIGNED、1 DRIFT（拒绝，发纠偏单）。退出码 2 时：diff 超过上限就拒绝、要求拆小；其他原因（评审模型不可用等）**不放行、不降级**，节点 `blocked`，mission `ask-user`。
+4. **对齐评审**：`northstar-review --role auto`，在节点的 worktree 里运行（它从这里读 NORTHSTAR）；评审模型本身没有任何工具，在仓库外的空临时目录里运行，只看提示词里的材料（`proposals/2026-11-07-reviewer-stop-hook.md`）。输入是本节点的 DAG 条目、签名的 `approved-design.md`、检查结果和这次的 diff；上一次被判 DRIFT 时带上 `--prev`。退出码 0 ALIGNED、1 DRIFT（拒绝，发纠偏单）。退出码 2 时：diff 超过上限就拒绝、要求拆小；其他原因（评审模型不可用等）**不放行、不降级**，节点 `blocked`，mission `ask-user`。
 5. 全部通过：算出 `diff_sha256`，写提交请求 `nodes/<node>/COMMIT-REQUEST-<n>.json`，把两份 `state` 设成 `ready_for_commit`，运行 `commit-broker.sh --once`。broker 在锁里再做一遍它自己的全部校验，并核对 `diff_sha256`：评审之后改了一个字节都提交不进去。
 
 **连续被拒**（检查不过、DRIFT、范围不对都算；评审服务出错不算）：
