@@ -21,10 +21,12 @@
   models.json         mission 开始时从 orc/config/models.toml 解析的模型，之后不变
   questions/<n>.md    orc 输出 ask-user / mediate 时的问题
   answers/<n>.md      orc answer 写回的回答
-  plan/               规划会话的产出（阶段 3）：design.md、plan.md、task-dag.json、审阅页 HTML
+  plan/               规划会话的产出（阶段 3）：design.md、plan.md、task-dag.json
+  verify/             验证会话的产出：checks.json、files/<测试文件>、results.json（检查在实现前的运行结果）
   control/            coordinator 的权威目录 = 复用脚本的 control root；锁文件也在这里
     approved-design.md  approved-plan.md  brief-exec.md  approved-task-dag.json
     approved.sha256     approved.sha256.sig（northstar approve-mission 的签名）
+    approved-checks.json  approved-tests/<测试文件>   冻结的验收测试；哈希写在 brief-exec.md 里，随它一起签名
     tasks/<node>/     每个节点的控制目录（broker、integrate-task 的 --control-dir）
   nodes/<node>/       每个节点的工作侧目录（broker 的 --mission-dir、integrate-task 的 --task-dir）
 ```
@@ -36,14 +38,15 @@
 ## mission 状态
 
 ```
-new → planning → plan-review → approved → executing → reviewing → accepted → cleaned
+new → planning → verifying → plan-review → approved → executing → reviewing → accepted → cleaned
 ```
 外加 `blocked`（等用户）和 `failed`（不可恢复，终态）。
 
 | 状态 | 含义 | 离开的条件（由 `orc step` 判断） | 下一个状态 |
 | --- | --- | --- | --- |
 | `new` | 刚建好目录，记录了请求和模型 | 无条件 | `planning` |
-| `planning` | 规划会话在产出设计、计划、DAG（阶段 3） | 产出齐全且 `validate-task-dag.sh` 通过 | `plan-review` |
+| `planning` | 规划会话在产出设计、计划、DAG（阶段 3） | 产出齐全且 `validate-task-dag.sh` 通过 | `verifying` |
+| `verifying` | 验证会话在实现之前写验收测试和 `checks.json`（阶段 3） | 产出通过校验，且每个检查在当前代码上的结果符合 `expect_before` | `plan-review` |
 | `plan-review` | 审阅页已发布，等用户说 go 并签名 | `northstar verify-mission` 通过，且 `verify-approved-authority.py` 校验哈希通过 | `approved` |
 | `approved` | 冻结文件已签名 | 无条件，开始调度 | `executing` |
 | `executing` | 节点并行执行、提交、集成（阶段 4） | 所有节点都 `integrated` | `reviewing` |
@@ -101,6 +104,9 @@ pending → running → submitted → integrated
 | `planner-start` | `run`（第几次运行）、`session`、`pid`、`mode`（new / resume）、`delivers`（这次发给会话的回答、意见 id） |
 | `planner-exit` | `run`、`rc`、`outcome`（question / invalid / ready / failed）、`problems`（可选） |
 | `plan-ready` | `files`（文件名 → sha256） |
+| `verify-snapshot` | `cycle`（第几轮验证）、`base`（验证会话拿到的代码副本对应的提交） |
+| `verifier-start` / `verifier-exit` | 同 `planner-start` / `planner-exit`，另带 `cycle` |
+| `verify-ready` | `base`、`checks`（checks.json 的 sha256）、`tests`（测试文件 → sha256）、`results`（检查 id → 实现前的退出码） |
 | `feedback` | `id`、`text`：用户审阅后的修改意见 |
 | `published` | `route`、`url`、`sha256` |
 | `frozen` | `files`（冻结文件名 → sha256） |
@@ -145,26 +151,38 @@ pending → running → submitted → integrated
 
 - **有 `QUESTION.md`**：调用 `block(ask-user)`。用户用 `orc answer` 回答后，orc 用 `claude --resume <同一个会话>` 把回答发回规划会话。
 - **产出校验不通过**：把问题发回同一个会话让它修，最多修 2 次；还不通过，就 `block(mediate)`，交给 coordinator 裁决。
-- **通过**：把产出复制进 mission 的 `plan/`，写 `plan-ready` 事件，状态进入 `plan-review`。
+- **通过**：把产出复制进 mission 的 `plan/`，写 `plan-ready` 事件，状态进入 `verifying`。
+
+**验证会话**（`verifying`）：在实现之前写好验收测试。见 `proposals/2026-11-07-tests-before-implement.md`。
+
+- **模型**：`review` 角色（目前 Fable 5.1），和执行用的模型不同。启动方式、沙箱、提问、自动修 2 次再 `mediate`，都和规划会话一样。
+- **每一轮从头开始**：每次 `planning → verifying` 都清空 `~/.orc-worktrees/<mission>/verify-work/`，新开会话（不 resume 上一轮）。轮内的提问回答和修复仍回到同一个会话。
+- **只给**：`spec/design.md`、`spec/task-dag.json`（orc 从 `plan/` 复制）、`repo/`（产品仓库当前提交的副本，没有 `.git`，提交号写进 `verify-snapshot`）、用户在审阅时提过的意见。**不给** `plan.md`，也看不到规划会话的过程。
+- **产出**：`repo/` 里新建的测试文件，和工作目录根上的 `checks.json`（`test_files`、`checks`：每个检查有 `id`、`node`、`acceptance`（第几条验收标准）、`command`、`expect_before`（fail / pass））。
+- **orc 校验**：每条验收标准至少一个检查；每个节点至少一个 `fail` 检查；测试文件只能是新文件，不能和任何节点的 `files` 重叠，不能在 `.northstar/`、`.github/`、`.git/` 下。
+- **实际运行**：orc 从当前提交导出一份干净的代码，只放入列出的测试文件，在 macOS 沙箱（`sandbox-exec`）里逐条运行：只能写这份副本（`TMPDIR` 也指向里面），不能联网，每条最多 300 秒。`fail` 的必须失败，`pass` 的必须通过。产品仓库在验证期间有新提交时停下，`next: error`。
+- **通过**：复制进 mission 的 `verify/`，写 `verify-ready`，状态进入 `plan-review`。
 
 **`plan-review`**：
 
-1. orc 用 `plan/` 生成审阅页 HTML，交给发布适配层，发布成仅本人可见的 Claude Artifact（`claude -p`，只放行 Read 和 Artifact）。页面变了就带原链接更新，链接不变。
+1. orc 用 `plan/` 和 `verify/` 生成审阅页 HTML（验收测试一节列出每个检查、对应的验收标准、实现前的结果和测试全文），交给发布适配层，发布成仅本人可见的 Claude Artifact（`claude -p`，只放行 Read 和 Artifact）。页面变了就带原链接更新，链接不变。
 2. 发布成功后写 `published` 事件，发布回执记在 `publish.json`。回执里的哈希和当前页面一致时，不重复发布。
 3. 输出 `next: go-gate <链接>`。
 4. 发布失败时输出 `next: error`。**不能拿本地文件代替链接去要 go。**
 
 **go 之前的两条路**：
 
-- `orc revise "<意见>"`：只能在 go 之前用。写 `feedback` 事件，状态回到 `planning`，orc 把意见发回同一个规划会话。
+- `orc revise "<意见>"`：只能在 go 之前用。写 `feedback` 事件，状态回到 `planning`，orc 把意见发回同一个规划会话；规划产出再次通过后，验证从头再写一轮（新会话，带上全部意见）。
 - `orc go`：用户说 go 之后由 coordinator 运行。orc 依次做这些事：
-  1. 写 `control/approved-design.md`、`approved-plan.md`、`brief-exec.md` 和 `approved.sha256`。
-  2. 调用 `validate-task-dag.sh --freeze`，把 DAG 冻结成第 4 个文件。
-  3. 写 `frozen` 事件。
-  4. 如果规划产出了 N# 约束，而且产品仓库有 `.northstar/`，就把约束追加到产品仓库的 `drafts/NORTHSTAR.md`，等用户 `northstar seal`。
-  5. 输出 `next: sign <control 目录>`。
+  1. 把验收测试写进 `control/approved-tests/` 和 `approved-checks.json`；`brief-exec.md` 末尾追加「冻结的验收测试」一节，写明 checks 清单和每个测试文件的 sha256。
+     签名的哈希清单仍是复用脚本约定的四个文件（不改复用脚本）；`brief-exec.md` 在清单里，签名就连带覆盖了验收测试。
+  2. 写 `control/approved-design.md`、`approved-plan.md`、`brief-exec.md` 和 `approved.sha256`。
+  3. 调用 `validate-task-dag.sh --freeze`，把 DAG 冻结成第 4 个文件。
+  4. 写 `frozen` 事件。
+  5. 如果规划产出了 N# 约束，而且产品仓库有 `.northstar/`，就把约束追加到产品仓库的 `drafts/NORTHSTAR.md`，等用户 `northstar seal`。
+  6. 输出 `next: sign <control 目录>`。
 
-**签名**：用户在自己的终端运行 `northstar approve-mission <control 目录>`，按 Touch ID。之后 `orc step` 先跑 `northstar verify-mission`，再跑 `verify-approved-authority.py`，两项都通过才进入 `approved`。没签名时一直是 `next: sign …`；签名无效时输出 `next: error`，状态停在 `plan-review`。
+**签名**：用户在自己的终端运行 `northstar approve-mission <control 目录>`，按 Touch ID。之后 `orc step` 先跑 `northstar verify-mission`，再跑 `verify-approved-authority.py`，再按 `brief-exec.md` 里的哈希核对 `approved-checks.json` 和 `approved-tests/`（多一个、少一个、改一个都不行），全部通过才进入 `approved`。进入 `approved` 之后每次 step 都重新做这三项。没签名时一直是 `next: sign …`；签名无效时输出 `next: error`，状态停在 `plan-review`。
 
 ## `orc step` 的约定
 
@@ -172,5 +190,5 @@ pending → running → submitted → integrated
 - **可以重复运行**：同一状态下重复运行，输出相同，不追加重复事件。
 - **中断后再跑一次就能接上**：先写事件再更新 `state`；中断在两者之间时，下次运行按日志补齐。
 - `next:` 只有这几种：`ask-user <问题>`、`go-gate <链接>`、`sign <control 目录>`、`mediate <文件>`、`report <链接>`、`wait`、`error <错在哪、该怎么做>`。
-- `wait` 表示后台有进程在跑（比如规划会话）。coordinator 在后台运行 `orc wait --mission <m>`，它返回后再运行 `orc step`。
+- `wait` 表示后台有进程在跑（规划会话或验证会话）。coordinator 在后台运行 `orc wait --mission <m>`，它返回后再运行 `orc step`。
 - 所有拒绝和报错都写明错在哪、该怎么做。

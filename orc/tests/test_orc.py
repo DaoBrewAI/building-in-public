@@ -5,6 +5,7 @@
 """
 import importlib.machinery
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -56,7 +57,7 @@ class OrcCase(unittest.TestCase):
                     event = json.loads(line)
                 except ValueError:
                     continue            # 有的测试故意写坏日志
-                if isinstance(event, dict) and event.get("kind") == "planner-start":
+                if isinstance(event, dict) and event.get("kind") in ("planner-start", "verifier-start"):
                     try:
                         os.killpg(event["pid"], signal.SIGTERM)
                     except (ProcessLookupError, PermissionError):
@@ -210,6 +211,9 @@ class Transitions(OrcCase):
             with self.assertRaises(self.orc.OrcError) as ctx:
                 m.transition("executing", "test")
             self.assertIn("不允许从 planning 转到 executing", str(ctx.exception))
+            with self.assertRaises(self.orc.OrcError):
+                m.transition("plan-review", "test")   # 不能跳过验证（实现前写好验收测试）
+            m.transition("verifying", "test")
             m.transition("plan-review", "test")
             m.transition("planning", "test")      # 审阅时打回重新规划
             m.transition("failed", "test", reason="测试")
@@ -325,7 +329,15 @@ class ApprovalReverified(OrcCase):
         c = self.mdir / "control"
         (c / "approved-design.md").write_text("design\n")
         (c / "approved-plan.md").write_text("plan\n")
-        (c / "brief-exec.md").write_text("brief\n")
+        tests = c / "approved-tests" / "tests"
+        tests.mkdir(parents=True)
+        (tests / "test_a.py").write_text("def test_a(): assert open('a.txt').read() == 'a'\n")
+        test_hash = hashlib.sha256((tests / "test_a.py").read_bytes()).hexdigest()
+        checks = json.dumps({"version": 1, "mission": "m1", "base": "0" * 40, "test_files": {"tests/test_a.py": test_hash},
+                             "checks": [{"id": "a", "node": "a", "acceptance": [1], "command": "pytest", "expect_before": "fail"}]})
+        (c / "approved-checks.json").write_text(checks)
+        (c / "brief-exec.md").write_text(
+            f"brief\n\nchecks 清单的 sha256：`{hashlib.sha256(checks.encode()).hexdigest()}`（`approved-checks.json`）\n")
         (c / "approved-task-dag.json").write_text(json.dumps({"version": 1, "mission": "m1", "tasks": [
             {"id": "a", "depends_on": [], "files": ["a.txt"], "contracts": [], "verification": ["true"], "state": "ready"}]}))
         subprocess.run("shasum -a 256 approved-design.md approved-plan.md brief-exec.md approved-task-dag.json > approved.sha256",
@@ -339,7 +351,7 @@ class ApprovalReverified(OrcCase):
         (ns / "bin" / "northstar").chmod(0o755)
         self.env["ORC_NORTHSTAR_ROOT"] = str(ns)
         with self.orc.Mission("m1") as m:
-            for to in ("plan-review", "approved", "executing"):
+            for to in ("verifying", "plan-review", "approved", "executing"):
                 m.transition(to, "test")
 
     def test_good_signature_and_hashes_pass_through(self):
@@ -352,6 +364,23 @@ class ApprovalReverified(OrcCase):
             r = self.run_orc("step", "--mission", "m1")
             self.assertIn("冻结文件和签名时的哈希不一致", self.next_line(r))
         self.assertEqual((self.mdir / "state").read_text().strip(), "executing")
+
+    def test_tampered_frozen_test_stops_every_step(self):
+        # 验收测试不在四个文件的哈希清单里，但它的哈希写在签名的 brief-exec.md 里：改了照样拦下
+        (self.mdir / "control" / "approved-tests" / "tests" / "test_a.py").write_text("def test_a(): pass\n")
+        for _ in range(2):
+            r = self.run_orc("step", "--mission", "m1")
+            self.assertIn("验收测试 tests/test_a.py 被改过", self.next_line(r))
+
+    def test_extra_or_swapped_check_list_stops_step(self):
+        c = self.mdir / "control"
+        (c / "approved-tests" / "tests" / "extra_test.py").write_text("x\n")
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("approved-tests/ 里的文件和签名时的清单不一致", self.next_line(r))
+        (c / "approved-tests" / "tests" / "extra_test.py").unlink()
+        (c / "approved-checks.json").write_text((c / "approved-checks.json").read_text().replace('"pytest"', '"true"'))
+        r = self.run_orc("step", "--mission", "m1")
+        self.assertIn("approved-checks.json 和签名的 brief-exec.md 里记的哈希不一致", self.next_line(r))
 
     def test_bad_signature_stops_step(self):
         self.sig_ok.unlink()

@@ -29,12 +29,13 @@ SCRIPTS = ORC_ROOT / "scripts"
 MODELS_TOML = Path(os.environ.get("ORC_MODELS_TOML", ORC_ROOT / "config" / "models.toml"))
 NAME_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
 
-MISSION_STATES = ["new", "planning", "plan-review", "approved", "executing",
+MISSION_STATES = ["new", "planning", "verifying", "plan-review", "approved", "executing",
                   "reviewing", "accepted", "cleaned", "blocked", "failed"]
 TERMINAL = {"cleaned", "failed"}
 FORWARD = {  # 合法的状态转换（STATE.md「mission 状态」）
     "new": {"planning"},
-    "planning": {"plan-review"},
+    "planning": {"verifying"},
+    "verifying": {"plan-review"},
     "plan-review": {"approved", "planning"},
     "approved": {"executing"},
     "executing": {"reviewing"},
@@ -212,6 +213,9 @@ class Mission:
     # 规划会话和发布站点的工作目录也在 $ORC_HOME 之外：agent（规划会话、codex）要写它们，guard 不让写 $ORC_HOME
     def plan_work(self) -> Path:
         return worktrees_root() / self.name / "plan-work"
+
+    def verify_work(self) -> Path:
+        return worktrees_root() / self.name / "verify-work"
 
     def site_dir(self) -> Path:
         return worktrees_root() / self.name / "site"
@@ -431,14 +435,49 @@ def h_new(m: Mission):
 PLAN_FILES = ("design.md", "plan.md", "task-dag.json")
 MAX_REPAIRS = 2                     # 产出校验不通过时，发回同一个会话自动修的次数
 CLAUSE_RE = re.compile(r"N[0-9]+\Z")
+CHECK_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\Z")
+CHECK_TIMEOUT = 300             # 每个检查最多运行的秒数
+
+
+# 两种后台会话共用一套机制（启动、等待、提问、自动修、交给 coordinator 裁决）：
+#   规划会话 planner：plan 角色，产出设计、计划、DAG
+#   验证会话 verifier：review 角色（和执行用的模型不同），在实现之前写测试和 checks.json，看不到规划过程
+AGENTS = {
+    "planner": {"role": "plan", "env": "plan", "label": "规划会话",
+                "outputs": "全部产出文件（design.md、plan.md、task-dag.json）"},
+    "verifier": {"role": "review", "env": "verify", "label": "验证会话",
+                 "outputs": "全部测试文件和 checks.json"},
+}
+
+
+def agent_work(m: Mission, kind: str) -> Path:
+    return m.plan_work() if kind == "planner" else m.verify_work()
+
+
+def verify_cycle(m: Mission) -> int:
+    """第几轮验证：每次规划产出通过校验（planning → verifying）就开新的一轮，验证会话从头写。"""
+    return sum(1 for e in m.events()
+               if e.get("kind") == "state" and e.get("from") == "planning" and e.get("to") == "verifying")
+
+
+def agent_starts(m: Mission, kind: str, current: bool = True) -> List[dict]:
+    starts = [e for e in m.events() if e.get("kind") == f"{kind}-start"]
+    if kind == "verifier" and current:
+        cycle = verify_cycle(m)
+        starts = [s for s in starts if s.get("cycle") == cycle]
+    return starts
+
+
+def agent_exits(m: Mission, kind: str) -> Dict[int, dict]:
+    return {e["run"]: e for e in m.events() if e.get("kind") == f"{kind}-exit"}
 
 
 def planner_starts(m: Mission) -> List[dict]:
-    return [e for e in m.events() if e.get("kind") == "planner-start"]
+    return agent_starts(m, "planner")
 
 
 def planner_exits(m: Mission) -> Dict[int, dict]:
-    return {e["run"]: e for e in m.events() if e.get("kind") == "planner-exit"}
+    return agent_exits(m, "planner")
 
 
 def process_alive(pid: int, marker: str) -> bool:
@@ -471,19 +510,70 @@ def planner_prompt(m: Mission, work: Path) -> str:
     return text
 
 
-def launch_planner(m: Mission, message: Optional[str], delivers: List[str]) -> None:
-    """后台启动规划会话。message 为 None 时新开会话，否则 --resume 同一个会话并把 message 发过去。"""
+def verifier_prompt(m: Mission, work: Path) -> str:
+    text = (ORC_ROOT / "templates" / "verifier-brief.md").read_text(encoding="utf-8")
+    feedback = [e["text"] for e in m.events() if e.get("kind") == "feedback"]
+    block = ("- 用户审阅计划时提过的意见（写测试时也要照顾到）：\n" + "".join(f"  - {t}\n" for t in feedback)) if feedback else ""
+    for key, value in (("{{REQUEST}}", (m.dir / "request.md").read_text(encoding="utf-8").strip()),
+                       ("{{REPO}}", str(m.repo())), ("{{WORK}}", str(work)), ("{{MISSION}}", m.name),
+                       ("{{FEEDBACK_BLOCK}}", block)):
+        text = text.replace(key, value)
+    return text
+
+
+def snapshot_repo(m: Mission, dest: Path) -> str:
+    """把产品仓库当前提交（HEAD）导出成一份没有 .git 的副本，返回提交号。"""
+    repo = str(m.repo())
+    head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True)
+    if head.returncode != 0:
+        raise OrcError(f"产品仓库 {repo} 读不到当前提交（{head.stderr.strip()}）。先在产品仓库里至少提交一次，再运行 orc step。")
+    base = head.stdout.strip()
+    dest.mkdir(parents=True, exist_ok=True)
+    archive = subprocess.Popen(["git", "-C", repo, "archive", "--format=tar", base], stdout=subprocess.PIPE)
+    untar = subprocess.run(["tar", "-x", "-C", str(dest)], stdin=archive.stdout, capture_output=True, text=True)
+    archive.stdout.close()
+    if archive.wait() != 0 or untar.returncode != 0:
+        raise OrcError(f"导出产品仓库 {repo} 的提交 {base[:12]} 失败（{untar.stderr.strip()}）。")
+    return base
+
+
+def prepare_verify_work(m: Mission) -> None:
+    """新一轮验证：清空验证工作目录（保留运行记录），放入设计、DAG 和当前代码的副本。不给计划和规划过程。"""
+    work = m.verify_work()
+    work.mkdir(parents=True, exist_ok=True)
+    for child in work.iterdir():
+        if child.name == ".runs":
+            continue
+        shutil.rmtree(child) if child.is_dir() and not child.is_symlink() else child.unlink()
+    (work / "spec").mkdir()
+    for name in ("design.md", "task-dag.json"):
+        shutil.copyfile(m.dir / "plan" / name, work / "spec" / name)
+    base = snapshot_repo(m, work / "repo")
+    m.append("verify-snapshot", "orc step", cycle=verify_cycle(m), base=base)
+
+
+def verify_base(m: Mission) -> str:
+    snaps = [e for e in m.events() if e.get("kind") == "verify-snapshot" and e.get("cycle") == verify_cycle(m)]
+    if not snaps:
+        raise OrcError(f"mission {m.name} 这一轮验证没有记录代码快照。这是 orc 的 bug；把 events.jsonl 给用户看。")
+    return snaps[-1]["base"]
+
+
+def launch_agent(m: Mission, kind: str, message: Optional[str], delivers: List[str]) -> None:
+    """后台启动规划会话或验证会话。message 为 None 时新开会话，否则 --resume 同一个会话并把 message 发过去。"""
+    spec = AGENTS[kind]
     if shutil.which("claude") is None:
-        raise OrcError("PATH 里找不到 claude，启动不了规划会话 → 安装 Claude Code 后再运行 orc step。")
-    cfg = m.roles()["plan"]
-    work = m.plan_work()
+        raise OrcError(f"PATH 里找不到 claude，启动不了{spec['label']} → 安装 Claude Code 后再运行 orc step。")
+    cfg = m.roles()[spec["role"]]
+    work = agent_work(m, kind)
     runs = work / ".runs"
     runs.mkdir(parents=True, exist_ok=True)
     work_real = os.path.realpath(work)
-    starts = planner_starts(m)
-    n = len(starts) + 1
+    starts = agent_starts(m, kind)
+    n = len(agent_starts(m, kind, current=False)) + 1
     if message is None:
-        session, mode, prompt = str(__import__("uuid").uuid4()), "new", planner_prompt(m, Path(work_real))
+        prompt = planner_prompt(m, Path(work_real)) if kind == "planner" else verifier_prompt(m, Path(work_real))
+        session, mode = str(__import__("uuid").uuid4()), "new"
     else:
         session, mode, prompt = starts[0]["session"], "resume", message
     write_atomic(runs / f"{n}.prompt", prompt)
@@ -491,7 +581,7 @@ def launch_planner(m: Mission, message: Optional[str], delivers: List[str]) -> N
     # 所以不用 --add-dir，并在沙箱里对产品仓库 denyWrite；Read / Grep / git log 照样能读代码（实测）
     settings = {"sandbox": {"enabled": True, "failIfUnavailable": True, "allowUnsandboxedCommands": False,
                             "filesystem": {"denyWrite": [os.path.realpath(m.repo())]}}}
-    # 只放行这些工具；Write / Edit 只能写规划工作目录（权限规则里 // 开头是绝对路径）。-p 模式下没放行的写入一律被拒
+    # 只放行这些工具；Write / Edit 只能写自己的工作目录（权限规则里 // 开头是绝对路径）。-p 模式下没放行的写入一律被拒
     tools = ["Read", "Glob", "Grep", "Bash"] + [f"{t}(/{work_real}/**)" for t in ("Write", "Edit", "MultiEdit")]
     argv = ["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
             "--permission-mode", "default", f"--settings={json.dumps(settings)}",
@@ -500,14 +590,19 @@ def launch_planner(m: Mission, message: Optional[str], delivers: List[str]) -> N
     # 包装：会话结束时原子地写出退出码文件，orc 据此判断“结束了”
     wrapper = ('"$@" < "$ORC_RUN_IN" > "$ORC_RUN_OUT" 2> "$ORC_RUN_ERR"; '
                'echo $? > "$ORC_RUN_RC.tmp" && mv "$ORC_RUN_RC.tmp" "$ORC_RUN_RC"')
-    env = dict(os.environ, ORC_ROLE="plan", ORC_MISSION=m.name,
+    env = dict(os.environ, ORC_ROLE=spec["env"], ORC_MISSION=m.name,
                ORC_RUN_IN=str(runs / f"{n}.prompt"), ORC_RUN_OUT=str(runs / f"{n}.json"),
                ORC_RUN_ERR=str(runs / f"{n}.err"), ORC_RUN_RC=str(runs / f"{n}.rc"))
-    proc = subprocess.Popen(["sh", "-c", wrapper, "orc-planner", *argv], cwd=work_real, env=env,
+    proc = subprocess.Popen(["sh", "-c", wrapper, f"orc-{kind}", *argv], cwd=work_real, env=env,
                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             start_new_session=True)
-    m.append("planner-start", "orc step", run=n, session=session, pid=proc.pid, mode=mode, delivers=delivers)
-    print(f"已启动规划会话（第 {n} 次运行，{mode}，模型 {cfg['model']}）")
+    extra = {"cycle": verify_cycle(m)} if kind == "verifier" else {}
+    m.append(f"{kind}-start", "orc step", run=n, session=session, pid=proc.pid, mode=mode, delivers=delivers, **extra)
+    print(f"已启动{spec['label']}（第 {n} 次运行，{mode}，模型 {cfg['model']}）")
+
+
+def launch_planner(m: Mission, message: Optional[str], delivers: List[str]) -> None:
+    launch_agent(m, "planner", message, delivers)
 
 
 def validate_plan_outputs(m: Mission, work: Path) -> List[str]:
@@ -567,96 +662,298 @@ def copy_plan_outputs(m: Mission, work: Path) -> Dict[str, str]:
     return files
 
 
-def consecutive_failures(m: Mission) -> int:
-    count = 0
-    for run in sorted(planner_exits(m), reverse=True):
-        if planner_exits(m)[run].get("outcome") in ("invalid", "failed"):
-            count += 1
+# ---------------------------------------------------------------- 验证：实现之前写好的测试和检查
+
+PROTECTED_PREFIXES = (".northstar/", ".github/", ".git/")
+
+
+def check_sandbox_argv(root: Path, command: str) -> List[str]:
+    """检查命令是 agent 写的，orc 在 macOS 沙箱里跑：只能写快照目录（临时文件也放在里面，TMPDIR 指向它），不能联网。
+    不放行 /tmp 和 /private/var/folders：那是所有进程共用的临时目录，放行了检查就能写别处的文件（测试实测过）。"""
+    if shutil.which("sandbox-exec") is None:
+        raise OrcError("这台机器没有 sandbox-exec（macOS 自带），orc 不在沙箱外运行 agent 写的检查命令。")
+    real = os.path.realpath(root)
+    profile = ('(version 1)(allow default)(deny network*)(deny file-write*)'
+               f'(allow file-write* (subpath "{real}")'
+               ' (literal "/dev/null") (literal "/dev/tty") (literal "/dev/dtracehelper"))')
+    return ["sandbox-exec", "-p", profile, "sh", "-c", command]
+
+
+def run_checks(m: Mission, base: str, test_src: Path, test_files: List[str], checks: List[dict], where: Path) -> List[dict]:
+    """在一份干净的 base 提交上，只放入测试文件，逐条运行检查。返回每条的结果。"""
+    if where.exists():
+        shutil.rmtree(where)
+    snapshot_repo(m, where)     # 用的是当前 HEAD；调用方先确认 HEAD 仍是 base
+    for rel in test_files:
+        dst = where / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(test_src / rel, dst)
+    tmp = where / ".orc-tmp"
+    tmp.mkdir()
+    env = dict(os.environ, ORC_ROLE="check", TMPDIR=os.path.realpath(tmp) + "/")
+    results = []
+    for check in checks:
+        try:
+            run = subprocess.run(check_sandbox_argv(where, check["command"]), cwd=str(where), capture_output=True,
+                                 text=True, timeout=CHECK_TIMEOUT, env=env)
+            rc, tail = run.returncode, (run.stdout + run.stderr).strip().splitlines()[-8:]
+        except subprocess.TimeoutExpired:
+            rc, tail = None, [f"超过 {CHECK_TIMEOUT} 秒没有结束"]
+        ok = (rc == 0) if check["expect_before"] == "pass" else (rc not in (0, None))
+        results.append({"id": check["id"], "expect_before": check["expect_before"], "rc": rc, "ok": ok, "tail": tail})
+    return results
+
+
+def safe_rel(path: str) -> bool:
+    p = Path(path)
+    return bool(path) and not p.is_absolute() and ".." not in p.parts and "\\" not in path and p.as_posix() == path
+
+
+def validate_verify_outputs(m: Mission, work: Path) -> Tuple[List[str], dict]:
+    """校验验证会话的产出，并在当前代码上实际运行全部检查：fail 的必须失败，pass 的必须通过。"""
+    path = work / "checks.json"
+    if not path.is_file():
+        return ["缺少 checks.json（写在工作目录根上，不是 repo/ 里）"], {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as error:
+        return [f"checks.json 不是合法 JSON：{error}"], {}
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return ["checks.json 的根必须是对象，并且 version 是 1"], {}
+    problems = []
+    if data.get("mission") != m.name:
+        problems.append(f"checks.json 的 mission 必须是 {m.name}")
+    dag = json.loads((m.dir / "plan" / "task-dag.json").read_text(encoding="utf-8"))   # orc 自己的副本，不用 spec/ 里的
+    tasks = {t["id"]: t for t in dag["tasks"]}
+    owned = {f for t in tasks.values() for f in t.get("files", [])}
+    base = verify_base(m)
+    test_files = data.get("test_files")
+    if not isinstance(test_files, list) or not test_files or not all(isinstance(p, str) for p in test_files):
+        problems.append("test_files 必须是非空的路径列表")
+        test_files = []
+    if len(set(test_files)) != len(test_files):
+        problems.append("test_files 里有重复的路径")
+    for rel in test_files:
+        if not safe_rel(rel):
+            problems.append(f"测试文件路径 {rel} 不合法：用 repo 相对路径，不能是绝对路径、不能含 ..")
+            continue
+        if rel.startswith(PROTECTED_PREFIXES):
+            problems.append(f"测试文件 {rel} 在受保护的目录里")
+        if rel in owned:
+            problems.append(f"测试文件 {rel} 和节点声明的文件重叠：执行会话会改它。换一个新文件")
+        src = work / "repo" / rel
+        if src.is_symlink() or not src.is_file():
+            problems.append(f"测试文件 {rel} 不在 repo/ 里，或者不是普通文件")
+        exists = subprocess.run(["git", "-C", str(m.repo()), "cat-file", "-e", f"{base}:{rel}"], capture_output=True)
+        if exists.returncode == 0:
+            problems.append(f"{rel} 是仓库里已有的文件：测试只能新建文件，不能改已有文件")
+    checks = data.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return problems + ["checks 必须是非空列表"], {}
+    seen, covered, has_fail = set(), set(), set()
+    for i, c in enumerate(checks, 1):
+        if not isinstance(c, dict):
+            problems.append(f"第 {i} 个检查不是对象")
+            continue
+        cid = c.get("id")
+        if not isinstance(cid, str) or not CHECK_ID_RE.match(cid) or cid in seen:
+            problems.append(f"第 {i} 个检查的 id 不合法或重复（小写字母、数字和 -）")
+            continue
+        seen.add(cid)
+        node = c.get("node")
+        if node not in tasks:
+            problems.append(f"检查 {cid} 的 node「{node}」不是 DAG 里的节点")
+            continue
+        n_acc = len(tasks[node].get("acceptance", []))
+        acc = c.get("acceptance")
+        if not isinstance(acc, list) or not acc or not all(isinstance(a, int) and not isinstance(a, bool) and 1 <= a <= n_acc for a in acc):
+            problems.append(f"检查 {cid} 的 acceptance 必须是 1 到 {n_acc} 之间的序号列表")
         else:
+            covered.update((node, a) for a in acc)
+        if not isinstance(c.get("command"), str) or not c["command"].strip():
+            problems.append(f"检查 {cid} 缺少 command")
+        if c.get("expect_before") not in ("fail", "pass"):
+            problems.append(f"检查 {cid} 的 expect_before 只能是 fail 或 pass")
+        elif c["expect_before"] == "fail":
+            has_fail.add(node)
+    for tid, t in tasks.items():
+        for a in range(1, len(t.get("acceptance", [])) + 1):
+            if (tid, a) not in covered:
+                problems.append(f"节点 {tid} 的第 {a} 条验收标准没有检查：「{t['acceptance'][a - 1]}」")
+        if tid not in has_fail:
+            problems.append(f"节点 {tid} 没有 expect_before 为 fail 的检查：至少要有一个检查测它的新行为")
+    if problems:
+        return problems, {}
+    head = subprocess.run(["git", "-C", str(m.repo()), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    if head != base:
+        raise OrcError(f"产品仓库的当前提交从 {base[:12]} 变成了 {head[:12]}：验证是按旧代码写的。"
+                       "规划和验证期间不要往产品仓库提交；回到原提交，或者用 orc revise 重新规划。")
+    results = run_checks(m, base, work / "repo", test_files, checks, work / ".check-run")
+    for r in results:
+        if r["ok"]:
+            continue
+        tail = "\n    ".join(r["tail"]) or "无输出"
+        if r["rc"] is None:
+            problems.append(f"检查 {r['id']} 超时（{CHECK_TIMEOUT} 秒）")
+        elif r["expect_before"] == "fail":
+            problems.append(f"检查 {r['id']} 在还没实现的代码上就通过了：它没有测到新行为。改测试，让它在实现之前失败")
+        else:
+            problems.append(f"检查 {r['id']} 标成 pass（已有行为），但在现在的代码上失败了（退出码 {r['rc']}）：\n    {tail}")
+    return problems, {"base": base, "results": results, "test_files": test_files}
+
+
+def copy_verify_outputs(m: Mission, work: Path, info: dict) -> dict:
+    dest = m.dir / "verify"
+    if dest.exists():
+        shutil.rmtree(dest)
+    (dest / "files").mkdir(parents=True)
+    shutil.copyfile(work / "checks.json", dest / "checks.json")
+    tests = {}
+    for rel in info["test_files"]:
+        target = dest / "files" / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(work / "repo" / rel, target)
+        tests[rel] = hashlib.sha256(target.read_bytes()).hexdigest()
+    write_atomic(dest / "results.json", json.dumps({"base": info["base"], "results": info["results"]},
+                                                     ensure_ascii=False, indent=2) + "\n")
+    return {"base": info["base"], "checks": hashlib.sha256((dest / "checks.json").read_bytes()).hexdigest(), "tests": tests}
+
+
+# ---------------------------------------------------------------- 两种会话共用的结束处理
+
+def consecutive_failures(m: Mission, kind: str = "planner") -> int:
+    exits = agent_exits(m, kind)
+    count = 0
+    for run in sorted((s["run"] for s in agent_starts(m, kind)), reverse=True):
+        if exits.get(run, {}).get("outcome") in ("invalid", "failed"):
+            count += 1
+        elif run in exits:
             break
     return count
 
 
-def finish_planner_run(m: Mission, n: int, rc: Optional[int]):
-    """一次规划运行结束：提问 / 校验不通过（发回去修或交给 coordinator）/ 通过进入 plan-review。"""
-    work = m.plan_work()
+def finish_agent_run(m: Mission, kind: str, n: int, rc: Optional[int]):
+    """一次会话运行结束：提问 / 校验不通过（发回去修或交给 coordinator）/ 通过进入下一个状态。"""
+    spec = AGENTS[kind]
+    work = agent_work(m, kind)
     question = work / "QUESTION.md"
     if question.is_file() and question.read_text(encoding="utf-8").strip():
         text = question.read_text(encoding="utf-8").strip()
         q = m.ask(text, "ask-user", "orc step")
-        m.append("planner-exit", "orc step", run=n, rc=rc, outcome="question", question=q.stem)
-        m.transition("blocked", "orc step", reason="规划会话提问", question=q.stem, type="ask-user")
+        m.append(f"{kind}-exit", "orc step", run=n, rc=rc, outcome="question", question=q.stem)
+        m.transition("blocked", "orc step", reason=f"{spec['label']}提问", question=q.stem, type="ask-user")
         question.rename(work / ".runs" / f"{n}.question.md")
         return None, True
+    info: dict = {}
     if rc == 0:
-        problems = validate_plan_outputs(m, work)
+        if kind == "planner":
+            problems = validate_plan_outputs(m, work)
+        else:
+            problems, info = validate_verify_outputs(m, work)
         outcome = "invalid"
     else:
-        problems = [f"规划会话异常退出（退出码 {rc}）" if rc is not None else "规划会话的进程不见了，没有留下退出码"]
+        problems = [f"{spec['label']}异常退出（退出码 {rc}）" if rc is not None else f"{spec['label']}的进程不见了，没有留下退出码"]
         outcome = "failed"
     if not problems:
-        files = copy_plan_outputs(m, work)
-        m.append("planner-exit", "orc step", run=n, rc=rc, outcome="ready")
-        m.append("plan-ready", "orc step", files=files)
-        m.transition("plan-review", "orc step", reason="规划产出通过校验")
-        print(f"mission {m.name}：规划产出通过校验，planning → plan-review")
+        m.append(f"{kind}-exit", "orc step", run=n, rc=rc, outcome="ready")
+        if kind == "planner":
+            m.append("plan-ready", "orc step", files=copy_plan_outputs(m, work))
+            m.transition("verifying", "orc step", reason="规划产出通过校验")
+            print(f"mission {m.name}：规划产出通过校验，planning → verifying")
+        else:
+            summary = copy_verify_outputs(m, work, info)
+            m.append("verify-ready", "orc step", **summary,
+                     results={r["id"]: r["rc"] for r in info["results"]})
+            m.transition("plan-review", "orc step", reason="验证产出通过校验，检查在实现前的结果都符合预期")
+            print(f"mission {m.name}：验证产出通过校验，verifying → plan-review")
         return None, True
-    previous = consecutive_failures(m)
+    previous = consecutive_failures(m, kind)
     if previous < MAX_REPAIRS:
-        m.append("planner-exit", "orc step", run=n, rc=rc, outcome=outcome, problems=problems)
-        launch_planner(m, "orc 校验你的产出没有通过：\n" + "\n".join(f"- {p}" for p in problems)
-                       + "\n\n修正后把全部产出文件重新写出（design.md、plan.md、task-dag.json）。", [])
+        m.append(f"{kind}-exit", "orc step", run=n, rc=rc, outcome=outcome, problems=problems)
+        launch_agent(m, kind, "orc 校验你的产出没有通过：\n" + "\n".join(f"- {p}" for p in problems)
+                     + f"\n\n修正后把{spec['outputs']}重新写出。", [])
         return "wait", False
-    text = (f"规划会话的产出连续 {previous + 1} 次没有通过校验，需要裁决：\n" + "\n".join(f"- {p}" for p in problems)
-            + f"\n\n产出在 {work}。回答会原样发给规划会话。")
+    text = (f"{spec['label']}的产出连续 {previous + 1} 次没有通过校验，需要裁决：\n" + "\n".join(f"- {p}" for p in problems)
+            + f"\n\n产出在 {work}。回答会原样发给{spec['label']}。")
     q = m.ask(text, "mediate", "orc step")
-    m.append("planner-exit", "orc step", run=n, rc=rc, outcome=outcome, problems=problems, question=q.stem)
-    m.transition("blocked", "orc step", reason="规划产出校验没有通过", question=q.stem, type="mediate")
+    m.append(f"{kind}-exit", "orc step", run=n, rc=rc, outcome=outcome, problems=problems, question=q.stem)
+    m.transition("blocked", "orc step", reason=f"{spec['label']}产出校验没有通过", question=q.stem, type="mediate")
     return None, True
 
 
-def pending_planner_messages(m: Mission) -> Tuple[List[str], List[str]]:
-    """还没发给规划会话的：规划提问的回答、coordinator 的裁决、用户审阅后的修改意见。"""
-    delivered = {d for s in planner_starts(m) for d in s.get("delivers", [])}
-    planner_questions = {e["question"]: e for e in planner_exits(m).values() if e.get("question")}
+def finish_planner_run(m: Mission, n: int, rc: Optional[int]):
+    return finish_agent_run(m, "planner", n, rc)
+
+
+def pending_agent_messages(m: Mission, kind: str) -> Tuple[List[str], List[str]]:
+    """还没发给会话的：它提问的回答、coordinator 的裁决；规划会话还有用户审阅后的修改意见。"""
+    spec = AGENTS[kind]
+    starts = agent_starts(m, kind)
+    delivered = {d for s in starts for d in s.get("delivers", [])}
+    runs = {s["run"] for s in starts}
+    questions = {e["question"]: e for e in agent_exits(m, kind).values() if e.get("question") and e["run"] in runs}
     ids, parts = [], []
     for e in m.events():
-        if e.get("kind") == "answer" and e.get("id") in planner_questions and f"answer:{e['id']}" not in delivered:
+        if e.get("kind") == "answer" and e.get("id") in questions and f"answer:{e['id']}" not in delivered:
             text = Path(e["file"]).read_text(encoding="utf-8").strip()
-            if planner_questions[e["id"]].get("outcome") == "question":
-                parts.append(f"用户对你的问题的回答：\n\n{text}\n\n据此继续：写出全部产出文件，或者再写一个 QUESTION.md。")
+            if questions[e["id"]].get("outcome") == "question":
+                parts.append(f"用户对你的问题的回答：\n\n{text}\n\n据此继续：写出{spec['outputs']}，或者再写一个 QUESTION.md。")
             else:
-                parts.append(f"你的产出没有通过校验，coordinator 的裁决：\n\n{text}\n\n据此修正后把全部产出文件重新写出。")
+                parts.append(f"你的产出没有通过校验，coordinator 的裁决：\n\n{text}\n\n据此修正后把{spec['outputs']}重新写出。")
             ids.append(f"answer:{e['id']}")
-        if e.get("kind") == "feedback" and f"feedback:{e['id']}" not in delivered:
+        if kind == "planner" and e.get("kind") == "feedback" and f"feedback:{e['id']}" not in delivered:
             parts.append(f"用户审阅后的修改意见：\n\n{e['text']}\n\n按意见修改工作目录里的产出，把全部产出文件重新写出。")
             ids.append(f"feedback:{e['id']}")
     return ids, parts
 
 
-def h_planning(m: Mission):
-    starts = planner_starts(m)
+def pending_planner_messages(m: Mission) -> Tuple[List[str], List[str]]:
+    return pending_agent_messages(m, "planner")
+
+
+def agent_running(m: Mission, kind: str) -> bool:
+    starts = agent_starts(m, kind)
     if not starts:
-        launch_planner(m, None, [])
-        return "wait", False
+        return False
     last = starts[-1]
-    n = last["run"]
-    if n not in planner_exits(m):
-        rc_file = m.plan_work() / ".runs" / f"{n}.rc"
-        if rc_file.is_file():
-            rc_text = rc_file.read_text().strip()
-            rc: Optional[int] = int(rc_text) if rc_text.lstrip("-").isdigit() else None
-        elif process_alive(last["pid"], last["session"]):
+    if last["run"] in agent_exits(m, kind) or (agent_work(m, kind) / ".runs" / f"{last['run']}.rc").is_file():
+        return False
+    return process_alive(last["pid"], last["session"])
+
+
+def h_agent(kind: str) -> Handler:
+    spec = AGENTS[kind]
+
+    def handler(m: Mission):
+        starts = agent_starts(m, kind)
+        if not starts:
+            if kind == "verifier":
+                prepare_verify_work(m)
+            launch_agent(m, kind, None, [])
             return "wait", False
-        else:
-            rc = None
-        return finish_planner_run(m, n, rc)
-    ids, parts = pending_planner_messages(m)
-    if parts:
-        launch_planner(m, "\n\n---\n\n".join(parts), ids)
-        return "wait", False
-    return (f"error mission {m.name} 在 planning，但规划会话已经结束、也没有待处理的回答或意见。"
-            "这是 orc 的 bug；把 events.jsonl 给用户看。", False)
+        last = starts[-1]
+        n = last["run"]
+        if n not in agent_exits(m, kind):
+            rc_file = agent_work(m, kind) / ".runs" / f"{n}.rc"
+            if rc_file.is_file():
+                rc_text = rc_file.read_text().strip()
+                rc: Optional[int] = int(rc_text) if rc_text.lstrip("-").isdigit() else None
+            elif process_alive(last["pid"], last["session"]):
+                return "wait", False
+            else:
+                rc = None
+            return finish_agent_run(m, kind, n, rc)
+        ids, parts = pending_agent_messages(m, kind)
+        if parts:
+            launch_agent(m, kind, "\n\n---\n\n".join(parts), ids)
+            return "wait", False
+        return (f"error mission {m.name} 在 {m.state}，但{spec['label']}已经结束、也没有待处理的回答或意见。"
+                "这是 orc 的 bug；把 events.jsonl 给用户看。", False)
+    return handler
+
+
+h_planning = h_agent("planner")
+h_verifying = h_agent("verifier")
 
 
 # ---------------------------------------------------------------- 审阅页与发布（Claude Artifacts）
@@ -732,6 +1029,7 @@ def render_review(m: Mission) -> str:
                     f"<td>{cell(t.get('clauses', [])) or '—'}</td><td>{_h.escape(str(t.get('component', '')))}</td>"
                     f"<td>{cell(t.get('verification', []))}</td></tr>")
     constraints = read("northstar-constraints.md")
+    verification = render_verification(m)
     request = (m.dir / "request.md").read_text(encoding="utf-8").strip()
     return f"""<title>{_h.escape(m.name)} 计划审阅</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -751,7 +1049,7 @@ table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px so
 </style>
 <main>
 <h1>计划审阅：{_h.escape(m.name)}</h1>
-<p class="muted">由 orc 根据规划会话的产出生成。说 go 之后，下面三个文件会原样冻结，你用 Touch ID 签名的就是它们的哈希。</p>
+<p class="muted">由 orc 根据规划会话和验证会话的产出生成。说 go 之后，设计、计划、DAG 和下面的验收测试会原样冻结，你用 Touch ID 签名的就是它们的哈希。</p>
 <h2>请求（原话）</h2><blockquote>{_h.escape(request)}</blockquote>
 <h2>核对用的哈希</h2>
 <table><tr><th>文件</th><th>sha256</th></tr>
@@ -760,11 +1058,42 @@ table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px so
 <tr><td>DAG task-dag.json</td><td><code>{sha('task-dag.json')}</code></td></tr></table>
 <h2>任务 DAG</h2><div class="wrap"><table><tr><th>节点</th><th>依赖</th><th>文件</th><th>验收标准</th><th>条款</th><th>组件</th><th>验证</th></tr>
 {''.join(rows)}</table></div>
+{verification}
 {('<h2>建议加入 NORTHSTAR 的关键约束</h2>' + md_to_html(constraints)) if constraints.strip() else ''}
 <h2>设计</h2>{md_to_html(read('design.md'))}
 <h2>计划</h2>{md_to_html(read('plan.md'))}
 </main>
 """
+
+
+def render_verification(m: Mission) -> str:
+    import html as _h
+    vdir = m.dir / "verify"
+    if not (vdir / "checks.json").is_file():
+        return ""
+    data = json.loads((vdir / "checks.json").read_text(encoding="utf-8"))
+    results = {r["id"]: r for r in json.loads((vdir / "results.json").read_text(encoding="utf-8"))["results"]}
+    base = json.loads((vdir / "results.json").read_text(encoding="utf-8"))["base"]
+    dag = json.loads((m.dir / "plan" / "task-dag.json").read_text(encoding="utf-8"))
+    acceptance = {t["id"]: t.get("acceptance", []) for t in dag["tasks"]}
+    model = m.roles()["review"]["model"]
+    rows = []
+    for c in data["checks"]:
+        r = results.get(c["id"], {})
+        before = ("实现前应失败，实际失败" if c["expect_before"] == "fail" else "已有行为，实际通过") \
+            + f"（退出码 {r.get('rc')}）"
+        acc = "<br>".join(f"{a}. {_h.escape(acceptance[c['node']][a - 1])}" for a in c["acceptance"])
+        rows.append(f"<tr><td><code>{_h.escape(c['id'])}</code></td><td><code>{_h.escape(c['node'])}</code></td>"
+                    f"<td>{acc}</td><td><code>{_h.escape(c['command'])}</code></td><td>{before}</td></tr>")
+    files = []
+    for rel in data["test_files"]:
+        body = (vdir / "files" / rel).read_bytes()
+        files.append(f"<h3><code>{_h.escape(rel)}</code></h3><p class=\"muted\">sha256 <code>{hashlib.sha256(body).hexdigest()}</code></p>"
+                     f"<pre><code>{_h.escape(body.decode('utf-8', 'replace'))}</code></pre>")
+    return (f"<h2>验收测试</h2><p class=\"muted\">由独立的验证会话（模型 {_h.escape(model)}）在实现之前写好，它看不到规划过程。"
+            f"每个检查都已在当前代码（提交 <code>{base[:12]}</code>）上实际运行过。go 之后这些测试冻结，执行会话只能读、不能改。</p>"
+            "<div class=\"wrap\"><table><tr><th>检查</th><th>节点</th><th>验收标准</th><th>命令</th><th>实现前</th></tr>"
+            + "".join(rows) + "</table></div>" + "".join(files))
 
 
 def run_publisher(m: Mission, site: Path, page: str, url: Optional[str]) -> dict:
@@ -896,6 +1225,10 @@ def verify_approval(m: Mission) -> Optional[str]:
         detail = (hashes.stderr.strip().splitlines() or ["无输出"])[-1]
         return (f"error mission {m.name} 的冻结文件和签名时的哈希不一致（{detail}）。"
                 "go 之后的设计、计划、DAG 不能改；不要继续执行，把这条消息告诉用户。")
+    problem = verify_frozen_checks(m)
+    if problem:
+        return (f"error mission {m.name} 的冻结验收测试校验失败（{problem}）。"
+                "go 之后验收测试不能改；不要继续执行，把这条消息告诉用户。")
     return None
 
 
@@ -909,6 +1242,7 @@ def h_terminal(m: Mission):
 HANDLERS: Dict[str, Handler] = {
     "new": h_new,
     "planning": h_planning,
+    "verifying": h_verifying,
     "plan-review": h_plan_review,
     "approved": not_yet("阶段 4"),
     "executing": not_yet("阶段 4"),
@@ -1006,6 +1340,64 @@ def cmd_revise(args) -> int:
     return 0
 
 
+FROZEN_CHECKS_RE = re.compile(r"^checks 清单的 sha256：`([0-9a-f]{64})`", re.M)
+
+
+def freeze_verification(m: Mission) -> str:
+    """把验收测试写进 control/，返回追加到 brief-exec.md 的一节。
+
+    签名的哈希清单只有四个文件（复用脚本的约定，不改）。验收测试的哈希写进 brief-exec.md，
+    brief-exec.md 的哈希在清单里，签名就连带覆盖了验收测试：改任何一个测试文件，都对不上 brief-exec.md 里的哈希。
+    """
+    vdir, c = m.dir / "verify", m.control
+    if not (vdir / "checks.json").is_file():
+        raise OrcError(f"mission {m.name} 还没有验收测试（verify/checks.json）。验证没完成不能 go；运行 orc step。")
+    data = json.loads((vdir / "checks.json").read_text(encoding="utf-8"))
+    base = json.loads((vdir / "results.json").read_text(encoding="utf-8"))["base"]
+    tests_dir = c / "approved-tests"
+    shutil.rmtree(tests_dir, ignore_errors=True)
+    tests = {}
+    for rel in data["test_files"]:
+        dst = tests_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(vdir / "files" / rel, dst)
+        tests[rel] = hashlib.sha256(dst.read_bytes()).hexdigest()
+    approved = {"version": 1, "mission": m.name, "base": base, "test_files": tests, "checks": data["checks"]}
+    text = json.dumps(approved, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    write_atomic(c / "approved-checks.json", text)
+    digest = hashlib.sha256(text.encode()).hexdigest()
+    rows = "".join(f"| `{rel}` | `{h}` |\n" for rel, h in sorted(tests.items()))
+    return (f"\n## 冻结的验收测试\n\n"
+            "下面的测试由独立的验证会话在实现之前写好，和这份文件一起签名。你可以读、可以运行，**不能改、不能删、不能移动**；"
+            "改动它们的提交会被拒绝。你的节点只有在属于它的检查全部通过时才算完成。你可以另外写自己的单元测试"
+            "（放在你的 `files` 里），但它们不算数。\n\n"
+            f"基线提交：`{base}`\n\nchecks 清单的 sha256：`{digest}`（`approved-checks.json`）\n\n"
+            f"| 测试文件 | sha256 |\n| --- | --- |\n{rows}")
+
+
+def verify_frozen_checks(m: Mission) -> Optional[str]:
+    """签名覆盖 brief-exec.md；这里再从 brief-exec.md 里的哈希核对验收测试和检查清单。"""
+    c = m.control
+    try:
+        brief = (c / "brief-exec.md").read_text(encoding="utf-8")
+        match = FROZEN_CHECKS_RE.search(brief)
+        raw = (c / "approved-checks.json").read_bytes()
+        if not match or hashlib.sha256(raw).hexdigest() != match.group(1):
+            return "approved-checks.json 和签名的 brief-exec.md 里记的哈希不一致"
+        tests = json.loads(raw)["test_files"]
+        present = {p.relative_to(c / "approved-tests").as_posix()
+                   for p in (c / "approved-tests").rglob("*") if p.is_file() or p.is_symlink()}
+        if present != set(tests):
+            return "approved-tests/ 里的文件和签名时的清单不一致"
+        for rel, digest in tests.items():
+            path = c / "approved-tests" / rel
+            if path.is_symlink() or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                return f"验收测试 {rel} 被改过"
+    except (OSError, ValueError, KeyError) as error:
+        return f"读不出冻结的验收测试（{error}）"
+    return None
+
+
 def cmd_go(args) -> int:
     """用户说 go 之后：冻结设计、计划、执行规则和 DAG，等用户签名。"""
     with Mission(args.mission) as m:
@@ -1018,6 +1410,7 @@ def cmd_go(args) -> int:
         c, plan = m.control, m.dir / "plan"
         brief = (ORC_ROOT / "templates" / "brief-exec.md").read_text(encoding="utf-8")
         brief = brief.replace("{{MISSION}}", m.name).replace("{{IMPLEMENT_MODEL}}", m.roles()["implement"]["model"])
+        brief += freeze_verification(m)
         written = {"approved-design.md": (plan / "design.md").read_bytes(),
                    "approved-plan.md": (plan / "plan.md").read_bytes(),
                    "brief-exec.md": brief.encode()}
@@ -1027,11 +1420,13 @@ def cmd_go(args) -> int:
         freeze = subprocess.run(["bash", str(SCRIPTS / "validate-task-dag.sh"), "--freeze", str(plan / "task-dag.json"),
                                  os.path.realpath(c)], capture_output=True, text=True)
         if freeze.returncode != 0:
-            for name in (*written, "approved.sha256"):   # 撤掉没冻结成的半成品，重新 go 时从头来
+            for name in (*written, "approved.sha256", "approved-checks.json"):   # 撤掉没冻结成的半成品，重新 go 时从头来
                 (c / name).unlink(missing_ok=True)
+            shutil.rmtree(c / "approved-tests", ignore_errors=True)
             raise OrcError("冻结 DAG 失败：" + (freeze.stderr.strip() or "无输出") + "。冻结没有完成，可以修正后重新运行 orc go。")
         frozen = {n: hashlib.sha256((c / n).read_bytes()).hexdigest()
                   for n in ("approved-design.md", "approved-plan.md", "brief-exec.md", "approved-task-dag.json")}
+        frozen["approved-checks.json"] = hashlib.sha256((c / "approved-checks.json").read_bytes()).hexdigest()
         m.append("frozen", "orc go", files=frozen)
         constraints = plan / "northstar-constraints.md"
         drafted = None
@@ -1047,7 +1442,7 @@ def cmd_go(args) -> int:
                 write_atomic(target, text)
                 drafted = target
         control = os.path.realpath(c)
-    print(f"已冻结 mission {m.name} 的设计、计划、执行规则和 DAG（{control}）。")
+    print(f"已冻结 mission {m.name} 的设计、计划、执行规则、DAG 和验收测试（{control}）。")
     print(f"请用户在自己的终端运行：northstar approve-mission {control}，核对哈希后输入 SEAL 并按 Touch ID。")
     if drafted:
         print(f"规划提出的关键约束已追加到 {drafted}：请用户在产品仓库运行 northstar seal 把它们签进 NORTHSTAR。")
@@ -1056,25 +1451,19 @@ def cmd_go(args) -> int:
 
 
 def cmd_wait(args) -> int:
-    """阻塞到后台的规划会话结束（或 mission 不再处于 planning），然后返回；coordinator 在后台运行它。"""
+    """阻塞到后台的规划会话或验证会话结束（或 mission 不再处于 planning / verifying），然后返回；coordinator 在后台运行它。"""
     import time
     m = Mission(args.mission)
     if not m.exists():
         raise OrcError(f"没有名为「{args.mission}」的 mission。")
     deadline = time.monotonic() + args.timeout
     while time.monotonic() < deadline:
-        if m.replay()["state"] != "planning":
-            break
-        starts = planner_starts(m)
-        if not starts:
-            break
-        last = starts[-1]
-        if last["run"] in planner_exits(m) or (m.plan_work() / ".runs" / f"{last['run']}.rc").is_file() \
-                or not process_alive(last["pid"], last["session"]):
+        kind = {"planning": "planner", "verifying": "verifier"}.get(m.replay()["state"])
+        if kind is None or not agent_running(m, kind):
             break
         time.sleep(1)
     else:
-        print(f"等了 {args.timeout} 秒，规划会话还在运行。")
+        print(f"等了 {args.timeout} 秒，{AGENTS[kind]['label']}还在运行。")
         return 1
     print(f"next: 运行 orc step --mission {m.name}")
     return 0
