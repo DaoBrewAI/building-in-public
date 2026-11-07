@@ -20,7 +20,8 @@
 | 并发 | 第一版就支持并行：DAG 里声明文件互不重叠、前置都已集成的节点同时跑；集成按顺序加锁 |
 | 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单 |
 | 验证 | **2026-11-07 加**（见 `proposals/2026-11-07-tests-before-implement.md`）：验收测试和检查在设计之后、实现之前，由一个独立的会话写好（`review` 角色的模型，和执行用的不同；看不到规划过程和计划）。每个检查都要先在当前代码上实际跑一遍：测新行为的必须失败。测试随设计、计划一起冻结签名；执行阶段只能读、不能改，只有这些检查算数 |
-| 给人看的页面 | **2026-11-07 改**（见 `proposals/2026-11-07-review-page-artifacts.md`）：计划审阅页和状态页都发布成仅本人可见的 Claude Artifact，手机和电脑都能看。原来是 OpenAI Sites |
+| 给人看的页面 | **2026-11-07 改**（见 `proposals/2026-11-07-review-page-artifacts.md`）：计划审阅页和状态页都发布成仅本人可见的 Claude Artifact，手机和电脑都能看。原来是 OpenAI Sites。**2026-11-07 加**（见 `proposals/2026-11-07-cross-mission-review.md`）：另有一个全产品的汇总页，也是 Artifact，链接不变，每完成一个 mission 更新一次 |
+| 产品设计和 phase | **2026-11-07 加**（见 `proposals/2026-11-07-cross-mission-review.md`）：四层，产品设计文档 → NORTHSTAR → phase → mission。orc 从产品设计文档起草画布（组件、连线、组件对应的目录），写成 `.northstar/architecture.json`，用户签名后 agent 改不了；DAG 节点的组件只能从画布里选。orc 按 phase 文档里的依赖启动 mission。每个 mission 合进主线前做一次跨 mission 评审（`review` 模型，不降级）：默认以已合并的为准，冲突就退回重做；只有签名设计里「推翻的已有决定」一节写明的才放行。mission 的 `scope` 和 `forbid` 由信任层硬拦截，不进 NORTHSTAR |
 | 签名 | 单台 Mac，Secretive + Touch ID；你说 go 之后用 `northstar approve-mission` 签名 |
 | 默认参数 | 每次提交最多 8 个文件；同一节点连续偏离 3 次熔断；并发上限写在配置里 |
 
@@ -44,7 +45,8 @@
 | 3 规划与 go | 规划 → 验收测试 → 审阅页发布成 Artifact → 你说 go → 签名 | 确认发布方式；签一次名 | 未签名进不了执行 |
 | 4 并行执行 | 调度、子任务、broker 对齐评审、纠偏、集成 | 审 PR | 并行与纠偏的契约测试全部通过 |
 | 5 验收与状态页 | 最终审查、派生状态页发布成 Artifact、清理 | 审 PR，抽查状态页 | 状态页每条可追溯 |
-| 6 试运行 | 薄 skill，玩具仓库端到端，再跑一个真实小 mission | 跑真实 mission | 全流程无人工修补 |
+| 6 产品层 | 画布、phase、跨 mission 评审、汇总页、scope 拦截 | 签画布，审 PR | 冲突被退回，汇总页每条可追溯 |
+| 7 试运行 | 薄 skill，玩具仓库端到端，再跑一个真实小 mission | 跑真实 mission | 全流程无人工修补 |
 
 ---
 
@@ -139,9 +141,52 @@
 
 **完成标志**：状态页上每个状态都来自脚本；清理只动记录过的资源。
 
-## 阶段 6：薄 skill 与试运行
+## 阶段 6：产品层（画布、phase、跨 mission 评审、汇总页、scope 拦截）
 
-- [ ] **【Claude Code】** 按 `slim/SKILL.md` 写 coordinator 的 skill，把其中关于子任务的描述改成 `claude -p` 执行会话的方式；常驻规则不超过 7 条。
+2026-11-07 加，见 `proposals/2026-11-07-cross-mission-review.md`。前面的阶段只认识单个 mission；这一阶段让 orc 认识上面两层：产品设计和 phase。NORTHSTAR 不加任何内容。
+
+**画布**
+
+- [ ] **【Claude Code】** orc 读用户的产品设计文档，起草画布：组件、组件之间的连线、每个组件对应的目录。格式沿用 `northstar-scope` 已经在读的 `.northstar/architecture.json`（`{"components":[{"id","name","paths"}]}`），另加连线。起草写进 `drafts/`，不直接写 `.northstar/`。
+- [ ] **【你】** 看过画布后用 `northstar seal` 签进 `.northstar/architecture.json`。之后加组件也一样：先起草进 `drafts/`，签名才生效。
+- [ ] **【Claude Code】** 规划会话写 DAG 时，节点的 `component` 只能从签名的画布里选，否则校验不过。
+
+**phase**
+
+- [ ] **【Claude Code】** orc 读 phase 文档里的 mission 列表和依赖，按依赖顺序启动 mission，没有依赖关系的并行。每个 mission 的请求就是对应 mission 文件的全文。
+- [ ] **【Claude Code】** phase 里所有 mission 都合并后，对照 phase 文档的「完成标准」出一份结论，写进汇总页；需要人亲手做的验收列成清单交给用户，orc 不代做。
+
+**跨 mission 评审**
+
+- [ ] **【Claude Code】** 时点：每个 mission 自己的评审（阶段 4、5）都通过之后、合进主线之前。评审者是 `review` 模型，不降级。对照材料：NORTHSTAR、产品设计文档、画布、主线上的现有代码、此前各 mission 签名的设计、本 mission 签名的设计和完整 diff。回答三个问题：合在一起还符合 NORTHSTAR 和产品设计吗？有没有推翻或绕开此前 mission 的设计决定？有没有重复实现已有的东西？结论和证据（N#、文件和行、此前 mission 的设计章节）写进 `events.jsonl`。
+- [ ] **【Claude Code】** 冲突规则：
+  - 默认以已经合并的为准：判定冲突就退回本 mission 重做，不问用户；重做次数沿用熔断规则，超过上限才停下来问。
+  - 唯一例外：本 mission 的 `design.md` 里有「推翻的已有决定」一节（逐条写推翻哪个 mission 的哪个决定、改成什么、为什么），它出现在审阅页上，用户 go 并签名就是明确同意。跨 mission 评审只放行这一节写明的推翻，没写的一律当冲突退回。
+  - 规划会话不能自己决定推翻：发现需求和已有决定冲突时只能写 `QUESTION.md` 问用户，用户同意了才写进这一节。规划说明（`planner-brief.md`）加上这条。
+  - 被推翻的是 NORTHSTAR 条款时，还要用户另外 `northstar seal` 改 NORTHSTAR，否则仍按冲突处理。
+- 成本：每个 mission 合并前多一次 `review` 模型调用，随代码规模增长。规模太大时只给评审这个 mission 碰到的组件和相邻组件，阈值实测后再定。
+
+**汇总页**
+
+- [ ] **【Claude Code】** 全产品一个汇总页，发布成仅本人可见的 Artifact，链接不变，每完成一个 mission 更新一次。由脚本生成，agent 写不了状态。内容：
+  - 画布着色图：底图是签名的画布，颜色只来自事件记录。按每个 mission 实际改了哪些文件，标出哪个 mission 完成了哪个组件的哪部分，点开能看到节点和证据。
+  - NORTHSTAR 条款表：每条 N# 一行，列出由哪些 mission 和节点实现、证据在哪、有没有被 DRIFT 打回过、现在的状态；没有任何 mission 实现的条款单独标出来。
+  - phase 和 mission 列表：每个 phase 的完成情况和结论；每个已完成的 mission 一行，附它自己状态页的链接和跨 mission 评审的结论。
+
+**scope 和 forbid 接成硬规则**
+
+- [ ] **【Claude Code】** 信任层的 `northstar-scope` 已经能读 `.northstar/missions/ACTIVE` 指向的 mission 文件，碰到 `forbid` 返回 3（停下），超出 `scope` 返回 1（拦住）。缺的是：orc 开始执行一个 mission 时把 mission 文件放进 `.northstar/missions/` 并设成 ACTIVE，结束时清掉。这是受保护路径，先实测信任层允许怎么写入；如果只能走 `northstar start`（agent 不能执行），就由 orc 输出 `next:` 让用户运行，写进提案后再定。`scope` 和 `forbid` 只对当前 mission 生效，不进 NORTHSTAR。
+
+**契约测试**
+
+- [ ] **【Claude Code】** 为以上每个分支写契约测试，包括：画布签名后 agent 改不了、DAG 节点的组件不在画布里时被拒、phase 按依赖顺序启动 mission 且没有依赖的并行、跨 mission 评审判定冲突时退回重做而不合并、签名设计里写明的推翻被放行而没写的被退回、规划会话不能不经用户就写「推翻的已有决定」、汇总页上每个已完成的 mission 都在且每条 N# 都有一行、没人实现的条款被标出来、执行会话写 `forbid` 里的文件被停下、写 `scope` 外的文件被拦。
+- [ ] **【你】** 签画布，审 PR，打开汇总页抽查两三条能否追溯到证据。
+
+**完成标志**：跨 mission 冲突被退回而不是合并；汇总页上每个状态都来自脚本，每条都能追溯到证据。
+
+## 阶段 7：薄 skill 与试运行
+
+- [ ] **【Claude Code】** 按 `slim/SKILL.md` 写 coordinator 的 skill，把其中关于子任务的描述改成 `claude -p` 执行会话的方式；常驻规则不超过 7 条。用户说「跑 P<n>」时，skill 让 orc 把这个 phase 跑完。
 - [ ] **【Claude Code】** 在一个玩具仓库上端到端跑一遍：至少 3 个节点、其中 2 个可以并行；人为制造一次越界写入和一次语义偏离，确认都被拽回。
 - [ ] **【你】** 用 orc 跑一个真实的小 mission，记录需要你介入的次数和原因。
 - [ ] **【Claude Code】** 按试运行暴露的问题修正。
