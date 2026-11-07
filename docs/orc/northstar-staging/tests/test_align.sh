@@ -51,12 +51,26 @@ rm -f "$T/verdict"
 align
 expect_rc 2 "评审没有输出时拒绝"
 
-begin "交叉评审：谁写的交给另一家审"
-verdict ALIGNED; rm -f "$T/reviewer-calls"
+begin "评审分级：按 models.toml 的角色选模型（2026-11-07 决定：执行改用 Claude，重要评审用 review）"
+# 模型名只从 \$ROOT/models.toml 读（install.sh 从 orc/config/models.toml 复制），这里也不写死
+role_model() { python3 -c 'import re,sys; t=open(sys.argv[1]).read(); s=t[t.index("["+sys.argv[2]+"]"):]; print(re.search(r"model\s*=\s*\"([^\"]+)\"", s).group(1))' "$ROOT/models.toml" "$1"; }
+LIGHT=$(role_model review_light); DEEP=$(role_model review)
+expect_true '[ -n "$LIGHT" ] && [ -n "$DEEP" ] && [ "$LIGHT" != "$DEEP" ]' "测试读到两个不同的评审模型"
+verdict ALIGNED; rm -f "$T/reviewer-calls" "$T/reviewer-models" "$GD/northstar-drift-last"
 CLAUDE_PROJECT_DIR="$PWD" run_in "$(commit_p)" "$A"
-expect_true '[ "$(cat "$T/reviewer-calls")" = codex ]' "Claude Code 提交时调用 codex 评审"
-rm -f "$T/reviewer-calls"; align
-expect_true '[ "$(cat "$T/reviewer-calls")" = claude ]' "Codex 提交时调用 claude 评审"
+expect_true '[ "$(cat "$T/reviewer-models")" = "claude $LIGHT" ]' "Claude Code 的小提交：用 review_light（不再交给 codex）"
+rm -f "$T/reviewer-models"; align
+expect_true '[ "$(cat "$T/reviewer-models")" = "claude $LIGHT" ]' "Codex 的小提交：同样用 review_light"
+echo "N1：上次偏离" > "$GD/northstar-drift-last"; rm -f "$T/reviewer-models"; align
+expect_true '[ "$(cat "$T/reviewer-models")" = "claude $DEEP" ]' "上一次被判 DRIFT 后的复审：用 review"
+rm -f "$GD/northstar-drift-last" "$T/reviewer-models"
+seq 1 400 > src/core/big.py; git add src/core/big.py; align
+expect_true '[ "$(cat "$T/reviewer-models")" = "claude $DEEP" ]' "改动超过 deep_review_over_lines 行：用 review"
+git reset -q src/core/big.py; rm -f src/core/big.py "$T/reviewer-models"
+mv "$ROOT/models.toml" "$ROOT/models.toml.off"; align
+expect_rc 2 "缺少 models.toml 时不放行"
+expect_out "重新运行 install.sh" "提示重装信任层"
+mv "$ROOT/models.toml.off" "$ROOT/models.toml"
 
 begin "DRIFT 第 1 次：拒绝并发纠偏单"
 verdict "${DRIFT[@]}"

@@ -33,6 +33,8 @@ setup_env() {
     sed "${rewrite[@]}" "$f" > "$ROOT/$rel"; chmod 755 "$ROOT/$rel"
   done
   cp "$STAGING"/templates/*.md "$ROOT/templates/"
+  # 与 install.sh 相同：模型配置从 orc/config/models.toml 复制成 $ROOT/models.toml
+  cp "$STAGING/../../../orc/config/models.toml" "$ROOT/models.toml"
 
   # 假命令
   printf '#!/bin/sh\nexit 0\n' > "$FAKEBIN/osascript"
@@ -42,6 +44,9 @@ setup_env() {
 #!/bin/sh
 # 假评审：记录被调用的命令和 prompt，输出 \$T/verdict 的内容
 echo "$r" >> "$T/reviewer-calls"
+model=; prev=
+for a; do [ "\$prev" = --model ] || [ "\$prev" = -m ] && model="\$a"; prev="\$a"; done
+echo "$r \$model" >> "$T/reviewer-models"
 for a; do last="\$a"; done
 printf '%s' "\$last" > "$T/last-prompt"
 cat "$T/verdict" 2>/dev/null

@@ -9,8 +9,8 @@ grep -qE 'git[[:space:]]+commit' <<<"$cmd" || exit 0
 grep -qE 'git[[:space:]]+add' <<<"$cmd" && { echo "NORTHSTAR：把 git add 和 git commit 分成两条命令运行：先 git add，再单独 git commit，对齐评审才能看到要提交的内容。" >&2; exit 2; }
 
 MAXF=8                                    # 小步提交：一次最多几个文件
-# 交叉评审：Claude Code 写的交给 Codex 审，Codex 写的交给 Claude 审
-if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then REVIEWER=codex; else REVIEWER=claude; fi
+# 评审模型按 /opt/northstar/models.toml 的角色选（northstar-review --role auto）：
+# 上一次被判 DRIFT 或改动大时用 review（重要评审，不能是写代码的模型），其余用 review_light
 m=$(cat .northstar/missions/ACTIVE); MF=".northstar/missions/$m.md"
 GD=$(git rev-parse --git-dir); CTR="$GD/northstar-drift-count"; LAST="$GD/northstar-drift-last"
 notify() { osascript -e "display notification \"$1\" with title \"NORTHSTAR\"" 2>/dev/null || true; }
@@ -23,7 +23,7 @@ nf=$("${DIFF[@]}" --name-only | wc -l | tr -d ' ')
 
 prev=$(cat "$LAST" 2>/dev/null)
 # 评审和 orc 的 broker 共用 northstar-review：mission 就是本节点条目；签名的设计放在 .northstar/design.md（随 seal 签名）
-args=(--entry "$MF" --reviewer "$REVIEWER")
+args=(--entry "$MF" --role auto)
 [ -f .northstar/design.md ] && args+=(--design .northstar/design.md)
 [ -n "$prev" ] && args+=(--prev "$prev")
 out=$("${DIFF[@]}" --stat --patch | /opt/northstar/bin/northstar-review "${args[@]}" 2>&1); rc=$?

@@ -7,6 +7,8 @@ U="${SUDO_USER:?}"; UH=$(dscl . -read /Users/"$U" NFSHomeDirectory | awk '{print
 S="$(cd "$(dirname "$0")" && pwd)"
 [ -f "$S/northstar_signing.pub" ] || { echo "缺少 northstar_signing.pub（从 Secretive 复制公钥保存到这里）"; exit 1; }
 [ -f "$S/allowed_signers" ] || echo "linhan namespaces=\"northstar,northstar-mission\" $(cat "$S/northstar_signing.pub")" > "$S/allowed_signers"
+MODELS="$S/../../../orc/config/models.toml"   # 唯一写模型名的地方；提交前的对齐评审按它选模型
+[ -f "$MODELS" ] || { echo "缺少 $MODELS（在 building-in-public 的 worktree 里运行 install.sh）"; exit 1; }
 
 # 1. 工具包：root 所有，你和 agent 都只读
 mkdir -p /opt/northstar/bin /opt/northstar/hooks /opt/northstar/git /opt/northstar/templates
@@ -15,9 +17,10 @@ cp "$S"/hooks/*.sh /opt/northstar/hooks/
 cp "$S"/git/commit-msg /opt/northstar/git/
 cp "$S"/templates/*.md /opt/northstar/templates/
 cp "$S"/allowed_signers "$S"/northstar_signing.pub /opt/northstar/
+cp "$MODELS" /opt/northstar/models.toml
 chown -R root:wheel /opt/northstar
 chmod -R 755 /opt/northstar
-chmod 644 /opt/northstar/allowed_signers /opt/northstar/northstar_signing.pub /opt/northstar/templates/*.md
+chmod 644 /opt/northstar/allowed_signers /opt/northstar/northstar_signing.pub /opt/northstar/models.toml /opt/northstar/templates/*.md
 
 # 2. Claude Code 系统级 hook（用户和项目设置覆盖不了）
 M="/Library/Application Support/ClaudeCode"
