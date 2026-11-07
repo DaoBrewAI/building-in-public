@@ -107,8 +107,10 @@ pending → running → submitted → integrated
 
 ```json
 {"source": "<models.toml 的路径>", "sha256": "<文件哈希>", "resolved_at": "<时间>",
- "roles": {"implement": {"cli": "codex", "model": "…", "effort": "high"},
-           "plan_review": {"cli": "claude", "model": "…", "effort": "high", "fallback": "…"}}}
+ "roles": {"implement":    {"cli": "claude", "model": "…", "effort": "high"},
+           "plan":         {"cli": "claude", "model": "…", "effort": "high"},
+           "review":       {"cli": "claude", "model": "…", "effort": "high", "deep_review_over_lines": "300"},
+           "review_light": {"cli": "claude", "model": "…", "effort": "high"}}}
 ```
 
 之后 orc 只读 `models.json`，不再读 `models.toml`；改 `models.toml` 只影响新 mission。

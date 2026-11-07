@@ -15,10 +15,10 @@
 | 方向 | 新建 workflow `orc`；旧 orchestrator 里能用的脚本连同测试直接搬过来，其余重写（见 REUSE.md） |
 | 原则 | 流程交给代码，判断留给模型。新增约束放进脚本，不往 skill 里加文字 |
 | coordinator | 一个 Claude Code 会话，带约 450 词的薄 skill，循环执行 `orc step` |
-| 模型 | 实现：OpenAI 当前最强（目前 `gpt-6-astra`，effort high）；规划和评审：Claude 当前最强（目前 `claude-fable-5-1`，降级 `claude-opus-5-5`）。按"最强"由用户手动更新，名字只写在 `config/models.toml` |
-| 子任务 | `codex exec` 后台运行，每个任务一个独立 worktree |
+| 模型 | **2026-11-07 改**（见 `proposals/2026-11-07-claude-implement.md`）：实现和规划用 Claude Opus（目前 `claude-opus-5-5`）；重要、复杂的评审用 Claude 当前最强（目前 `claude-fable-5-1`，不降级，不能和实现用同一个模型），简单评审用 Opus。分级规则写在代码里。按"最强"由用户手动更新，名字只写在 `config/models.toml` |
+| 子任务 | **2026-11-07 改**：`claude -p`（Claude Code 无界面模式）后台运行，每个任务一个独立 worktree；开沙箱，主仓库 `.git` 设 denyWrite |
 | 并发 | 第一版就支持并行：DAG 里声明文件互不重叠、前置都已集成的节点同时跑；集成按顺序加锁 |
-| 提交 | 子任务一律通过 commit broker 提交（Codex 沙箱里 git 是只读的）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单 |
+| 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单 |
 | 给人看的页面 | 计划审阅页和状态页都发布到 OpenAI Sites，手机和电脑都能看 |
 | 签名 | 单台 Mac，Secretive + Touch ID；你说 go 之后用 `northstar approve-mission` 签名 |
 | 默认参数 | 每次提交最多 8 个文件；同一节点连续偏离 3 次熔断；并发上限写在配置里 |
@@ -76,14 +76,14 @@
   - 一份只追加的事件日志 `events.jsonl`：每次状态变化、提交、评审结论、纠偏都记一行，状态页和排查都从它读
   - mission 开始时把 `config/models.toml` 解析出的模型写进 mission 目录，之后不再改变
 - [ ] **【Claude Code】** 写 `orc` 骨架（Python）：`orc step --new "<请求>"` / `orc step --mission <m>`、`orc answer`、`orc status`、`orc doctor`。`step` 每次读状态、执行一段机械流程、打印一行 `next:`，可以重复执行（同一状态下重复运行结果相同），中断后再跑一次就能接上。所有拒绝和报错都写明"错在哪、该怎么做"。
-- [ ] **【Claude Code】** `orc doctor` 检查：信任层已安装、models.toml 里的模型可用、codex 和 claude 命令存在、Sites 发布可用。
+- [ ] **【Claude Code】** `orc doctor` 检查：信任层已安装、models.toml 里的模型可用、角色用到的命令（claude，有角色用 codex 时也查 codex）存在、Sites 发布可用。
 - [ ] **【你】** 审 PR。
 
 **完成标志**：搬入的旧测试全部通过；`orc step` 在空 mission 上能走到 `planning` 并打印正确的 `next:`。
 
 ## 阶段 3：规划与 go
 
-- [ ] **【Claude Code】** 规划阶段：`orc` 用 `plan_review` 模型（`claude -p`）启动规划会话，产出 `design.md`、`plan.md`、`task-dag.json` 和审阅页 HTML。DAG 每个节点必须带：声明的文件、验收标准、对应的 NORTHSTAR 条款、所属组件、依赖。用复用的 `validate-task-dag.sh` 校验（含节点间文件不重叠的检查）。
+- [ ] **【Claude Code】** 规划阶段：`orc` 用 `plan` 模型（`claude -p`）启动规划会话，产出 `design.md`、`plan.md`、`task-dag.json` 和审阅页 HTML。DAG 每个节点必须带：声明的文件、验收标准、对应的 NORTHSTAR 条款、所属组件、依赖。用复用的 `validate-task-dag.sh` 校验（含节点间文件不重叠的检查）。
   - 外部 PRD 在规划时并入 `design.md`，随冻结文件一起签名；评审只认签名的设计。
   - NORTHSTAR 尽量少加，只写方向；规划会话从设计里挑出少数"违反了就等于换了设计"的关键决定（例如"模型之前不准有按原话匹配的分支"），起草成 N# 约束放进 `drafts/NORTHSTAR.md`，由你 `northstar seal`。
 - [ ] **【Claude Code】** 规划中需要问你的问题，`orc` 输出 `ask-user`；你的回答经 `orc answer` 写回，再恢复同一个规划会话。
@@ -98,10 +98,10 @@
 ## 阶段 4：并行执行
 
 - [ ] **【Claude Code】** 调度：就绪条件是前置节点都已 `integrated`、声明文件不和任何运行中的节点重叠、未超过并发上限。每次有节点集成后重新计算。
-- [ ] **【Claude Code】** 启动子任务：每个节点一个 worktree；用 `codex exec` 在其中运行，模型和 effort 取自 mission 里记录的 `implement` 角色，沙箱为 workspace-write。brief 只给：任务、验收标准原文、声明文件、"每完成一条验收标准就发一次提交请求"。
+- [ ] **【Claude Code】** 启动子任务：每个节点一个 worktree；用 `claude -p` 在其中运行，模型和 effort 取自 mission 里记录的 `implement` 角色。会话设置：`sandbox.enabled`、`failIfUnavailable`、`allowUnsandboxedCommands:false`、`filesystem.denyWrite` 主仓库 `.git`（git 只读，提交必须走 broker）、网络按需放行；Edit / Write 用权限规则限制在自己的 worktree 里（先实测，见提案）；环境变量 `ORC_ROLE=implement`、`ORC_NODE=<node>`。brief 只给：任务、验收标准原文、声明文件、"每完成一条验收标准就发一次提交请求"。
 - [ ] **【Claude Code】** 进程监管：记录 PID、开始时间、退出码；超时按 Astra 的实际耗时设定，写进配置；崩溃按配置重试一次，再失败则节点进入 `blocked`。
 - [ ] **【Claude Code】** 子任务结果：要求子任务最后输出结构化结果（改了哪些文件、对应哪条验收标准、遗留问题），由 `orc` 按固定格式校验；校验不过视为未完成。
-- [ ] **【Claude Code】** commit broker（复用）在文件范围校验之后加对齐评审：调用 `northstar-review`（和提交前 hook `align.sh` 是同一个评审入口、同样的输入），由 `plan_review` 模型（Claude）对照 NORTHSTAR、签名的 `design.md`、本节点的 DAG 条目（声明文件、验收标准、条款）和这次的 diff，回答两个问题：方向有没有偏、做法是不是照设计。任一项不符判 DRIFT。
+- [ ] **【Claude Code】** commit broker（复用）在文件范围校验之后加对齐评审：调用 `northstar-review`（和提交前 hook `align.sh` 是同一个评审入口、同样的输入），按评审分级选模型（上一次 DRIFT 后的复审、改动超过 `deep_review_over_lines` 行用 `review`，其余用 `review_light`；`review` 不可用时不降级，节点进入 `blocked` 问用户），对照 NORTHSTAR、签名的 `design.md`、本节点的 DAG 条目（声明文件、验收标准、条款）和这次的 diff，回答两个问题：方向有没有偏、做法是不是照设计。任一项不符判 DRIFT。
   - 评审前先跑检查：broker 跑这次提交声明完成的验收标准对应的检查（按 `checks.json` 的检查 id），加上本节点此前已经通过的检查（防回退），结果写进 `events.jsonl`。不通过直接拒绝，不调用模型；通过后把检查结果连同 diff 交给评审（`--checks`）
   - DRIFT：拒绝，纠偏单（违反的是哪条 N# 或设计的哪一节、证据、验收标准原文）作为拒绝原因返回
   - diff 超过评审上限时不截断：拒绝并要求拆成更小的提交
@@ -109,17 +109,17 @@
   - 第 3 次：节点进入 `blocked`，`orc` 输出 `mediate`；涉及目标或范围的，升级给你
   - 评审通过一次，计数清零；评审服务出错时不放行
 - [ ] **【Claude Code】** 整体评审：节点进入 `submitted` 时，先跑本节点全部验收检查和测试（结果写进 `events.jsonl`），不通过直接回到 `rework`，不调用模型；通过后用 `northstar-review` 拿整个节点的累计 diff 和检查结果对照签名的设计再评审一次；DRIFT 时节点回到 `rework`，纠偏单同上。
-- [ ] **【Claude Code】** 纠偏和 rework 尽量回到同一个 codex 会话（用 codex exec 的会话恢复功能）；不可用时新开会话，附上完整 brief 和纠偏单。
+- [ ] **【Claude Code】** 纠偏和 rework 尽量回到同一个会话（`claude --resume`，阶段 4 实测）；不可用时新开会话，附上完整 brief 和纠偏单。
 - [ ] **【Claude Code】** 集成：复用 `integrate-task.sh`，在复用的生命周期锁内按顺序合并，不改写历史。
 - [ ] **【Claude Code】** 进入 `reviewing` 前重新判定，不只信 `events.jsonl`：日志回放只拦不合法的转换，伪造一条合法转换（`from` 写对）仍能通过；guard 也只认字面路径（`cd ~ && echo x >> .orc/...` 这类相对路径能绕过）。所以 `orc` 要从协议文件重新算：每个节点 `control/tasks/<node>/state` 是 integrated，且它的 merge commit 确实在父分支上。算出来的结果和日志不一致时停下，`next: error`。
-- [ ] **【Claude Code】** 为以上每个分支写契约测试，包括：两个不重叠节点同时运行、重叠节点被排队、DRIFT 三次熔断、子任务超时、两个节点同时集成被锁串行化、检查不通过时不调用评审模型、只跑声明完成的检查加此前通过的检查、整体评审 DRIFT 时节点回到 `rework`、超长 diff 被拒而不是截断。
+- [ ] **【Claude Code】** 为以上每个分支写契约测试，包括：两个不重叠节点同时运行、重叠节点被排队、DRIFT 三次熔断、子任务超时、两个节点同时集成被锁串行化、检查不通过时不调用评审模型、只跑声明完成的检查加此前通过的检查、整体评审 DRIFT 时节点回到 `rework`、超长 diff 被拒而不是截断、执行会话里 `git commit` 被沙箱拒绝、执行会话写自己 worktree 之外的文件被拒、`review` 模型不可用时节点进入 `blocked` 而不是降级。
 - [ ] **【你】** 审 PR。
 
 **完成标志**：上面列出的契约测试全部通过。
 
 ## 阶段 5：验收、状态页、清理
 
-- [ ] **【Claude Code】** 最终审查：全部节点集成后，`plan_review` 模型对合并后的代码做一次整体审查，对照材料是签名的设计文件、NORTHSTAR 和全部检查结果；发现的问题按节点路由回 rework。
+- [ ] **【Claude Code】** 最终审查：全部节点集成后，`review` 模型对合并后的代码做一次整体审查，对照材料是签名的设计文件、NORTHSTAR 和全部检查结果；发现的问题按节点路由回 rework。
 - [ ] **【Claude Code】** 进入 `accepted` 前重新判定，不只信 `events.jsonl` 里的检查记录：`orc` 在合并后的代码上重新跑全部验收检查和测试，并确认 PR 的 CI（`northstar / verify` 和隐藏考题）通过；任何一项和日志对不上就停下，`next: error`。
 - [ ] **【你】** 写隐藏考题，放在 agent 读不到的地方（私有仓库，或 GitHub secret）。不能放进 `.northstar/`：它对 agent 可读，`inject.sh` 还会把它注入会话。
 - [ ] **【Claude Code】** CI 增加隐藏考题 job：用 agent 没有的凭证（GitHub secret）取考题并运行，只回报通过或失败，不回报内容；加进 main 的 required check。
@@ -134,7 +134,7 @@
 
 ## 阶段 6：薄 skill 与试运行
 
-- [ ] **【Claude Code】** 按 `slim/SKILL.md` 写 coordinator 的 skill，把其中关于子任务的描述改成 codex exec 的方式；常驻规则不超过 7 条。
+- [ ] **【Claude Code】** 按 `slim/SKILL.md` 写 coordinator 的 skill，把其中关于子任务的描述改成 `claude -p` 执行会话的方式；常驻规则不超过 7 条。
 - [ ] **【Claude Code】** 在一个玩具仓库上端到端跑一遍：至少 3 个节点、其中 2 个可以并行；人为制造一次越界写入和一次语义偏离，确认都被拽回。
 - [ ] **【你】** 用 orc 跑一个真实的小 mission，记录需要你介入的次数和原因。
 - [ ] **【Claude Code】** 按试运行暴露的问题修正。

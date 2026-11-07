@@ -1,6 +1,6 @@
 ---
 name: orchestrating
-description: Run a long multi-task coding mission end to end — plan with the plan_review model, implement each approved DAG node in a visible child task with the implement model, review, integrate, and report verified status. Use whenever the user asks to orchestrate, run a mission, or hand off a multi-step build.
+description: Run a long multi-task coding mission end to end — plan with the plan model, implement each approved DAG node in a sandboxed child session with the implement model, review, integrate, and report verified status. Use whenever the user asks to orchestrate, run a mission, or hand off a multi-step build.
 ---
 
 # Orchestrator
@@ -12,8 +12,8 @@ needs judgement: talking to the user, mediating questions, and deciding when to
 escalate. Reconstructing those mechanical steps by hand is how missions break,
 so leave them to `orc`.
 
-Model choice lives in `config/models.toml` (roles `implement` and
-`plan_review`). Never name a model yourself.
+Model choice lives in `orc/config/models.toml` (roles `implement`, `plan`,
+`review`, `review_light`). Never name a model yourself.
 
 ## The loop
 
