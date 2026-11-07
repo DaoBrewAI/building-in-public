@@ -84,8 +84,9 @@ class StepNew(OrcCase):
     def test_models_are_recorded_at_start_and_not_reread(self):
         _, mdir = self.new()
         models = json.loads((mdir / "models.json").read_text())
-        self.assertEqual(models["roles"]["implement"]["cli"], "codex")
-        self.assertEqual(models["roles"]["plan_review"]["cli"], "claude")
+        self.assertEqual(set(models["roles"]), {"implement", "plan", "review", "review_light"})
+        self.assertEqual(models["roles"]["implement"]["cli"], "claude")
+        self.assertNotEqual(models["roles"]["review"]["model"], models["roles"]["implement"]["model"])
         self.assertTrue(models["roles"]["implement"]["model"])
         created = self.events(mdir)[0]
         self.assertEqual(len(created["models"]), 64)
@@ -427,7 +428,7 @@ class Models(OrcCase):
     def test_minimal_parser_matches_tomllib_on_the_real_config(self):
         text = (ORC_ROOT / "config" / "models.toml").read_text()
         minimal = self.orc.parse_toml_minimal(text)
-        self.assertEqual(set(minimal), {"implement", "plan_review"})
+        self.assertEqual(set(minimal), {"implement", "plan", "review", "review_light"})
         try:
             import tomllib
         except ModuleNotFoundError:
@@ -435,10 +436,21 @@ class Models(OrcCase):
         self.assertEqual(minimal, tomllib.loads(text))
 
     def test_config_errors_say_what_to_fix(self):
+        def role(name, model, extra=""):
+            return f'[{name}]\ncli = "claude"\nmodel = "{model}"\neffort = "high"\n{extra}'
+        good = (role("implement", "opus") + role("plan", "opus")
+                + role("review", "fable", 'deep_review_over_lines = "300"\n') + role("review_light", "opus"))
+        p = self.tmp / "ok.toml"
+        p.write_text(good)
+        self.assertEqual(self.orc.resolve_models(p)["roles"]["review"]["model"], "fable")
         cases = [
-            ("[implement]\ncli = \"codex\"\nmodel = \"m\"\neffort = \"high\"\n", "缺少 [plan_review]"),
-            ("[implement]\ncli = \"codex\"\nmodel = \"m\"\neffort = \"high\"\n[plan_review]\ncli = \"claude\"\n", "缺少 model, effort"),
-            ("[implement]\ncli = \"claude\"\nmodel = \"m\"\neffort = \"h\"\n[plan_review]\ncli = \"claude\"\nmodel = \"m\"\neffort = \"h\"\n", "交叉评审"),
+            (role("implement", "opus"), "缺少 [plan]"),
+            (good.replace('model = "fable"\n', ''), "[review] 缺少 model"),
+            (good.replace('"fable"', '"opus"'), "重要的评审不能用 implement 的模型"),
+            (good.replace('deep_review_over_lines = "300"\n', 'deep_review_over_lines = "300"\nfallback = "opus"\n'),
+             "不能降级成 implement 的模型"),
+            (good.replace('"300"', '"很多"'), "deep_review_over_lines"),
+            (good.replace('[plan]\ncli = "claude"', '[plan]\ncli = "gemini"'), "cli 只能是 claude 或 codex"),
         ]
         for text, expect in cases:
             p = self.tmp / "m.toml"
@@ -451,8 +463,23 @@ class Models(OrcCase):
         self.assertIn("找不到模型配置", str(ctx.exception))
 
 
+class ReviewTier(OrcCase):
+    """重要、复杂的评审用 review（Fable），其余用 review_light（Opus）；由代码按固定规则判断。"""
+
+    def test_tiering_rules(self):
+        rr = lambda stage, lines=10, drift=False: self.orc.review_role(stage, lines, drift, 300)
+        self.assertEqual(rr("node"), "review")                   # 节点整体评审
+        self.assertEqual(rr("final"), "review")                  # 最终审查
+        self.assertEqual(rr("commit"), "review_light")           # 平时的小步评审
+        self.assertEqual(rr("commit", drift=True), "review")     # DRIFT 之后的复审
+        self.assertEqual(rr("commit", lines=300), "review_light")
+        self.assertEqual(rr("commit", lines=301), "review")      # 大改动
+        with self.assertRaises(self.orc.OrcError):
+            rr("whatever")
+
+
 class Doctor(OrcCase):
-    def fake_install(self):
+    def fake_install(self, with_codex=True):
         ns = self.tmp / "opt-northstar"
         (ns / "bin").mkdir(parents=True)
         (ns / "hooks").mkdir()
@@ -468,37 +495,49 @@ class Doctor(OrcCase):
         subprocess.run(["git", "config", "--global", "core.hooksPath", str(ns / "git")], env=self.env, check=True)
         fakebin = self.tmp / "fakebin"
         fakebin.mkdir()
-        for c in ("codex", "claude", "jq"):
+        for c in ("codex", "claude", "jq") if with_codex else ("claude", "jq"):
             (fakebin / c).write_text("#!/bin/sh\necho ok\n")
             (fakebin / c).chmod(0o755)
+        # PATH 只放假命令和系统目录：不受这台机器上装没装真的 codex / claude 影响
         return dict(self.env, ORC_NORTHSTAR_ROOT=str(ns), ORC_CLAUDE_MANAGED_SETTINGS=str(managed),
-                    ORC_CODEX_HOOKS=str(codex), PATH=f"{fakebin}:{os.environ['PATH']}")
+                    ORC_CODEX_HOOKS=str(codex), PATH=f"{fakebin}:/usr/bin:/bin")
 
     def test_all_good(self):
-        env = self.fake_install()
+        env = self.fake_install(with_codex=False)
         r = self.run_orc("doctor", env=env)
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertNotIn("FAIL", r.stdout)
         self.assertIn("warn  Sites 发布", r.stdout)
         self.assertIn("orc doctor --live", r.stdout)
+        self.assertIn("skip  命令：codex", r.stdout)       # 没有角色用 codex 时不要求安装
+
+    def test_codex_required_only_when_a_role_uses_it(self):
+        env = self.fake_install(with_codex=False)
+        text = (ORC_ROOT / "config" / "models.toml").read_text()
+        light = text.index("[review_light]")
+        p = self.tmp / "m.toml"
+        p.write_text(text[:light] + text[light:].replace('cli    = "claude"', 'cli    = "codex"', 1))
+        r = self.run_orc("doctor", env=dict(env, ORC_MODELS_TOML=str(p)))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("FAIL  命令：codex", r.stdout)
 
     def test_live_calls_each_model_once(self):
-        env = self.fake_install()
+        env = self.fake_install(with_codex=False)
         r = self.run_orc("doctor", "--live", env=env)
         self.assertEqual(r.returncode, 0, r.stdout)
-        self.assertIn("ok  模型可用：implement", r.stdout)
-        self.assertIn("ok  模型可用：plan_review", r.stdout)
+        self.assertIn("ok  模型可用：claude-opus-5-5（implement、plan、review_light）", r.stdout)
+        self.assertIn("ok  模型可用：claude-fable-5-1（review）", r.stdout)
 
     def test_live_requires_a_line_that_is_exactly_ok(self):
-        env = self.fake_install()
+        env = self.fake_install(with_codex=False)
         fakebin = Path(env["PATH"].split(":")[0])
-        (fakebin / "codex").write_text("#!/bin/sh\necho 'token limit reached'\n")   # 含 ok 子串，但不是 ok
+        (fakebin / "claude").write_text("#!/bin/sh\necho 'token limit reached'\n")   # 含 ok 子串，但不是 ok
         r = self.run_orc("doctor", "--live", env=env)
         self.assertEqual(r.returncode, 1)
-        self.assertIn("FAIL  模型可用：implement", r.stdout)
-        (fakebin / "codex").write_text("#!/bin/sh\necho '  OK  '\n")
+        self.assertIn("FAIL  模型可用：claude-opus-5-5", r.stdout)
+        (fakebin / "claude").write_text("#!/bin/sh\necho '  OK  '\n")
         r = self.run_orc("doctor", "--live", env=env)
-        self.assertIn("ok  模型可用：implement", r.stdout)
+        self.assertIn("ok  模型可用：claude-opus-5-5", r.stdout)
 
     def test_worktrees_inside_orc_home_fail_doctor(self):
         env = self.fake_install()
