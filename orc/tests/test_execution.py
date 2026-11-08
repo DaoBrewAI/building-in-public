@@ -237,7 +237,7 @@ class HappyPath(ExecCase):
     def test_two_independent_nodes_run_in_parallel_and_integrate_one_at_a_time(self):
         self.simple(("a", "b"))
         self.script("a", commit({"a.txt": "a\n"}, [1]))
-        self.script("b", commit({"b.txt": "b\n"}, [1], message="[N1] 完成"))   # 执行会话自己带了条款标签
+        self.script("b", commit({"b.txt": "b\n"}, [1], message="[N1] b：完成"))   # 执行会话自己带了条款标签和节点名
         r = self.step()
         self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
         self.assertIn("approved → executing", r.stdout)
@@ -267,7 +267,7 @@ class HappyPath(ExecCase):
         msg = self.git("log", "-1", "--format=%s", f"orc-task/m1/a")
         self.assertTrue(msg.startswith("[N1] a："), msg)                       # 提交说明带 N# 条款
         msg = self.git("log", "-1", "--format=%s", f"orc-task/m1/b")
-        self.assertEqual(msg, "[N1] b：完成")                                   # 执行会话自带的标签不重复
+        self.assertEqual(msg, "[N1] b：完成")                                   # 执行会话自带的标签和节点名不重复
 
     def test_only_declared_checks_and_previously_passed_checks_run(self):
         self.simple(("a",), two_acceptance=True)

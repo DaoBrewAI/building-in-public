@@ -1967,7 +1967,9 @@ def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     base = read1(ctl / "worktrees.txt").split("\t")[2]
     clauses = task.get("clauses", [])
     # 执行会话常按仓库的提交约定自己带上 [N#]（实测 2026-11-08）；条款标签由 orc 统一加，去掉它带的，免得重复
+    # 节点名也一样：实测（2026-11-08，mission calc-ops）执行会话写了「multiply：…」，orc 再加一次就成了「multiply：multiply：…」
     text_ = re.sub(r"^\[[^\]]*\]\s*", "", result["message"].strip())
+    text_ = re.sub(rf"^{re.escape(node)}\s*[:：]\s*", "", text_)
     message = f"[{','.join(clauses)}] {node}：{text_}" if clauses else f"[orc] {node}：{text_}"
     digest = hashlib.sha256(json.dumps({"job": job, "result": result}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     numbers = [int(p.stem.rsplit("-", 1)[1]) for p in work.glob("COMMIT-*-*.json") if p.stem.rsplit("-", 1)[1].isdigit()]
