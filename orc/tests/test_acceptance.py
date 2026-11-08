@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_execution import ExecCase, commit  # noqa: E402
+from test_execution import ExecCase, commit, task  # noqa: E402
 
 FAKE_GH = r'''#!/usr/bin/env python3
 # 假 gh：pr list / pr create / pr view / pr checks / repo view。PR 记在 $ORC_FAKE/gh-prs.json；
@@ -152,6 +152,53 @@ class HappyPath(AcceptCase):
         self.assertLess(text.index("要清理的"), text.index("accepted → cleaned"))
         self.assertEqual(self.git("branch", "--list", "keep-me").strip(), "keep-me")
         self.assertEqual(self.state(), "cleaned")
+
+
+class GitInCheckCopies(AcceptCase):
+    """检查用的副本带 git 历史（proposals/2026-11-08-checks-need-git.md）：产品仓库自己的检查（daoharness-core 的
+    core_checks.py）要用 git ls-files、git merge-base origin/main HEAD；副本是 git clone --shared，产品仓库不被写。"""
+
+    GIT_CHECK = ("set -e\nbase=$(git merge-base origin/{br} HEAD)\ntest -n \"$base\"\n"
+                 "git ls-files --cached --others --exclude-standard | grep -qx a.txt\ngrep -q '^a$' a.txt\n")
+
+    def test_checks_that_use_git_pass_at_the_commit_gate_and_in_final_review(self):
+        br = self.git("symbolic-ref", "--short", "HEAD")
+        m = self.signed([task("a", ["a.txt"], ["a.txt 的第一行是 a"])],
+                        [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"}],
+                        {"tests/orc/check_a.sh": self.GIT_CHECK.format(br=br)})
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        gate = [e for e in self.ev("job-exit", type="gate", node="a")]
+        self.assertEqual([e["outcome"] for e in gate][-1:], ["committed"], gate)       # 提交关口：worktree 的改动盖在 clone 上
+        final, = self.ev("job-exit", type="final")
+        self.assertEqual((final["outcome"], final["checks"]), ("passed", {"ca": True}))
+
+    def test_copies_are_clones_with_history_and_the_product_repo_is_not_written(self):
+        orc = self.orc
+        m = self.simple(("a",))
+        refs = self.git("for-each-ref")
+        head = self.git("rev-parse", "HEAD")
+        snap = self.tmp / "snap"
+        self.assertEqual(orc.snapshot_repo(m, snap), head)
+        self.assertEqual(self.git("rev-parse", "HEAD", cwd=snap), head)
+        self.assertEqual(self.git("ls-files", cwd=snap), self.git("ls-files"))           # git 在副本里能用
+        # 节点 worktree：已提交的、改了没提交的、删掉的、新加的都要和 worktree 一样
+        wt = self.tmp / "wt-copy-src"
+        self.git("worktree", "add", "-q", "--detach", str(wt), "HEAD")
+        tracked = self.git("ls-files", cwd=wt).split()
+        (wt / "new.txt").write_text("new\n")
+        (wt / tracked[0]).unlink()
+        dest = self.tmp / "wt-copy"
+        orc.copy_worktree(wt, dest)
+        self.assertTrue((dest / ".git").is_dir())
+        self.assertEqual((dest / "new.txt").read_text(), "new\n")
+        self.assertFalse((dest / tracked[0]).exists())
+        status = self.git("status", "--porcelain", cwd=dest)
+        self.assertIn(f"D {tracked[0]}", status)
+        self.assertIn("?? new.txt", status)
+        self.git("worktree", "remove", "--force", str(wt))
+        self.assertEqual(self.git("for-each-ref"), refs)                                 # 产品仓库的 ref 没被动过
 
 
 class FinalReview(AcceptCase):
