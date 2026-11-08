@@ -50,7 +50,7 @@ new → planning → verifying → plan-review → approved → executing → re
 | `plan-review` | 审阅页已发布，等用户说 go 并签名 | `northstar verify-mission` 通过，且 `verify-approved-authority.py` 校验哈希通过 | `approved` |
 | `approved` | 冻结文件已签名 | 无条件，开始调度 | `executing` |
 | `executing` | 节点并行执行、提交、集成（阶段 4） | 所有节点都 `integrated` | `reviewing` |
-| `reviewing` | 最终审查（阶段 5） | 审查通过，状态页已发布 | `accepted` |
+| `reviewing` | 最终审查、开 PR、等 CI、写状态页（阶段 5） | 审查通过、CI 通过、重新核对一致、状态页已发布；审查打回节点时回到 `executing` | `accepted`（或 `executing`） |
 | `accepted` | 已验收 | 清理完成 | `cleaned` |
 | `cleaned` | 终态 | — | — |
 | `blocked` | 需要用户或 coordinator 决定（熔断、升级的问题）。**进入时必须带一个问题**（状态事件的 `question` 字段），只能经 `block()` 进入 | **这个问题**有了 `answer` 事件（别的问题的回答不算） | 进入 blocked 之前的状态 |
@@ -257,11 +257,68 @@ pending → running → submitted → integrated
 
 `node-state`、`commit`、`review`、`correction`、`check` 沿用上表。
 
+## 验收（阶段 5）
+
+四件事开工前由林翰定下，见 `proposals/2026-11-08-phase5-open-points.md`：orc 开 PR、你合并；集成的合并提交带 `[N#]`；隐藏考题放在 agent 的 token 访问不到的 `DaoBrewAI/LY_orchestrator-hub`；最终审查不通过时重新打开节点。
+
+`reviewing` 里按顺序做下面几步。每一步的结果都按 mission 分支当时的 tip 记在日志里：同一个 tip 已经通过的步骤不重做；没通过、停下问过用户之后再运行，就重做这一步。
+
+### 1. 最终审查（后台任务 `final`）
+
+- 从 mission 分支的 tip 导出一份没有 `.git` 的副本，在沙箱里重跑**全部**冻结检查，再跑产品仓库自己的 `.northstar/checks/run_all.sh`（有的话）。规则同提交关口：只能写副本、不能联网、每条最多 300 秒。
+- 有冻结检查没通过：按检查所属的节点打回，**不调用模型**。`run_all.sh` 没通过时落不到节点，停下 `mediate`。
+- 检查都通过：`review` 角色的模型（`claude -p`，只放行 Read）在仓库外的临时目录里看代码副本。副本不带 `.northstar/` 和 `.github/`，Stop hook 不会拦它。提示词里有 NORTHSTAR、签名的设计、DAG、检查结果和整个 mission 的 diff；diff 超过 60000 字节就只给文件列表，让它用 Read 看。模板 `orc/templates/final-review-brief.md`。它最后输出 `{"verdict": "pass" | "fail", "issues": [{"node", "problem", "evidence"}]}`；每个问题必须落在一个 DAG 节点上。格式不对、节点不存在、模型出错，都**不放行、不降级**，停下 `ask-user`，回答后重做。
+
+### 2. 打回节点（审查不通过）
+
+- 对每个被点名的节点（重新打开，`node-reopen` 事件）：
+  - 节点的 worktree 和分支快进到 mission 分支的 tip（它已经包含全部节点的改动），控制文件里的基线也改成这个 tip，之后的提交关口、整体评审和集成只看这次的修复；
+  - 控制文件的 `state` 改回 `ready`，写 `unresolved-rework` 和纠偏单，节点状态 `integrated → rework`；
+  - mission `reviewing → executing`；执行会话 `--resume` 回到同一个会话，收到纠偏单。
+- 之后和阶段 4 一样：提交关口、整体评审、`integrate-task.sh` 再合并一次（对同一个分支再合并，复用脚本不用改），全部集成后回到 `reviewing`，新的 tip 再做一次最终审查。
+- 最多打回 2 轮。第 3 次不通过就熔断，mission `blocked`（`mediate`），回答后重新做最终审查，计数清零。
+
+### 3. PR 和 CI（后台任务 `ci`）
+
+- 产品仓库没有 `origin` 时停下（`next: error`），说明要先建远程仓库。不跳过。
+- 把 `orc/<mission>` 推到 `origin`，用 `gh` 开一个指向默认分支的 PR；已经有这个分支的 open PR 就用它。记 `pr` 事件。**合并由你来做。**
+- 等 CI：每隔 20 秒查一次 `gh pr checks`，直到 `orc/config/orc.toml` 的 `[acceptance] required_checks`（默认 `verify,exam`）每一个都出现并结束，最多 `ci_timeout_seconds`。只有 `pass` 算通过；`skipping`（草稿 PR 上跳过的考题）不算。PR 的 head 不是审查过的 tip 时直接判失败。
+- CI 没通过、超时：停下 `ask-user`。隐藏考题只报通过或失败，orc 不知道是哪一题，所以不自动打回节点。回答后只重等 CI，不重做最终审查。
+
+### 4. 进入 `accepted` 前重新核对
+
+不只信日志里的记录，重新核对：每个节点的协议文件是 `integrated` 且集成提交在 mission 分支上；mission 分支的 tip 就是最终审查看过的那个；最终审查的记录里全部冻结检查都跑了、都通过；`gh pr view` 查到的 PR head 就是这个 tip；CI 记录里 `required_checks` 全部是 `pass`。任何一项对不上就 `next: error`。
+
+### 5. 状态页
+
+- **说明**（后台任务 `notes`）：用 `plan` 角色的模型，没有任何工具，在仓库外的空目录里，只按提示词里的材料（请求、设计、提交列表、检查、diff）写 5 到 15 行 Markdown 列表。模板 `orc/templates/status-notes-brief.md`。orc 按 `northstar-status` 的规则核对：每行至少一个引用（`[commit:…]`、`[check:…]`、`[file:路径:行号]`）；引用的提交、检查、文件和行号都要存在；每个提交都要被引用；不能写「完成」「passed」这类进度判断。不合格就把问题发回去重写，2 次还不行就 `mediate`。
+- **页面**由 orc 生成（`render_status`），不交给模型：流程条、按组件分组的架构图（颜色是合并后代码上的检查结果）、**每个 DAG 节点一行**（状态、冻结检查、提交、集成提交、纠偏次数）、最终审查每一轮、PR 和 CI、清理结果，最后是核对过的说明。每条事实后面标着它在 `events.jsonl` 里的行号。
+- 发布成仅本人可见的 Artifact（`publish.json` 的 `status`），之后更新同一个链接。发布成功后 mission 进入 `accepted`。
+
+### 6. 清理（`accepted → cleaned`）
+
+- 清单只来自 orc 自己记录过的：每个节点控制目录的 `worktrees.txt`（worktree 和分支），以及 `exec-setup` 记录的父 worktree。**先把清单打印出来，再执行。**
+- 删 worktree 前确认它在 `git worktree list` 里、没有未提交的改动；删分支前确认它已经合进 mission 分支。任何一项不满足就停下，不删。
+- mission 分支 `orc/<mission>` 保留：PR 还没合并。记 `cleanup` 事件（删了什么、留了什么），进入 `cleaned`。
+- `cleaned` 时重新生成状态页（加上清理结果）并更新同一个链接，然后输出 `next: report <状态页链接>`。没有状态页就不输出 `report`。
+
+### 事件
+
+| `kind` | 额外字段 |
+| --- | --- |
+| `job-start` / `job-exit` | 新的任务类型 `final`、`ci`、`notes`，`node` 是 `_mission`，另带 `tip`。`final` 的结果有 `checks`、`review`、`issues`；`ci` 有 `pr`、`checks`（检查名 → pass / fail / pending …） |
+| `node-reopen` | `node`、`base`（新的基线，即当时的 tip）、`card`、`round` |
+| `pr` | `url`、`number`、`tip`、`branch` |
+| `cleanup` | `removed`、`kept` |
+
+`check` 和 `review` 事件在最终审查时 `node` 为空、`stage` 是 `final`。
+
 ## `orc step` 的约定
 
 - 每次运行：拿锁 → 对齐 `state` 与日志 → 执行当前状态的一段机械流程 → 写日志和状态 → 放锁 → 最后一行打印 `next: …`。
 - **可以重复运行**：同一状态下重复运行，输出相同，不追加重复事件。
 - **中断后再跑一次就能接上**：先写事件再更新 `state`；中断在两者之间时，下次运行按日志补齐。
 - `next:` 只有这几种：`ask-user <问题>`、`go-gate <链接>`、`sign <control 目录>`、`mediate <文件>`、`report <链接>`、`wait`、`error <错在哪、该怎么做>`。
-- `wait` 表示后台有进程在跑（规划会话或验证会话）。coordinator 在后台运行 `orc wait --mission <m>`，它返回后再运行 `orc step`。
+- `report <链接>` 只在 `cleaned` 时输出，链接是最新的状态页。
+- `wait` 表示后台有进程在跑（规划会话、验证会话，或执行、验收阶段的后台任务）。coordinator 在后台运行 `orc wait --mission <m>`，它返回后再运行 `orc step`。
 - 所有拒绝和报错都写明错在哪、该怎么做。

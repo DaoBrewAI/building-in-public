@@ -8,7 +8,7 @@ rc=0
 
 run() { local name="$1"; shift; echo "######## $name"; "$@" || { echo "FAILED: $name"; rc=1; }; }
 
-for t in test_orc.py test_planning.py test_execution.py; do
+for t in test_orc.py test_planning.py test_execution.py test_acceptance.py; do
   run "$t ($(python3 --version 2>&1))" python3 "$D/$t"
   for py in python3.14 python3.13 python3.12 python3.11; do
     if command -v "$py" >/dev/null && [ "$("$py" -c 'import sys; print(sys.version_info >= (3, 11))')" = True ]; then

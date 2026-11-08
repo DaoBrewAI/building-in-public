@@ -25,6 +25,32 @@ fake = pathlib.Path(os.environ["ORC_FAKE"])
 args = sys.argv[1:]
 prompt = sys.stdin.read()
 role = os.environ.get("ORC_ROLE")
+envelope = lambda result: print(json.dumps({"type": "result", "is_error": False, "result": result}, ensure_ascii=False))
+if role == "publish":
+    # 假发布（阶段 5 的状态页）：记下调用，输出 claude.ai 链接
+    pages = sorted(pathlib.Path(".").glob("*.html"))
+    n = len(list(fake.glob("publish-call-*.json"))) + 1
+    (fake / f"publish-call-{n}.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt,
+        "pages": [p.name for p in pages]}, ensure_ascii=False))
+    envelope(json.dumps({"url": f"https://claude.ai/artifact/fake-{pages[0].stem if pages else 'none'}"}))
+    sys.exit(0)
+if role in ("final-review", "notes"):
+    # 最终审查：按 script-final 第 n 行（JSON），默认通过。状态页说明：按 script-notes 第 n 行，默认 AUTO（引用提示词里列出的每个提交）
+    name = "final" if role == "final-review" else "notes"
+    n = len(list(fake.glob(f"{name}-call-*.json"))) + 1
+    cwd = pathlib.Path(os.getcwd())
+    (fake / f"{name}-call-{n}.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt,
+        "files": sorted(str(p.relative_to(cwd)) for p in cwd.rglob("*") if p.is_file())}, ensure_ascii=False))
+    script = fake / f"script-{name}"
+    lines = [l for l in script.read_text().splitlines() if l.strip()] if script.exists() else []
+    line = lines[n - 1] if n - 1 < len(lines) else ("AUTO" if name == "notes" else '{"verdict": "pass", "issues": []}')
+    if line == "AUTO":
+        import re
+        line = "\n".join(f"- 提交 {h} 的改动 [commit:{h}]" for h in re.findall(r"^- `([0-9a-f]{7,})` ", prompt, re.M))
+    elif line.startswith("raw:"):
+        line = line[4:].replace("\\n", "\n")
+    envelope(line)
+    sys.exit(0)
 session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
 name = f"exec-{os.environ.get('ORC_NODE')}" if role == "implement" else "dispute"
 if role not in ("implement", "dispute"):
@@ -113,7 +139,8 @@ class ExecCase(PlanningCase):
         self.mdir = self.home / "missions" / "m1"
 
     def config(self, **values):
-        (self.tmp / "orc.toml").write_text("[execution]\n" + "".join(f'{k} = "{v}"\n' for k, v in values.items()))
+        (self.tmp / "orc.toml").write_text("[execution]\n" + "".join(f'{k} = "{v}"\n' for k, v in values.items())
+                                           + '[acceptance]\nrequired_checks = "verify,exam"\nci_timeout_seconds = "5"\n')
 
     # -- 搭一个已经签好名、停在 approved 的 mission（跳过规划和验证会话）
     def signed(self, tasks, checks, tests):
@@ -201,7 +228,8 @@ class ExecCase(PlanningCase):
         return self.tmp / "wt" / "m1" / node
 
     def reached_reviewing(self, r):
-        self.assertIn("reviewing 阶段的流程还没有实现", self.next_line(r), r.stdout + r.stderr)
+        """阶段 4 的测试到 reviewing 为止：最终审查（假评审默认通过）之后要开 PR，测试仓库没有 origin，停在这里。"""
+        self.assertIn("没有 origin", self.next_line(r), r.stdout + r.stderr)
         self.assertEqual((self.mdir / "state").read_text().strip(), "reviewing")
 
 
