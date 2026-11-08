@@ -44,6 +44,16 @@ if os.environ.get("ORC_ROLE") == "publish":
         line = json.dumps({"error": "Artifact tool unavailable"})
     print(json.dumps({"type": "result", "is_error": False, "result": "发布好了。\n" + line}))
     sys.exit(0)
+if os.environ.get("ORC_ROLE") == "test-deps":
+    # 假依赖复核：按 $ORC_FAKE/test-deps 第 n 行输出（默认没有发现）；fail 表示模型出错
+    n = len(list(fake.glob("test-deps-call-*.json"))) + 1
+    (fake / f"test-deps-call-{n}.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt}))
+    lines = [l for l in (fake / "test-deps").read_text().splitlines() if l.strip()] if (fake / "test-deps").exists() else []
+    line = lines[n - 1] if n - 1 < len(lines) else '{"findings": []}'
+    if line == "fail":
+        sys.exit(3)
+    print(json.dumps({"type": "result", "is_error": False, "result": line}))
+    sys.exit(0)
 if os.environ.get("ORC_ROLE") == "verify":
     # 假验证会话：在 repo/ 里写测试，在工作目录根上写 checks.json
     n = len(list(fake.glob("verify-call-*.json"))) + 1
@@ -88,8 +98,10 @@ if os.environ.get("ORC_ROLE") == "verify":
         write("test -f src/export.py\n", files=("src/export.py",))
     elif action == "uncovered":
         write("test -f src/export.py\n", acceptance=(2,))
-    elif action in ("sibling-import", "sibling-ok"):   # 两个并行节点：service 的测试用了 fakes 新建的 src/fake.py
-        svc = "import sys\nsys.path.insert(0, 'src')\n" + ("from fake import done\n" if action == "sibling-import" else "") + "from service import run\n"
+    elif action in ("sibling-import", "sibling-ok", "sibling-string"):   # 两个并行节点：service 的测试用了 fakes 新建的 src/fake.py
+        extra = {"sibling-import": "from fake import done\n", "sibling-ok": "",
+                 "sibling-string": "def test_svc():\n    run_with('fake:done')\n"}[action]   # 字符串交给会导入它的代码
+        svc = "import sys\nsys.path.insert(0, 'src')\n" + extra + "from service import run\n"
         for name, body in (("service", svc), ("fakes", "import sys\nsys.path.insert(0, 'src')\nfrom fake import done\n")):
             f = work / "repo" / "tests" / "orc" / f"test_{name}_acceptance.py"
             f.parent.mkdir(parents=True, exist_ok=True)
@@ -502,6 +514,55 @@ class Verify(PlanningCase):
         self.assertIn("用到节点 fakes 新建的 src/fake.py", self.vcalls()[1]["prompt"])
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
+
+    def test_model_finding_is_checked_by_orc_before_sending_back(self):
+        # 写死的检查看不到字符串；模型找到了，orc 核对那一行确实在测试里、写着 fake，才退回。编出来的那条丢掉
+        real = {"check": "service", "test": "tests/orc/test_service_acceptance.py", "line": "run_with('fake:done')",
+                "file": "src/fake.py", "why": "run_with 会导入 fake 模块"}
+        made_up = dict(real, line="import fake  # 测试里没有这一行")
+        own = dict(real, check="fakes", test="tests/orc/test_fakes_acceptance.py", line="from fake import done")
+        (self.fake / "test-deps").write_text(json.dumps({"findings": [real, made_up, own]}) + "\n")
+        self.vscript("sibling-string", "sibling-ok")
+        mdir = self.to_plan_review("siblings")
+        self.through_verify()
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
+        first = [e for e in self.events(mdir) if e["kind"] == "verifier-exit"][0]
+        self.assertEqual(first["outcome"], "invalid")
+        self.assertEqual(len(first["problems"]), 1, first["problems"])
+        self.assertIn("检查 service 挂在节点 service 上，跑的测试 tests/orc/test_service_acceptance.py 里 "
+                      "`run_with('fake:done')` 运行时要用到节点 fakes 新建的 src/fake.py", first["problems"][0])
+        review = [e for e in self.events(mdir) if e["kind"] == "test-deps-review"][0]
+        self.assertEqual([d["why_not"] for d in review["dropped"]], ["测试里没有这一行", "那个节点是本节点或它的前置节点"])
+        call = json.loads((self.fake / "test-deps-call-1.json").read_text())
+        models = json.loads((mdir / "models.json").read_text())["roles"]
+        self.assertEqual(call["args"][call["args"].index("--model") + 1], models["review_light"]["model"])
+        self.assertIn("--tools", call["args"])                                  # 不给工具，只读提示词
+        self.assertIn("run_with('fake:done')", call["prompt"])                  # 测试全文在提示词里
+        self.assertIn('"new_files": [\n      "src/fake.py"', call["prompt"])
+        self.wait()
+        r = self.step()                                                          # 第二轮：模型没有发现
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
+
+    def test_model_error_does_not_let_tests_through_and_is_retried(self):
+        (self.fake / "test-deps").write_text("fail\n")
+        self.vscript("sibling-ok")
+        mdir = self.to_plan_review("siblings")
+        self.through_verify()
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: error 验收测试的依赖复核"), r.stdout + r.stderr)
+        self.assertIn("评审出错时不放行", self.next_line(r))
+        self.assertEqual((mdir / "state").read_text().strip(), "verifying")
+        r = self.step()                                                          # 重试：这次模型正常
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
+
+    def test_single_node_mission_does_not_call_the_model(self):
+        self.vscript("ok")
+        self.to_plan_review("ok")
+        self.through_verify()
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
+        self.assertFalse(list(self.fake.glob("test-deps-call-*.json")))
 
     def test_existing_file_cannot_be_used_as_a_test(self):
         (self.repo / "tests" / "orc").mkdir(parents=True)

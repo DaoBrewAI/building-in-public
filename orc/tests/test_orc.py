@@ -716,6 +716,11 @@ class TestImportsFollowDag(unittest.TestCase):
         self.assertIn("检查 svc-1、svc-all 挂在节点 service 上，跑的测试 tests/test_service.py", ps[0])  # 两个检查合成一条
         self.assertIn("检查 svc-all 挂在节点 service 上，跑的测试 tests/test_fakes.py", ps[1])  # 跑整个目录：挂错了节点
 
+    def test_module_names_of_a_new_file(self):
+        self.assertEqual(self.orc.module_names("pkg/intake/fake.py"), ["pkg/intake/fake.py", "pkg.intake.fake", "pkg/intake/fake"])
+        self.assertIn("pkg.intake", self.orc.module_names("src/pkg/intake/__init__.py"))
+        self.assertIn("src/pkg/intake/__init__.py", self.orc.module_names("src/pkg/intake/__init__.py"))
+
     def test_string_spec_is_not_an_import(self):
         # runner 的验收标准就是 DEFAULT_PROCESSOR == "pkg.intake.fake:hold"：比较字符串不需要 fake.py 存在
         tests = {"tests/test_runner.py": "def test_d():\n    from pkg.intake.processor import D\n"

@@ -1009,6 +1009,109 @@ def test_dependency_problems(tasks: Dict[str, dict], new_files: Dict[str, List[s
     return problems
 
 
+def module_names(path: str) -> List[str]:
+    """新建文件的写法：路径本身，和按导入根（仓库根、src/）算出的模块名。"""
+    names = [path]
+    for p in ([path, path[4:]] if path.startswith("src/") else [path]):
+        if p.endswith(".py"):
+            p = p[:-3]
+            if p.endswith("/__init__"):
+                p = p[:-len("/__init__")]
+            if p:
+                names.append(p.replace("/", "."))
+        names.append(p)
+    return list(dict.fromkeys(names))
+
+
+TEST_DEPS_TIMEOUT = 900          # 依赖复核模型最多等多久（秒）
+TEST_DEPS_MAX_CHARS = 400_000    # 测试文件太多太长就不交给模型（记一条事件），只靠写死的检查
+
+
+def model_test_dependency_problems(m: Mission, tasks: Dict[str, dict], new_files: Dict[str, List[str]],
+                                   test_files: List[str], checks: List[dict],
+                                   read: Callable[[str], Optional[str]]) -> List[str]:
+    """写死的导入检查之外，再让 review_light 模型读一遍测试，找运行时才会用到别的节点新文件的地方
+    （"模块:名字" 字符串交给会导入它的代码、importlib、子进程里的代码、按路径读文件）。
+    模型只负责找；每一条都由 orc 核对：检查存在且跑到这个测试、引用的那一行真的在测试里、这一行写着那个文件的
+    模块名或路径、文件是别的节点新建的且那个节点不是前置节点。核对不上的丢掉（记进事件），核对上的才退回验证会话。
+    模型没能完成时不放行：抛 OrcError，下次 orc step 重试（评审不降级、出错时不放行）。"""
+    allowed = {c["id"]: node_ancestors(tasks, c["node"]) | {c["node"]} for c in checks}
+    if not any(set(who) - allowed[c["id"]] for c in checks for who in new_files.values()):
+        return []                # 没有哪个检查碰得到别的节点的新文件（例如只有一个节点），不用问模型
+    ran = {c["id"]: check_test_files(c["command"], test_files) for c in checks}
+    texts = {t: read(t) for t in test_files}
+    if sum(len(x or "") for x in texts.values()) > TEST_DEPS_MAX_CHARS:
+        m.append("test-deps-review", "orc step", outcome="skipped", reason=f"测试文件超过 {TEST_DEPS_MAX_CHARS} 个字符")
+        return []
+    dag = [{"id": tid, "depends_on": t.get("depends_on", []),
+            "new_files": [f for f, who in new_files.items() if tid in who]} for tid, t in tasks.items()]
+    values = {"{{DAG}}": json.dumps(dag, ensure_ascii=False, indent=2),
+              "{{CHECKS}}": json.dumps([{"id": c["id"], "node": c["node"], "command": c["command"], "tests": ran[c["id"]]}
+                                        for c in checks], ensure_ascii=False, indent=2),
+              "{{TESTS}}": "\n\n".join(f"### {t}\n\n````\n{x}\n````" for t, x in texts.items() if x is not None)}
+    prompt = (ORC_ROOT / "templates" / "test-deps-brief.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        prompt = prompt.replace(key, value)
+    if shutil.which("claude") is None:
+        raise OrcError("PATH 里找不到 claude，验收测试的依赖复核跑不了 → 安装 Claude Code 后再运行 orc step。")
+    role = m.roles()["review_light"]
+    import tempfile
+    cwd = Path(tempfile.mkdtemp(prefix="orc-test-deps."))      # 没有工具、在仓库外：只按提示词里的材料判断
+    try:
+        run = subprocess.run(["claude", "-p", "--model", role["model"], "--effort", role["effort"],
+                              "--output-format", "json", "--tools", ""],
+                             input=prompt, cwd=str(cwd), capture_output=True, text=True, timeout=TEST_DEPS_TIMEOUT,
+                             env=dict(os.environ, ORC_ROLE="test-deps"))
+        write_atomic(cwd / "out.json", run.stdout)
+        text, error = claude_result(cwd / "out.json") if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+    except subprocess.TimeoutExpired:
+        text, error = None, f"超过 {TEST_DEPS_TIMEOUT} 秒没有结束"
+    finally:
+        shutil.rmtree(cwd, ignore_errors=True)
+    obj = last_json_object(text) if text is not None else None
+    if error or obj is None or not isinstance(obj.get("findings"), list):
+        reason = error or "没有按格式输出 findings"
+        m.append("test-deps-review", "orc step", outcome="unavailable", reason=reason, model=role["model"])
+        raise OrcError(f"验收测试的依赖复核（{role['model']}）没能完成：{reason}。评审出错时不放行："
+                       "检查登录、代理和额度后再运行 orc step，会重试这一步。")
+    checks_by_id = {c["id"]: c for c in checks}
+    hits: Dict[Tuple[str, str, str], dict] = {}
+    dropped = []
+    for f in obj["findings"]:
+        f = f if isinstance(f, dict) else {}
+        cid, test, path, line = (str(f.get(k, "")) for k in ("check", "test", "file", "line"))
+        line = line.strip()
+        c = checks_by_id.get(cid)
+        who = new_files.get(path, [])
+        source = texts.get(test) or ""
+        matched = [l.strip() for l in source.splitlines() if line and (l.strip() == line or (len(line) >= 10 and line in l))]
+        why_not = ("检查不存在" if not c else "这个检查不跑这个测试" if test not in ran[cid]
+                   else "不是哪个节点新建的文件" if not who
+                   else "那个节点是本节点或它的前置节点" if set(who) & allowed[cid]
+                   else "测试里没有这一行" if not matched
+                   else "这一行没写那个文件的模块名或路径" if not any(n in matched[0] for n in module_names(path))
+                   else None)
+        if why_not:
+            dropped.append({**{k: f.get(k) for k in ("check", "test", "file", "line")}, "why_not": why_not})
+            continue
+        hit = hits.setdefault((c["node"], test, path), {"line": matched[0], "who": who, "why": str(f.get("why", "")),
+                                                         "allowed": allowed[cid], "checks": []})
+        if cid not in hit["checks"]:
+            hit["checks"].append(cid)
+    m.append("test-deps-review", "orc step", outcome="done", model=role["model"],
+             confirmed=[{"node": n, "test": t, "file": p, "checks": h["checks"]} for (n, t, p), h in hits.items()],
+             dropped=dropped)
+    problems = []
+    for (node, test, path), h in hits.items():
+        before = "、".join(sorted(h["allowed"] - {node})) or "无"
+        problems.append(
+            f"检查 {'、'.join(h['checks'])} 挂在节点 {node} 上，跑的测试 {test} 里 `{h['line']}` 运行时要用到"
+            f"节点 {'、'.join(h['who'])} 新建的 {path}（依赖复核：{h['why']}）；那个节点不是 {node} 的前置节点"
+            f"（{node} 的前置节点：{before}），{node} 做完时这个文件不一定存在，检查就可能过不了。"
+            f"测试只能用 {node} 自己和它前置节点的文件、仓库里已有的代码；要替身就在测试里自己写一个")
+    return problems
+
+
 def validate_verify_outputs(m: Mission, work: Path) -> Tuple[List[str], dict]:
     """校验验证会话的产出，并在当前代码上实际运行全部检查：fail 的必须失败，pass 的必须通过。"""
     path = work / "checks.json"
@@ -1095,6 +1198,8 @@ def validate_verify_outputs(m: Mission, work: Path) -> Tuple[List[str], dict]:
     read = lambda rel: (repo_copy / rel).read_text(encoding="utf-8", errors="replace") \
         if (repo_copy / rel).is_file() and not (repo_copy / rel).is_symlink() else None
     problems += test_dependency_problems(tasks, new_files, [t for t in test_files if safe_rel(t)], readable, read)
+    if not problems:             # 写死的检查都过了，再让模型找运行时才用到的（字符串交给导入它的代码等）
+        problems += model_test_dependency_problems(m, tasks, new_files, test_files, readable, read)
     if problems:
         return problems, {}
     head = subprocess.run(["git", "-C", str(m.repo()), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -2187,6 +2292,51 @@ def failed_detail(results: List[dict]) -> str:
                        + "\n".join(r["tail"]) + "\n```" for r in results if r["rc"] != 0)
 
 
+IMPORT_ERROR_RE = re.compile(r"no module named|cannot import|importerror|modulenotfounderror|failed to import|could not import",
+                             re.I)
+
+
+def gate_dag_crossing(m: Mission, node: str, wt: Path, results: List[dict]) -> Optional[str]:
+    """提交关口的兜底：失败的检查输出里有导入错误，错误里的模块是别的节点新建、而那个节点不是本节点的前置节点
+    （所以节点工作区里没有这个文件）。这是冻结的测试越过了依赖，执行会话怎么改都过不了。"""
+    tasks = approved_tasks(m)
+    allowed = node_ancestors(tasks, node) | {node}
+    base = read1(node_ctl(m, node) / "worktrees.txt").split("\t")[2]
+    at_base = set(run_git(m.repo(), "ls-tree", "-r", "--name-only", base).splitlines())
+    foreign = {}
+    for tid, t in tasks.items():
+        if tid in allowed:
+            continue
+        for f in t.get("files", []):
+            if f not in at_base and not (wt / f).exists():
+                foreign.setdefault(f, []).append(tid)
+    found = []
+    test_files = list(approved_checks(m)["test_files"])
+    for r in results:
+        if r["rc"] == 0:
+            continue
+        # 只认冻结的测试自己写着这个模块的：实现代码去导入别的节点的文件，是执行会话的错，照常退回
+        mentioned = " ".join((wt / t).read_text(encoding="utf-8", errors="replace")
+                             for t in check_test_files(r["command"], test_files) if (wt / t).is_file())
+        for line in r.get("tail", []):
+            if not IMPORT_ERROR_RE.search(line):
+                continue
+            text = line
+            pair = re.search(r"cannot import name '(\w+)' from '([\w.]+)'", line)
+            if pair:
+                text += f" {pair.group(2)}.{pair.group(1)}"
+            for path, who in foreign.items():
+                names = [n for n in module_names(path) if n in mentioned]
+                if any(re.search(rf"(?<![\w.]){re.escape(n)}(?!\w)", text) for n in names) \
+                        and (r["id"], path) not in [(c, p) for c, p, _, _ in found]:
+                    found.append((r["id"], path, who, line.strip()))
+    if not found:
+        return None
+    before = "、".join(sorted(allowed - {node})) or "无"
+    return "\n".join(f"检查 `{cid}` 失败在导入 {path} 上（`{line[:200]}`）：这个文件由节点 {'、'.join(who)} 新建，"
+                     f"那个节点不是 {node} 的前置节点（{node} 的前置节点：{before}）。" for cid, path, who, line in found)
+
+
 def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     """提交关口（STATE.md）：文件范围 → 测试哈希 → 检查 → 对齐评审 → 写提交请求、运行 broker。"""
     task, approved = approved_tasks(m)[node], approved_checks(m)
@@ -2219,6 +2369,9 @@ def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     ids += [cid for cid in passed_checks(m, node) if cid not in ids]   # 此前通过的检查一起跑，防回退
     out["checks"], results, checks_text = run_node_checks(m, wt, ids, jobs_dir(m) / f"{job}.copy")
     if not all(out["checks"].values()):
+        crossing = gate_dag_crossing(m, node, wt, results)
+        if crossing:             # 冻结的测试越过了依赖：执行会话改不了，不退回给它
+            return {**out, "outcome": "test-crosses-dag", "reason": crossing}
         return reject("checks", failed_detail(results))
     if not actual:
         # 这条验收标准已经被之前的提交满足：冻结的检查确认过，没有 diff 可评审，也没有东西可提交
@@ -2566,6 +2719,13 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
                                          f"从上一次通过的提交重新开始。最近一张纠偏单：\n\n{card}", fresh=True)
             else:
                 launch_executor(m, node, f"这次提交被拒了。纠偏单：\n\n{card}\n\n按纠偏单改，改完按格式结束这一轮。")
+        elif outcome == "test-crosses-dag":
+            block_node(m, node, "冻结的测试越过了依赖",
+                       f"节点 {node} 的冻结验收测试用到了不是它前置节点的节点新建的文件，节点工作区里没有这个文件，"
+                       f"执行会话怎么改都过不了，测试冻结后也改不了。\n\n{last.get('reason')}\n\n"
+                       f"要由用户决定：放弃这一轮（`orc abandon --mission {m.name} \"<原因>\"`），重跑时验证会话会重写测试"
+                       "（是 phase 里的 mission 就再运行 `orc phase`）。回答会原样发给执行会话，但它改不了测试。",
+                       "ask-user", "executor")
         else:
             block_node(m, node, "提交关口没能完成评审",
                        f"节点 {node} 的提交关口没能完成，评审不降级、出错时不放行；排除问题后回答「重试」。\n\n"
