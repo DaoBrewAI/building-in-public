@@ -148,19 +148,19 @@
 
 **画布**
 
-- [ ] **【Claude Code】** orc 读用户的产品设计文档，起草画布：组件、组件之间的连线、每个组件对应的目录。格式沿用 `northstar-scope` 已经在读的 `.northstar/architecture.json`（`{"components":[{"id","name","paths"}]}`），另加连线。起草写进 `drafts/`，不直接写 `.northstar/`。
+- [x] **【Claude Code】** orc 读用户的产品设计文档，起草画布：组件、组件之间的连线、每个组件对应的目录。格式沿用 `northstar-scope` 已经在读的 `.northstar/architecture.json`（`{"components":[{"id","name","paths"}]}`），另加连线。起草写进 `drafts/`，不直接写 `.northstar/`。
 - [ ] **【你】** 看过画布后用 `northstar seal` 签进 `.northstar/architecture.json`。之后加组件也一样：先起草进 `drafts/`，签名才生效。
-- [ ] **【Claude Code】** 规划会话写 DAG 时，节点的 `component` 只能从签名的画布里选，否则校验不过。
+- [x] **【Claude Code】** 规划会话写 DAG 时，节点的 `component` 只能从签名的画布里选，否则校验不过。
 
 **phase**
 
-- [ ] **【Claude Code】** orc 读 phase 文档里的 mission 列表和依赖，按依赖顺序启动 mission，没有依赖关系的并行。每个 mission 的请求就是对应 mission 文件的全文。
-- [ ] **【Claude Code】** phase 里所有 mission 都合并后，对照 phase 文档的「完成标准」出一份结论，写进汇总页；需要人亲手做的验收列成清单交给用户，orc 不代做。
+- [x] **【Claude Code】** orc 读 phase 文档里的 mission 列表和依赖，按依赖顺序启动 mission，没有依赖关系的并行。每个 mission 的请求就是对应 mission 文件的全文。
+- [x] **【Claude Code】** phase 里所有 mission 都合并后，对照 phase 文档的「完成标准」出一份结论，写进汇总页；需要人亲手做的验收列成清单交给用户，orc 不代做。
 
 **跨 mission 评审**
 
-- [ ] **【Claude Code】** 时点：每个 mission 自己的评审（阶段 4、5）都通过之后、合进主线之前。评审者是 `review` 模型，不降级。对照材料：NORTHSTAR、产品设计文档、画布、主线上的现有代码、此前各 mission 签名的设计、本 mission 签名的设计和完整 diff。回答三个问题：合在一起还符合 NORTHSTAR 和产品设计吗？有没有推翻或绕开此前 mission 的设计决定？有没有重复实现已有的东西？结论和证据（N#、文件和行、此前 mission 的设计章节）写进 `events.jsonl`。
-- [ ] **【Claude Code】** 冲突规则：
+- [x] **【Claude Code】** 时点：每个 mission 自己的评审（阶段 4、5）都通过之后、合进主线之前。评审者是 `review` 模型，不降级。对照材料：NORTHSTAR、产品设计文档、画布、主线上的现有代码、此前各 mission 签名的设计、本 mission 签名的设计和完整 diff。回答三个问题：合在一起还符合 NORTHSTAR 和产品设计吗？有没有推翻或绕开此前 mission 的设计决定？有没有重复实现已有的东西？结论和证据（N#、文件和行、此前 mission 的设计章节）写进 `events.jsonl`。
+- [x] **【Claude Code】** 冲突规则：
   - 默认以已经合并的为准：判定冲突就退回本 mission 重做，不问用户；重做次数沿用熔断规则，超过上限才停下来问。
   - 唯一例外：本 mission 的 `design.md` 里有「推翻的已有决定」一节（逐条写推翻哪个 mission 的哪个决定、改成什么、为什么），它出现在审阅页上，用户 go 并签名就是明确同意。跨 mission 评审只放行这一节写明的推翻，没写的一律当冲突退回。
   - 规划会话不能自己决定推翻：发现需求和已有决定冲突时只能写 `QUESTION.md` 问用户，用户同意了才写进这一节。规划说明（`planner-brief.md`）加上这条。
@@ -169,19 +169,20 @@
 
 **汇总页**
 
-- [ ] **【Claude Code】** 全产品一个汇总页，发布成仅本人可见的 Artifact，链接不变，每完成一个 mission 更新一次。由脚本生成，agent 写不了状态。内容：
+- [x] **【Claude Code】** 全产品一个汇总页，发布成仅本人可见的 Artifact，链接不变，每完成一个 mission 更新一次。由脚本生成，agent 写不了状态。内容：
   - 画布着色图：底图是签名的画布，颜色只来自事件记录。按每个 mission 实际改了哪些文件，标出哪个 mission 完成了哪个组件的哪部分，点开能看到节点和证据。
   - NORTHSTAR 条款表：每条 N# 一行，列出由哪些 mission 和节点实现、证据在哪、有没有被 DRIFT 打回过、现在的状态；没有任何 mission 实现的条款单独标出来。
   - phase 和 mission 列表：每个 phase 的完成情况和结论；每个已完成的 mission 一行，附它自己状态页的链接和跨 mission 评审的结论。
 
 **scope 和 forbid 接成硬规则**
 
-- [ ] **【Claude Code】** 信任层的 `northstar-scope` 已经能读 `.northstar/missions/ACTIVE` 指向的 mission 文件，碰到 `forbid` 返回 3（停下），超出 `scope` 返回 1（拦住）。缺的是：orc 开始执行一个 mission 时把 mission 文件放进 `.northstar/missions/` 并设成 ACTIVE，结束时清掉。这是受保护路径，先实测信任层允许怎么写入；如果只能走 `northstar start`（agent 不能执行），就由 orc 输出 `next:` 让用户运行，写进提案后再定。`scope` 和 `forbid` 只对当前 mission 生效，不进 NORTHSTAR。
+- [x] **【Claude Code】** 信任层的 `northstar-scope` 已经能读 `.northstar/missions/ACTIVE` 指向的 mission 文件，碰到 `forbid` 返回 3（停下），超出 `scope` 返回 1（拦住）。缺的是：orc 开始执行一个 mission 时把 mission 文件放进 `.northstar/missions/` 并设成 ACTIVE，结束时清掉。这是受保护路径，先实测信任层允许怎么写入；如果只能走 `northstar start`（agent 不能执行），就由 orc 输出 `next:` 让用户运行，写进提案后再定。`scope` 和 `forbid` 只对当前 mission 生效，不进 NORTHSTAR。
 
 **契约测试**
 
-- [ ] **【Claude Code】** 为以上每个分支写契约测试，包括：画布签名后 agent 改不了、DAG 节点的组件不在画布里时被拒、phase 按依赖顺序启动 mission 且没有依赖的并行、跨 mission 评审判定冲突时退回重做而不合并、签名设计里写明的推翻被放行而没写的被退回、规划会话不能不经用户就写「推翻的已有决定」、汇总页上每个已完成的 mission 都在且每条 N# 都有一行、没人实现的条款被标出来、执行会话写 `forbid` 里的文件被停下、写 `scope` 外的文件被拦。
+- [x] **【Claude Code】** 为以上每个分支写契约测试，包括：画布签名后 agent 改不了、DAG 节点的组件不在画布里时被拒、phase 按依赖顺序启动 mission 且没有依赖的并行、跨 mission 评审判定冲突时退回重做而不合并、签名设计里写明的推翻被放行而没写的被退回、规划会话不能不经用户就写「推翻的已有决定」、汇总页上每个已完成的 mission 都在且每条 N# 都有一行、没人实现的条款被标出来、执行会话写 `forbid` 里的文件被停下、写 `scope` 外的文件被拦。
 - 实现说明（阶段 6）：开工前定下的事见 `proposals/2026-11-08-phase6-open-points.md`（固定格式的依赖表；`执行: 人工`；你合并、orc 定时查；信任层从签名的 control 目录读 scope 和 forbid）。做法见 STATE.md「产品层（阶段 6）」。
+- 实跑（2026-11-08，northstar-trial 的 trial 产品 P1，两个 mission，P1-2 依赖 P1-1）：画布起草和签名、P1-1 合并后自动开始 P1-2、跨 mission 评审（P1-2 对照 P1-1 的设计，通过）、阶段结论（3 条完成标准都 met）、汇总页都实际走通；顺带真实走到提交被拒后纠正、CI 没通过后重等。实跑发现并修掉：mission 跑完后 report 没交给用户（df18b74）；CI 进度报告那一步对 orc 的 PR 跳过（063707d）；`update_base` 忽略未跟踪文件。还没修：刚发布的页面马上读偶尔被拒，重试即好。
 - [ ] **【你】** 签画布，审 PR，打开汇总页抽查两三条能否追溯到证据。
 
 **完成标志**：跨 mission 冲突被退回而不是合并；汇总页上每个状态都来自脚本，每条都能追溯到证据。
