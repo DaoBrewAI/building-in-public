@@ -889,6 +889,126 @@ def safe_rel(path: str) -> bool:
     return bool(path) and not p.is_absolute() and ".." not in p.parts and "\\" not in path and p.as_posix() == path
 
 
+def node_ancestors(tasks: Dict[str, dict], node: str) -> set:
+    """node 的全部前置节点（depends_on，层层往上），不含 node 自己。"""
+    seen, todo = set(), list(tasks[node].get("depends_on", []))
+    while todo:
+        d = todo.pop()
+        if d in tasks and d not in seen:
+            seen.add(d)
+            todo.extend(tasks[d].get("depends_on", []))
+    return seen
+
+
+def check_test_files(command: str, test_files: List[str]) -> List[str]:
+    """检查命令跑到的测试文件：命令里写了的测试文件（去掉 ::测试名），或写了的目录下的测试文件。"""
+    import shlex
+    try:
+        words = shlex.split(command)
+    except ValueError:
+        words = command.split()
+    hit = []
+    for w in words:
+        w = w.split("::", 1)[0].rstrip("/")
+        if w.startswith("./"):
+            w = w[2:]
+        for rel in test_files:
+            if rel not in hit and w and (rel == w or rel.startswith(w + "/")):
+                hit.append(rel)
+    return hit
+
+
+def python_imports(source: str, rel: str) -> List[Tuple[str, List[str]]]:
+    """测试文件里的每条 import（文件开头和函数里面的都算）：(写法, 可能对应的文件)。
+    绝对导入给出相对于导入根的路径（.py 和包的 __init__.py，包括上层包）；相对导入给出仓库里的完整路径（前面加 /）。"""
+    import ast
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    def module_files(parts: List[str]) -> List[str]:
+        out = ["/".join(parts[:i]) + "/__init__.py" for i in range(1, len(parts))]
+        return out + ["/".join(parts) + ".py", "/".join(parts) + "/__init__.py"] if parts else out
+
+    found = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                found.append((f"import {alias.name}", module_files(alias.name.split("."))))
+        elif isinstance(node, ast.ImportFrom):
+            names = [a.name for a in node.names if a.name != "*"]
+            mod = (node.module or "").split(".") if node.module else []
+            if node.level:
+                pkg = Path(rel).parent.parts
+                pkg = list(pkg[:len(pkg) - (node.level - 1)]) if node.level - 1 <= len(pkg) else []
+                parts = pkg + mod
+                files = ["/" + "/".join(parts) + "/__init__.py"] if parts else []
+                files += ["/" + f for f in (["/".join(parts + [n]) + ".py" for n in names]
+                                             + ["/".join(parts + [n]) + "/__init__.py" for n in names]
+                                             + (["/".join(parts) + ".py"] if mod else []))]
+            else:
+                files = module_files(mod) + ["/".join(mod + [n]) + ".py" for n in names] \
+                    + ["/".join(mod + [n]) + "/__init__.py" for n in names]
+            found.append((f"from {'.' * node.level}{node.module or ''} import {', '.join(names) or '*'}", files))
+    return found
+
+
+def test_dependency_problems(tasks: Dict[str, dict], new_files: Dict[str, List[str]], test_files: List[str],
+                             checks: List[dict], read: Callable[[str], Optional[str]]) -> List[str]:
+    """挂在节点 X 上的检查，跑到的测试只能导入 X 自己和它前置节点的新文件（加上仓库里已有的代码）。
+    别的节点的新文件在 X 开工时不存在、做完时也不一定在，这个检查就可能永远过不了。
+    new_files：起点上还不存在、由节点新建的文件 → 声明它的节点。只看 Python 的 import 语句（文件开头和函数里面），
+    并跟着测试文件之间的导入和同目录、上层目录里的 conftest.py 走；导入根是仓库根、src/ 和测试文件所在目录。"""
+    py_tests = [t for t in test_files if t.endswith(".py")]
+
+    def resolve(candidate: str, test: str) -> List[str]:
+        if candidate.startswith("/"):
+            return [candidate[1:]]
+        here = str(Path(test).parent)
+        return [candidate, "src/" + candidate] + ([here + "/" + candidate] if here != "." else [])
+
+    hits: Dict[Tuple[str, str, str], dict] = {}        # (节点, 测试文件, 用到的文件) → 写法、经过的文件、检查
+    for c in checks:
+        node = c["node"]
+        allowed = node_ancestors(tasks, node) | {node}
+        start = check_test_files(c["command"], py_tests)
+        for test in start:
+            parents = Path(test).parents
+            todo = [test] + [f"{p}/conftest.py" if str(p) != "." else "conftest.py" for p in parents]
+            seen = set()
+            while todo:
+                f = todo.pop(0)
+                if f in seen or f not in py_tests:
+                    continue
+                seen.add(f)
+                source = read(f)
+                if source is None:
+                    continue
+                for written, candidates in python_imports(source, f):
+                    for path in (p for cand in candidates for p in resolve(cand, f)):
+                        if path in py_tests:            # 导入了别的测试文件（辅助模块）：顺着它的导入走
+                            todo.append(path)
+                            continue
+                        who = new_files.get(path)
+                        if not who or any(n in allowed for n in who):
+                            continue
+                        hit = hits.setdefault((node, test, path), {"written": written, "via": f, "who": who,
+                                                                    "allowed": allowed, "checks": []})
+                        if c["id"] not in hit["checks"]:
+                            hit["checks"].append(c["id"])
+    problems = []
+    for (node, test, path), h in hits.items():
+        via = "" if h["via"] == test else f"（经 {h['via']}）"
+        before = "、".join(sorted(h["allowed"] - {node})) or "无"
+        problems.append(
+            f"检查 {'、'.join(h['checks'])} 挂在节点 {node} 上，跑的测试 {test}{via} 有 `{h['written']}`，"
+            f"用到节点 {'、'.join(h['who'])} 新建的 {path}；那个节点不是 {node} 的前置节点"
+            f"（{node} 的前置节点：{before}），{node} 做完时这个文件不一定存在，检查就可能过不了。"
+            f"测试只能用 {node} 自己和它前置节点的文件、仓库里已有的代码；要替身就在测试里自己写一个")
+    return problems
+
+
 def validate_verify_outputs(m: Mission, work: Path) -> Tuple[List[str], dict]:
     """校验验证会话的产出，并在当前代码上实际运行全部检查：fail 的必须失败，pass 的必须通过。"""
     path = work / "checks.json"
@@ -962,6 +1082,19 @@ def validate_verify_outputs(m: Mission, work: Path) -> Tuple[List[str], dict]:
                 problems.append(f"节点 {tid} 的第 {a} 条验收标准没有检查：「{t['acceptance'][a - 1]}」")
         if tid not in has_fail:
             problems.append(f"节点 {tid} 没有 expect_before 为 fail 的检查：至少要有一个检查测它的新行为")
+    # 检查跑的测试只能导入本节点和前置节点的新文件（proposals/2026-11-08-test-imports-follow-dag.md）
+    at_base = set(run_git(m.repo(), "ls-tree", "-r", "--name-only", base).splitlines())
+    new_files: Dict[str, List[str]] = {}
+    for tid, t in tasks.items():
+        for f in t.get("files", []):
+            if isinstance(f, str) and f not in at_base:
+                new_files.setdefault(f, []).append(tid)
+    readable = [c for c in checks if isinstance(c, dict) and c.get("node") in tasks
+                and isinstance(c.get("id"), str) and isinstance(c.get("command"), str)]
+    repo_copy = work / "repo"
+    read = lambda rel: (repo_copy / rel).read_text(encoding="utf-8", errors="replace") \
+        if (repo_copy / rel).is_file() and not (repo_copy / rel).is_symlink() else None
+    problems += test_dependency_problems(tasks, new_files, [t for t in test_files if safe_rel(t)], readable, read)
     if problems:
         return problems, {}
     head = subprocess.run(["git", "-C", str(m.repo()), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()

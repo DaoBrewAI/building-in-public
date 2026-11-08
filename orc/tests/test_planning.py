@@ -88,6 +88,16 @@ if os.environ.get("ORC_ROLE") == "verify":
         write("test -f src/export.py\n", files=("src/export.py",))
     elif action == "uncovered":
         write("test -f src/export.py\n", acceptance=(2,))
+    elif action in ("sibling-import", "sibling-ok"):   # 两个并行节点：service 的测试用了 fakes 新建的 src/fake.py
+        svc = "import sys\nsys.path.insert(0, 'src')\n" + ("from fake import done\n" if action == "sibling-import" else "") + "from service import run\n"
+        for name, body in (("service", svc), ("fakes", "import sys\nsys.path.insert(0, 'src')\nfrom fake import done\n")):
+            f = work / "repo" / "tests" / "orc" / f"test_{name}_acceptance.py"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(body)
+        (work / "checks.json").write_text(json.dumps({"version": 1, "mission": os.environ["ORC_MISSION"],
+            "test_files": ["tests/orc/test_service_acceptance.py", "tests/orc/test_fakes_acceptance.py"],
+            "checks": [{"id": n, "node": n, "acceptance": [1], "command": f"python3 tests/orc/test_{n}_acceptance.py",
+                        "expect_before": "fail"} for n in ("service", "fakes")]}))
     elif action == "nochecks":
         test.parent.mkdir(parents=True, exist_ok=True); test.write_text("x\n")
         (work / "checks.json").unlink(missing_ok=True)
@@ -114,6 +124,12 @@ if action.startswith("question:"):
     (work / "QUESTION.md").write_text(action.split(":", 1)[1])
 elif action == "ok":
     outputs({})
+elif action == "siblings":                 # fakes 和 service 互不依赖，可以并行
+    outputs({})
+    dag = json.loads((work / "task-dag.json").read_text())
+    base = dict(dag["tasks"][0], depends_on=[])
+    dag["tasks"] = [dict(base, id="fakes", files=["src/fake.py"]), dict(base, id="service", files=["src/service.py"])]
+    (work / "task-dag.json").write_text(json.dumps(dag))
 elif action == "ok+constraints":
     outputs({}); (work / "northstar-constraints.md").write_text("- N9: 导出只用标准库 csv\n")
 elif action == "bad":
@@ -468,6 +484,24 @@ class Verify(PlanningCase):
         self.assertTrue(any("第 1 条验收标准没有检查" in p for p in problems[1]), problems[1])
         self.assertTrue(any("缺少 checks.json" in p for p in problems[2]), problems[2])
         self.assertEqual((mdir / "state").read_text().strip(), "blocked")
+
+    def test_test_importing_a_non_predecessor_file_is_sent_back(self):
+        # fintelli-p1-1-2：service 的验收测试用了并行节点 fakes 新建的文件，冻结后执行时过不了提交关口
+        self.vscript("sibling-import", "sibling-ok")
+        mdir = self.to_plan_review("siblings")
+        self.through_verify()
+        r = self.step()
+        self.assertEqual(self.next_line(r), "next: wait", r.stdout + r.stderr)
+        first = [e for e in self.events(mdir) if e["kind"] == "verifier-exit"][0]
+        self.assertEqual(first["outcome"], "invalid")
+        self.assertEqual(len(first["problems"]), 1, first["problems"])
+        self.assertIn("检查 service 挂在节点 service 上", first["problems"][0])
+        self.assertIn("`from fake import done`，用到节点 fakes 新建的 src/fake.py", first["problems"][0])
+        self.wait()
+        self.assertIn("--resume", self.vcalls()[1]["args"])                      # 退回同一个验证会话重写
+        self.assertIn("用到节点 fakes 新建的 src/fake.py", self.vcalls()[1]["prompt"])
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
 
     def test_existing_file_cannot_be_used_as_a_test(self):
         (self.repo / "tests" / "orc").mkdir(parents=True)

@@ -646,5 +646,82 @@ class CheckExpectations(unittest.TestCase):
         self.assertFalse(ok({"expect_before": "pass", "command": "python3 -m pytest tests"}, 1, ["1 failed"]))
 
 
+class TestImportsFollowDag(unittest.TestCase):
+    """挂在节点 X 上的检查，跑的测试只能导入 X 和它前置节点新建的文件（proposals/2026-11-08-test-imports-follow-dag.md）。
+    DAG 照 fintelli-p1-1-2：fakes 和 service 都只依赖 runner，app 依赖两者。"""
+
+    TASKS = {"runner": {"depends_on": [], "files": ["pkg/intake/__init__.py", "pkg/intake/processor.py"]},
+             "fakes": {"depends_on": ["runner"], "files": ["pkg/intake/fake.py"]},
+             "service": {"depends_on": ["runner"], "files": ["pkg/intake/service.py"]},
+             "app": {"depends_on": ["fakes", "service"], "files": ["pkg/intake/app.py"]}}
+
+    def setUp(self):
+        self.orc = load_orc()
+
+    def problems(self, tests, checks, tasks=None):
+        tasks = tasks or self.TASKS
+        new = {}
+        for tid, t in tasks.items():
+            for f in t["files"]:
+                new.setdefault(f, []).append(tid)
+        return self.orc.test_dependency_problems(tasks, new, list(tests), checks, tests.get)
+
+    def test_sibling_import_is_caught_in_every_form(self):
+        for body in ("def test_x():\n    from pkg.intake import fake\n",            # 在函数里导入（brief 要求的写法）
+                     "from pkg.intake.fake import done\n",
+                     "import pkg.intake.fake as f\n",
+                     "def test_x():\n    from .fake_helpers import x\n"):          # 相对导入，找不到也不算
+            tests = {"tests/test_service.py": body}
+            ps = self.problems(tests, [{"id": "svc", "node": "service", "command": "pytest tests/test_service.py::test_x"}])
+            if "fake_helpers" in body:
+                self.assertEqual(ps, [], body)
+                continue
+            self.assertEqual(len(ps), 1, body)
+            self.assertIn("节点 fakes 新建的 pkg/intake/fake.py", ps[0])
+            self.assertIn("service 的前置节点：runner", ps[0])
+
+    def test_own_ancestor_and_existing_files_are_allowed(self):
+        tests = {"tests/test_app.py": "from pkg.intake import fake, service, app, processor\nimport json, os\n",
+                 "tests/test_service.py": "from pkg.intake.service import S\nfrom pkg.intake.processor import R\n"
+                                          "from pkg.old import thing\n"}
+        checks = [{"id": "app", "node": "app", "command": "pytest tests/test_app.py"},       # 前置节点隔一层也算
+                  {"id": "svc", "node": "service", "command": "pytest tests/test_service.py"}]
+        self.assertEqual(self.problems(tests, checks), [])
+
+    def test_relative_import_and_src_layout(self):
+        tasks = {"a": {"depends_on": [], "files": ["src/pkg/a.py"]}, "b": {"depends_on": [], "files": ["src/pkg/b.py"]}}
+        tests = {"src/pkg/tests/test_a.py": "from .. import b\n", "tests/test_a2.py": "from pkg.b import x\n"}
+        checks = [{"id": "a1", "node": "a", "command": "pytest src/pkg/tests/test_a.py"},
+                  {"id": "a2", "node": "a", "command": "pytest tests/test_a2.py"}]
+        ps = self.problems(tests, checks, tasks)
+        self.assertEqual(len(ps), 2, ps)
+        self.assertTrue(all("src/pkg/b.py" in p for p in ps), ps)
+
+    def test_followed_through_helper_and_conftest(self):
+        tests = {"tests/intake/test_service.py": "from tests.intake import helpers\n",
+                 "tests/intake/helpers.py": "def make():\n    from pkg.intake import fake\n",
+                 "tests/conftest.py": "import pkg.intake.app\n"}
+        ps = self.problems(tests, [{"id": "svc", "node": "service", "command": "pytest -q tests/intake/test_service.py"}])
+        self.assertEqual(len(ps), 2, ps)
+        self.assertTrue(any("（经 tests/intake/helpers.py）" in p and "pkg/intake/fake.py" in p for p in ps), ps)
+        self.assertTrue(any("（经 tests/conftest.py）" in p and "pkg/intake/app.py" in p for p in ps), ps)
+
+    def test_directory_check_covers_every_test_under_it_and_lists_all_checks(self):
+        tests = {"tests/test_service.py": "from pkg.intake import fake\n", "tests/test_fakes.py": "from pkg.intake import fake\n"}
+        checks = [{"id": "svc-1", "node": "service", "command": "pytest tests/test_service.py::test_a"},
+                  {"id": "svc-all", "node": "service", "command": "pytest tests/"},
+                  {"id": "fakes-all", "node": "fakes", "command": "pytest tests/test_fakes.py"}]
+        ps = self.problems(tests, checks)
+        self.assertEqual(len(ps), 2, ps)             # fakes 用自己的文件没问题
+        self.assertIn("检查 svc-1、svc-all 挂在节点 service 上，跑的测试 tests/test_service.py", ps[0])  # 两个检查合成一条
+        self.assertIn("检查 svc-all 挂在节点 service 上，跑的测试 tests/test_fakes.py", ps[1])  # 跑整个目录：挂错了节点
+
+    def test_string_spec_is_not_an_import(self):
+        # runner 的验收标准就是 DEFAULT_PROCESSOR == "pkg.intake.fake:hold"：比较字符串不需要 fake.py 存在
+        tests = {"tests/test_runner.py": "def test_d():\n    from pkg.intake.processor import D\n"
+                                         "    assert D == 'pkg.intake.fake:hold'\n"}
+        self.assertEqual(self.problems(tests, [{"id": "r", "node": "runner", "command": "pytest tests/test_runner.py"}]), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
