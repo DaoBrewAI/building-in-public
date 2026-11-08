@@ -179,7 +179,7 @@ class Canvas(ProductCase):
 class Phase(ProductCase):
     def test_missions_start_in_dependency_order_and_independent_ones_in_parallel(self):
         self.phase({"P1-1": "无", "P1-2": "无", "P1-3": "依赖 P1-1、P1-2"},
-                   {"P1-1": "仓库: main", "P1-2": "仓库: main", "P1-3": "仓库: main"})
+                   {"P1-1": "仓库: main\nscope: core", "P1-2": "仓库: main\nscope: ui", "P1-3": "仓库: main"})
         r = self.run_phase()
         self.assertTrue(self.next_line(r).startswith("next: "), r.stdout + r.stderr)
         started = [e["mission_id"] for e in self.pevents("mission-start")]
@@ -187,6 +187,13 @@ class Phase(ProductCase):
         req = (self.home / "missions" / "shop-p1-1" / "request.md").read_text()
         self.assertIn("# MISSION: P1-1", req)                            # 请求就是 mission 文件全文
         self.assertEqual((self.home / "missions" / "shop-p1-1" / "product").read_text().strip(), "shop")
+
+    def test_independent_missions_with_overlapping_scope_run_one_at_a_time(self):
+        self.phase({"P1-1": "无", "P1-2": "无", "P1-3": "无"},
+                   {"P1-1": "仓库: main\nscope: core", "P1-2": "仓库: main\nscope: core, ui", "P1-3": "仓库: main\nscope: docs"})
+        r = self.run_phase()
+        self.assertEqual([e["mission_id"] for e in self.pevents("mission-start")], ["P1-1", "P1-3"])
+        self.assertIn("P1-2 和 P1-1 在同一个仓库里、scope 有重叠", r.stdout)
 
     def test_dependent_mission_waits_for_the_pr_to_be_merged(self):
         self.phase({"P1-1": "无", "P1-2": "依赖 P1-1"}, {"P1-1": "仓库: main", "P1-2": "仓库: main"})
