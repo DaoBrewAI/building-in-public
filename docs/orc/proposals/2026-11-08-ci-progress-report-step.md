@@ -1,6 +1,6 @@
 # 提案：签了画布之后，CI 的「进度报告与代码一致」会让每个 orc 的 PR 都失败
 
-状态：**待林翰决定**（2026-11-08）
+状态：**林翰 2026-11-08 选 A**。模板已改（063707d），测试见 `tests/test_ci.sh`；要你把新的 workflow 推到 northstar-trial 和 daoharness-core。
 
 ## 发生了什么
 
