@@ -510,6 +510,96 @@ def process_alive(pid: int, marker: str) -> bool:
     return marker in ps.stdout or not ps.stdout.strip()
 
 
+# -- 产品层（阶段 6，STATE.md「产品层」）：mission 文件头、画布、scope / forbid、推翻已有决定
+OVERRIDE_HEADING = "推翻的已有决定"
+ANSWER_REF_RE = re.compile(r"\[answer:([0-9A-Za-z_-]+)\]")
+
+
+def mission_field(text: str, key: str) -> List[str]:
+    """mission 文件头的一行（`scope: a, b  # 注释`），和信任层 northstar-scope 的读法一致，另外认中文冒号和逗号。"""
+    h = re.search(rf"^{re.escape(key)}[:：][ \t]*(.*)$", text, re.M)
+    return [x.strip() for x in h.group(1).split("#")[0].replace("，", ",").split(",") if x.strip()] if h else []
+
+
+def canvas_components(repo: Path) -> Optional[Dict[str, dict]]:
+    """产品仓库里签名的画布（.northstar/architecture.json）：组件 id → 组件。没有画布返回 None。"""
+    path = repo / ".northstar" / "architecture.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return {c["id"]: c for c in data["components"]}
+    except (ValueError, KeyError, TypeError) as error:
+        raise OrcError(f"{path} 读不出组件列表（{error}）。画布被改坏了，停下来告诉用户。") from error
+
+
+def glob_hit(path: str, globs: List[str]) -> bool:
+    import fnmatch
+    return any(fnmatch.fnmatch(path, g) for g in globs)
+
+
+def markdown_section(text: str, keyword: str) -> Optional[str]:
+    """标题里含 keyword 的那一节的正文（到下一个同级或更高级的标题为止）；没有这一节返回 None。"""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        h = re.match(r"^(#+)\s+(.*)$", line)
+        if h and keyword in h.group(2):
+            level, body = len(h.group(1)), []
+            for nxt in lines[i + 1:]:
+                h2 = re.match(r"^(#+)\s", nxt)
+                if h2 and len(h2.group(1)) <= level:
+                    break
+                body.append(nxt)
+            return "\n".join(body)
+    return None
+
+
+def product_plan_problems(m: Mission, work: Path, tasks: List[dict]) -> List[str]:
+    """阶段 6 的规划校验：组件只能从签名的画布里选；不越出 mission 的 scope、不碰 forbid；
+    「推翻的已有决定」每一条都要引用用户的回答（规划会话不能自己决定推翻）。"""
+    problems: List[str] = []
+    request = (m.dir / "request.md").read_text(encoding="utf-8")
+    comps = canvas_components(m.repo())
+    scope, forbid = mission_field(request, "scope"), mission_field(request, "forbid")
+    for task in tasks:
+        tid, comp = task.get("id", "?"), task.get("component")
+        if comps is not None and comp not in comps:
+            problems.append(f"节点 {tid} 的 component「{comp}」不在签名的画布里（.northstar/architecture.json）。只能从这些组件里选："
+                            + "、".join(comps))
+            continue
+        if comps is not None and scope:
+            if comp not in scope:
+                problems.append(f"节点 {tid} 的 component「{comp}」不在这个 mission 的 scope 里（{'、'.join(scope)}）")
+            globs = [g for cid in scope if cid in comps for g in comps[cid].get("paths", [])]
+            outside = [f for f in task.get("files", []) if isinstance(f, str) and not glob_hit(f, globs)]
+            if outside:
+                problems.append(f"节点 {tid} 的文件越出了 mission 的 scope（{'、'.join(scope)}）：{'、'.join(outside)}")
+        hit = [f for f in task.get("files", []) if isinstance(f, str) and glob_hit(f, forbid)]
+        if hit:
+            problems.append(f"节点 {tid} 的文件碰到了 mission 的 forbid（{'、'.join(forbid)}）：{'、'.join(hit)}。"
+                            "这些文件这次不能改；确实需要时写 QUESTION.md 问用户")
+    design = work / "design.md"
+    section = markdown_section(design.read_text(encoding="utf-8"), OVERRIDE_HEADING) if design.is_file() else None
+    if section is not None:
+        answered = {e["id"] for e in m.events() if e.get("kind") == "answer"}
+        for line in section.splitlines():
+            if not line.lstrip().startswith(("- ", "* ")):
+                continue
+            refs = ANSWER_REF_RE.findall(line)
+            if not refs or not set(refs) <= answered:
+                problems.append(f"design.md「{OVERRIDE_HEADING}」里这一条没有引用用户同意它的回答（[answer:<编号>]）："
+                                f"{line.strip()[:120]}。规划会话不能自己决定推翻已有决定：先写 QUESTION.md 问用户")
+    return problems
+
+
+def scope_block(m: Mission) -> str:
+    """冻结进 brief-exec.md（用户签名）的 scope 和 forbid：信任层的 northstar-scope 从这里读（proposals/2026-11-08-phase6-open-points.md 第 4 条）。"""
+    request = (m.dir / "request.md").read_text(encoding="utf-8")
+    return ("\n\n## mission 的范围（信任层的 northstar-scope 据此拦截写入）\n\n"
+            f"scope: {', '.join(mission_field(request, 'scope'))}\n"
+            f"forbid: {', '.join(mission_field(request, 'forbid'))}\n")
+
+
 def planner_prompt(m: Mission, work: Path) -> str:
     text = (ORC_ROOT / "templates" / "planner-brief.md").read_text(encoding="utf-8")
     ns = m.repo() / ".northstar" / "NORTHSTAR.md"
@@ -519,9 +609,20 @@ def planner_prompt(m: Mission, work: Path) -> str:
     else:
         block = "- 产品仓库还没有 NORTHSTAR。\n"
         rule = "；产品仓库没有 NORTHSTAR，可以是空数组"
-    for key, value in (("{{REQUEST}}", (m.dir / "request.md").read_text(encoding="utf-8").strip()),
+    request = (m.dir / "request.md").read_text(encoding="utf-8")
+    comps = canvas_components(m.repo())
+    if comps is None:
+        canvas = "- 产品仓库还没有签名的画布，`component` 自己起一个简短的名字。\n"
+    else:
+        canvas = ("- 签名的画布（`.northstar/architecture.json`）：节点的 `component` **只能**从这些组件 id 里选：\n\n"
+                  + "".join(f"  - `{cid}`（{c.get('name', '')}）：{'、'.join(c.get('paths', []))}\n" for cid, c in comps.items()))
+    scope, forbid = mission_field(request, "scope"), mission_field(request, "forbid")
+    if scope or forbid:
+        canvas += (f"- 这个 mission 的范围：scope = {'、'.join(scope) or '（不限）'}；forbid = {'、'.join(forbid) or '（无）'}。"
+                   "节点的组件只能在 scope 里，`files` 必须在这些组件的目录里，不能碰 forbid 里的文件。\n")
+    for key, value in (("{{REQUEST}}", request.strip()),
                        ("{{REPO}}", str(m.repo())), ("{{WORK}}", str(work)), ("{{MISSION}}", m.name),
-                       ("{{NORTHSTAR_BLOCK}}", block), ("{{CLAUSES_RULE}}", rule)):
+                       ("{{NORTHSTAR_BLOCK}}", block + canvas), ("{{CLAUSES_RULE}}", rule)):
         text = text.replace(key, value)
     return text
 
@@ -658,7 +759,8 @@ def validate_plan_outputs(m: Mission, work: Path) -> List[str]:
             problems.append(f"节点 {tid} 缺少 component（所属组件）")
         if task.get("state") != "ready":
             problems.append(f"节点 {tid} 的 state 必须是 ready")
-    return problems
+    tasks = [t for t in data.get("tasks", []) if isinstance(t, dict)] if isinstance(data.get("tasks"), list) else []
+    return problems + product_plan_problems(m, work, tasks)
 
 
 def copy_plan_outputs(m: Mission, work: Path) -> Dict[str, str]:
@@ -961,7 +1063,8 @@ def pending_agent_messages(m: Mission, kind: str) -> Tuple[List[str], List[str]]
         if e.get("kind") == "answer" and e.get("id") in questions and f"answer:{e['id']}" not in delivered:
             text = Path(e["file"]).read_text(encoding="utf-8").strip()
             if questions[e["id"]].get("outcome") == "question":
-                parts.append(f"用户对你的问题的回答：\n\n{text}\n\n据此继续：写出{spec['outputs']}，或者再写一个 QUESTION.md。")
+                parts.append(f"用户对你的问题的回答（编号 {e['id']}，引用时写 [answer:{e['id']}]）：\n\n{text}\n\n"
+                             f"据此继续：写出{spec['outputs']}，或者再写一个 QUESTION.md。")
             else:
                 parts.append(f"你的产出没有通过校验，coordinator 的裁决：\n\n{text}\n\n据此修正后把{spec['outputs']}重新写出。")
             ids.append(f"answer:{e['id']}")
@@ -1796,7 +1899,9 @@ def launch_executor(m: Mission, node: str, message: Optional[str], fresh: bool =
             "--permission-mode", "default", f"--settings={json.dumps(settings)}", f"--allowedTools={','.join(tools)}"]
     argv += ["--session-id", session] if mode == "new" else ["--resume", session]
     # ORC_ROLE=implement：信任层的 Stop hook 据此放行未提交的改动（提交由 orc 做）；不写字节码和 pytest 缓存，免得弄脏 worktree
-    env = {"ORC_ROLE": "implement", "ORC_NODE": node, "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:cacheprovider"}
+    # ORC_MISSION_CONTROL：信任层的 northstar-scope 验过这个目录的签名后，从冻结的 brief-exec.md 读 scope 和 forbid
+    env = {"ORC_ROLE": "implement", "ORC_NODE": node, "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:cacheprovider",
+           "ORC_MISSION_CONTROL": os.path.realpath(m.control)}
     launch_job(m, "executor", node, argv, wt, prompt, env, session=session, mode=mode, generation=generation)
     print(f"节点 {node}：已启动执行会话（{mode}，第 {generation} 代，模型 {cfg['model']}）")
 
@@ -3278,7 +3383,7 @@ def cmd_go(args) -> int:
         c, plan = m.control, m.dir / "plan"
         brief = (ORC_ROOT / "templates" / "brief-exec.md").read_text(encoding="utf-8")
         brief = brief.replace("{{MISSION}}", m.name).replace("{{IMPLEMENT_MODEL}}", m.roles()["implement"]["model"])
-        brief += freeze_verification(m)
+        brief += freeze_verification(m) + scope_block(m)
         written = {"approved-design.md": (plan / "design.md").read_bytes(),
                    "approved-plan.md": (plan / "plan.md").read_bytes(),
                    "brief-exec.md": brief.encode()}
