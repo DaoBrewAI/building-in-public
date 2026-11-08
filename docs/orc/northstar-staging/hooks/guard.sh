@@ -55,14 +55,20 @@ case "$tool" in
 esac
 
 # —— 范围围栏与停止条件（只对写文件类工具）——
-if [ "$tool" != Bash ] && [ -f .northstar/missions/ACTIVE ]; then
+# orc 的执行会话带着 ORC_MISSION_CONTROL：范围来自用户签过名的 mission control 目录（northstar-scope 先验签名），
+# 不用 .northstar/missions/ACTIVE，同一个仓库里的多个 mission 可以并行
+if [ "$tool" != Bash ] && { [ -f .northstar/missions/ACTIVE ] || [ -n "${ORC_MISSION_CONTROL:-}" ]; }; then
   msg=$(/opt/northstar/bin/northstar-scope $files 2>&1); rc=$?
-  m=$(cat .northstar/missions/ACTIVE)
   if [ $rc -eq 3 ]; then
     echo "NORTHSTAR 停止条件：$msg。立即停止实现，在 proposals/ 写明原因，然后结束。" >&2; exit 2
   elif [ $rc -ne 0 ]; then
-    { echo "NORTHSTAR 纠偏：$msg"; echo "回到 mission 的验收标准（原文）："
-      sed -n '/^## 验收标准/,/^## [^验]/p' ".northstar/missions/$m.md"; } >&2
+    if [ -n "${ORC_MISSION_CONTROL:-}" ]; then
+      { echo "NORTHSTAR 纠偏：$msg"; echo "只改你这个节点的声明文件；回到 orc 发给你的验收标准。"; } >&2
+    else
+      m=$(cat .northstar/missions/ACTIVE)
+      { echo "NORTHSTAR 纠偏：$msg"; echo "回到 mission 的验收标准（原文）："
+        sed -n '/^## 验收标准/,/^## [^验]/p' ".northstar/missions/$m.md"; } >&2
+    fi
     exit 2
   fi
 fi

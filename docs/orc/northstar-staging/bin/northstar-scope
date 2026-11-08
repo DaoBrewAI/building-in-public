@@ -4,11 +4,30 @@
 import fnmatch, json, os, re, sys
 root = os.popen("git rev-parse --show-toplevel").read().strip() or os.getcwd(); os.chdir(root)
 NS = ".northstar"
-try:
-    m = open(f"{NS}/missions/ACTIVE").read().strip()
-except FileNotFoundError:
-    sys.exit(0)                                   # 没有进行中的 mission，不设围栏
-text = open(f"{NS}/missions/{m}.md").read()
+ctl = os.environ.get("ORC_MISSION_CONTROL")
+if ctl:
+    # orc 的执行会话（orc 启动时设好，会话里的 agent 改不了自己进程的环境变量）：scope 和 forbid 来自
+    # 用户签过名的冻结文件 brief-exec.md（northstar approve-mission）。先验签名、再验哈希，任何一项不对就停下。
+    # 每个 mission 各读各的 control 目录，同一个仓库里可以并行（proposals/2026-11-08-phase6-open-points.md 第 4 条）
+    import hashlib, subprocess
+    m = os.path.basename(os.path.dirname(os.path.realpath(ctl)))
+    signed = subprocess.run(["/opt/northstar/bin/northstar", "verify-mission", ctl], capture_output=True).returncode == 0
+    try:
+        want = [l.split()[0] for l in open(os.path.join(ctl, "approved.sha256")).read().splitlines()
+                if l.split() and l.split()[-1] == "brief-exec.md"]
+        data = open(os.path.join(ctl, "brief-exec.md"), "rb").read()
+        hashed = len(want) == 1 and hashlib.sha256(data).hexdigest() == want[0]
+    except OSError:
+        hashed = False
+    if not (signed and hashed):
+        print(f"orc mission「{m}」的冻结文件签名或哈希校验失败（{ctl}），不知道这个 mission 的范围", file=sys.stderr); sys.exit(3)
+    text = data.decode("utf-8")
+else:
+    try:
+        m = open(f"{NS}/missions/ACTIVE").read().strip()
+    except FileNotFoundError:
+        sys.exit(0)                               # 没有进行中的 mission，不设围栏
+    text = open(f"{NS}/missions/{m}.md").read()
 def field(k):
     h = re.search(rf"^{k}:[ \t]*(.*)$", text, re.M)   # 不能用 \s*：值为空时会吞掉下一行
     return [s.strip() for s in h.group(1).split("#")[0].split(",") if s.strip()] if h else []
