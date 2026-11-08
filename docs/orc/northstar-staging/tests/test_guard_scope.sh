@@ -161,4 +161,41 @@ sed -i '' 's/^scope:.*/scope: core/; s/^forbid:.*/forbid:/' .northstar/missions/
 run northstar-scope src/core/a.py;                 expect_rc 0 "forbid 为空时不吞下一行"
 run northstar-scope src/ui/b.py;                   expect_rc 1 "forbid 为空时 scope 仍生效"
 
+begin "orc mission：范围来自签名的 control 目录（ORC_MISSION_CONTROL），不用 ACTIVE"
+new_repo; write_mission_fixture; rm .northstar/missions/ACTIVE
+# 两个 mission 的 control 目录：brief-exec.md 里写范围，approved.sha256 记它的哈希，用测试密钥按 northstar-mission 签名
+make_control() {   # make_control <mission> <scope> <forbid>
+  local c="$T/missions/$1/control"; mkdir -p "$c"
+  printf '# 执行规则：mission %s\n\n## mission 的范围\n\nscope: %s\nforbid: %s\n' "$1" "$2" "$3" > "$c/brief-exec.md"
+  printf 'x\n' > "$c/approved-design.md"
+  ( cd "$c" && shasum -a 256 approved-design.md brief-exec.md > approved.sha256 )
+  ssh-keygen -Y sign -n northstar-mission -f "$T/key" "$c/approved.sha256" >/dev/null 2>&1
+  echo "$c"
+}
+C1=$(make_control m-core core package.json)
+C2=$(make_control m-ui ui "src/core/*")
+export ORC_MISSION_CONTROL="$C1"
+run northstar-scope src/core/a.py;                 expect_rc 0 "签名的 control：范围内返回 0（没有 ACTIVE）"
+run northstar-scope src/ui/b.py;                   expect_rc 1 "签名的 control：越界返回 1"
+expect_out "当前 mission「m-core」只允许改：core" "越界信息里是 orc 的 mission 名"
+run northstar-scope package.json;                  expect_rc 3 "签名的 control：forbid 返回 3"
+guard "$(write_p Write "$PWD/src/ui/b.py")";       expect_rc 2 "guard：orc 执行会话越界写入被拦"
+expect_out "只改你这个节点的声明文件" "guard：orc 会话的纠偏提示"
+guard "$(write_p Write "$PWD/package.json")";      expect_rc 2 "guard：orc 执行会话碰到 forbid 被停下"
+expect_out "NORTHSTAR 停止条件" "guard：停止条件信息"
+guard "$(write_p Write "$PWD/src/core/a.py")";     expect_rc 0 "guard：orc 执行会话范围内写入放行"
+export ORC_MISSION_CONTROL="$C2"
+run northstar-scope src/ui/b.py;                   expect_rc 0 "同一个仓库里另一个 mission 用它自己的范围（并行）"
+run northstar-scope src/core/a.py;                 expect_rc 3 "另一个 mission 的 forbid 生效"
+echo "scope: core, ui" >> "$C2/brief-exec.md"
+run northstar-scope src/ui/b.py;                   expect_rc 3 "brief-exec.md 被改过（哈希不符）：停下"
+expect_out "签名或哈希校验失败" "说明校验失败"
+C3=$(make_control m-unsigned core ""); rm "$C3/approved.sha256.sig"
+export ORC_MISSION_CONTROL="$C3"
+run northstar-scope src/core/a.py;                 expect_rc 3 "control 没有签名：停下"
+ssh-keygen -Y sign -n northstar -f "$T/key" "$C3/approved.sha256" >/dev/null 2>&1
+run northstar-scope src/core/a.py;                 expect_rc 3 "签名的命名空间不是 northstar-mission：停下"
+unset ORC_MISSION_CONTROL
+run northstar-scope src/ui/b.py package.json;      expect_rc 0 "不带 ORC_MISSION_CONTROL、也没有 ACTIVE 时不设围栏"
+
 summary
