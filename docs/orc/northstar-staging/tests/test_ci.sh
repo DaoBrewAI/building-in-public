@@ -54,7 +54,10 @@ expect_ci_fail() { [ "$CI_FAIL" = "$1" ] && _ok "$2" || _fail "$2" "期望在「
 seal_northstar() {   # 起草并签名（可选带进度报告和 mission）
   northstar init >/dev/null
   printf '# NORTHSTAR\n- N1: core 返回 42\n' > drafts/NORTHSTAR.md
-  if [ "${1:-}" = mission ]; then
+  if [ "${1:-}" = canvas ]; then     # orc 的流程：只签画布，不 northstar start（没有 ACTIVE、没有 status/）
+    printf '{"components":[{"id":"core","name":"Core","paths":["src/core/*"]}]}\n' > drafts/architecture.json
+    tty_run SEAL northstar seal >/dev/null; git add -A; git commit -qm "[NS] seal 画布"
+  elif [ "${1:-}" = mission ]; then
     printf '{"components":[{"id":"core","name":"Core","paths":["src/core/*"]}]}\n' > drafts/architecture.json
     printf '# MISSION: m1\nscope: core\n\n## 验收标准\n- [ ] core 返回 42\n' > drafts/missions/m1.md
     tty_run SEAL northstar start m1 >/dev/null; git add -A; git commit -qm "[NS] start m1"
@@ -90,5 +93,10 @@ echo 43 > src/core/a.py; git add -A; git commit -qm "[N1] core 43"
 ci; expect_ci_fail "进度报告与代码一致" "报告生成后又有代码提交（报告过期）时失败"
 report
 ci; expect_ci_pass "重新生成并提交报告后再次通过"
+
+begin "进度报告：orc 的流程（签了画布、没有 northstar start）跳过这一步（proposals/2026-11-08-ci-progress-report-step.md）"
+ci_repo; seal_northstar canvas
+mkdir -p src/core; echo 42 > src/core/a.py; git add -A; git commit -qm "[N1] core 42"
+ci; expect_ci_pass "有画布、没有 ACTIVE 也没有 status/status.json 时，进度报告这一步跳过"
 
 summary
