@@ -180,9 +180,17 @@ class GitInCheckCopies(AcceptCase):
         refs = self.git("for-each-ref")
         head = self.git("rev-parse", "HEAD")
         snap = self.tmp / "snap"
-        self.assertEqual(orc.snapshot_repo(m, snap), head)
+        self.assertEqual(orc.snapshot_repo(m, snap, with_git=True), head)
         self.assertEqual(self.git("rev-parse", "HEAD", cwd=snap), head)
         self.assertEqual(self.git("ls-files", cwd=snap), self.git("ls-files"))           # git 在副本里能用
+        # 验证阶段实现前跑检查的副本（run_checks）也带 git；给验证会话读的副本（默认）没有 .git
+        res, = orc.run_checks(m, head, self.tmp, [], [{"id": "g", "command": "git ls-files --error-unmatch "
+                                                       + self.git("ls-files").split()[0], "expect_before": "pass"}],
+                              self.tmp / "verify-run")
+        self.assertTrue(res["ok"], res)
+        plain = self.tmp / "plain"
+        orc.snapshot_repo(m, plain)
+        self.assertFalse((plain / ".git").exists())
         # 节点 worktree：已提交的、改了没提交的、删掉的、新加的都要和 worktree 一样
         wt = self.tmp / "wt-copy-src"
         self.git("worktree", "add", "-q", "--detach", str(wt), "HEAD")
