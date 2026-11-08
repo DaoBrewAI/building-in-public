@@ -157,11 +157,11 @@ pending → running → submitted → integrated
 
 - **模型**：`review` 角色（目前 Fable 5.1），和执行用的模型不同。启动方式、沙箱、提问、自动修 2 次再 `mediate`，都和规划会话一样。
 - **每一轮从头开始**：每次 `planning → verifying` 都清空 `~/.orc-worktrees/<mission>/verify-work/`，新开会话（不 resume 上一轮）。轮内的提问回答和修复仍回到同一个会话。
-- **只给**：`spec/design.md`、`spec/task-dag.json`（orc 从 `plan/` 复制）、`repo/`（产品仓库当前提交的副本，带 git 历史，提交号写进 `verify-snapshot`）、用户在审阅时提过的意见。**不给** `plan.md`，也看不到规划会话的过程。
+- **只给**：`spec/design.md`、`spec/task-dag.json`（orc 从 `plan/` 复制）、`repo/`（产品仓库当前提交的副本，没有 `.git`，提交号写进 `verify-snapshot`）、用户在审阅时提过的意见。**不给** `plan.md`，也看不到规划会话的过程。
 - **产出**：`repo/` 里新建的测试文件，和工作目录根上的 `checks.json`（`test_files`、`checks`：每个检查有 `id`、`node`、`acceptance`（第几条验收标准）、`command`、`expect_before`（fail / pass））。
 - **检查挂在哪个节点上**（2026-11-08 加，brief 里的规则，orc 不自动判断）：挂在节点 X 上的检查只能依赖 X 和它前置节点的改动；跑整套测试这类检查挂在依赖了所有相关节点的节点上。起因：mission `subtract` 实跑时，跑整套测试的检查挂在了前置节点上，要等后续节点做完才会通过，节点永远完成不了。
 - **orc 校验**：每条验收标准至少一个检查；每个节点至少一个 `fail` 检查；测试文件只能是新文件，不能和任何节点的 `files` 重叠，不能在 `.northstar/`、`.github/`、`.git/` 下。
-- **检查用的副本**（验证、提交关口、最终审查都一样）：`git clone --shared` 产品仓库再检出对应提交，不跑 git hook。产品仓库自己的检查要用 git（daoharness-core 的 `core_checks.py` 用 `git ls-files`、`git merge-base origin/main HEAD` 比起点），所以副本不能只是文件（`proposals/2026-11-08-checks-need-git.md`）。`--shared` 只读产品仓库的对象，不写它；副本里的 `origin/<分支>` 就是产品仓库本地的分支。给评审模型看的副本仍然只有文件。
+- **检查用的副本**（验证、提交关口、最终审查都一样）：`git clone --shared` 产品仓库再检出对应提交，不跑 git hook。产品仓库自己的检查要用 git（daoharness-core 的 `core_checks.py` 用 `git ls-files`、`git merge-base origin/main HEAD` 比起点），所以副本不能只是文件（`proposals/2026-11-08-checks-need-git.md`）。`--shared` 只读产品仓库的对象，不写它；副本里的 `origin/<分支>` 就是产品仓库本地的分支。给验证会话读的 `repo/` 和给评审模型看的副本仍然只有文件。
 - **实际运行**：orc 用当前提交做一份干净的副本（带 git 历史，见下面「检查用的副本」），只放入列出的测试文件，在 macOS 沙箱（`sandbox-exec`）里逐条运行：只能写这份副本（`TMPDIR` 也指向里面），不能联网，每条最多 300 秒。`fail` 的必须失败，`pass` 的必须通过。产品仓库在验证期间有新提交时停下，`next: error`。
 - **通过**：复制进 mission 的 `verify/`，写 `verify-ready`，状态进入 `plan-review`。
 

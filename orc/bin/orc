@@ -653,14 +653,23 @@ def git_copy(source: Path, commit: str, dest: Path) -> None:
             raise OrcError(f"做检查用的副本失败（{' '.join(argv[3:5])}：{run.stderr.strip()[:300]}）。")
 
 
-def snapshot_repo(m: Mission, dest: Path) -> str:
-    """把产品仓库当前提交（HEAD）做成一份检查用的副本（带 git 历史，见 git_copy），返回提交号。"""
+def snapshot_repo(m: Mission, dest: Path, with_git: bool = False) -> str:
+    """把产品仓库当前提交（HEAD）导出成一份副本，返回提交号。给验证会话读的副本没有 .git；
+    with_git：检查用的副本，带 git 历史（见 git_copy）。"""
     repo = str(m.repo())
     head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True)
     if head.returncode != 0:
         raise OrcError(f"产品仓库 {repo} 读不到当前提交（{head.stderr.strip()}）。先在产品仓库里至少提交一次，再运行 orc step。")
     base = head.stdout.strip()
-    git_copy(m.repo(), base, dest)
+    if with_git:
+        git_copy(m.repo(), base, dest)
+        return base
+    dest.mkdir(parents=True, exist_ok=True)
+    archive = subprocess.Popen(["git", "-C", repo, "archive", "--format=tar", base], stdout=subprocess.PIPE)
+    untar = subprocess.run(["tar", "-x", "-C", str(dest)], stdin=archive.stdout, capture_output=True, text=True)
+    archive.stdout.close()
+    if archive.wait() != 0 or untar.returncode != 0:
+        raise OrcError(f"导出产品仓库 {repo} 的提交 {base[:12]} 失败（{untar.stderr.strip()}）。")
     return base
 
 
@@ -845,7 +854,7 @@ def run_checks(m: Mission, base: str, test_src: Path, test_files: List[str], che
     """在一份干净的 base 提交上，只放入测试文件，逐条运行检查。返回每条的结果。"""
     if where.exists():
         shutil.rmtree(where)
-    snapshot_repo(m, where)     # 用的是当前 HEAD；调用方先确认 HEAD 仍是 base
+    snapshot_repo(m, where, with_git=True)     # 用的是当前 HEAD；调用方先确认 HEAD 仍是 base
     for rel in test_files:
         dst = where / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
