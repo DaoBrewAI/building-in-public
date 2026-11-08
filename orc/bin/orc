@@ -3398,6 +3398,12 @@ def phase_plan(prod: Product, phase: str) -> Dict[str, dict]:
     return plan
 
 
+def scopes_overlap(a: dict, b: dict) -> bool:
+    """两个 mission 的 scope（组件 id）有交集；任何一个没写 scope 就当它会改整个仓库。"""
+    sa, sb = set(mission_field(a["text"], "scope")), set(mission_field(b["text"], "scope"))
+    return not sa or not sb or bool(sa & sb)
+
+
 def orc_mission_name(prod: Product, mid: str) -> str:
     return f"{prod.name}-{mid.lower()}"[:64]
 
@@ -3485,10 +3491,18 @@ def phase_step(prod: Product, phase: str) -> str:
                 prod.append("merged", phase=phase, mission_id=mid, mission=m.name, sha=sha)
                 print(f"phase {phase}：{mid} 的 PR 已合并")
     plan, status = phase_status(prod, phase)
-    # 2. 依赖都完成的 mission：启动（没有依赖关系的同时启动）
+    # 2. 依赖都完成的 mission：启动。没有依赖关系的同时启动，但同一个仓库里 scope 有重叠（或没写 scope）的一次一个：
+    #    它们的 PR 都从同一个 main 开始，先合并的那个会让后一个冲突（节点层面「并行的节点文件不重叠」的同一条规则）
+    active = [mid for mid, st in status.items() if st in ("running", "awaiting-merge")]
     for mid, st in status.items():
-        if st == "not-started":
-            launch_phase_mission(prod, phase, mid, plan[mid])
+        if st != "not-started":
+            continue
+        clash = [o for o in active if plan[o]["repo"] == plan[mid]["repo"] and scopes_overlap(plan[o], plan[mid])]
+        if clash:
+            print(f"phase {phase}：{mid} 和 {'、'.join(clash)} 在同一个仓库里、scope 有重叠，等它们合并后再开始")
+            continue
+        launch_phase_mission(prod, phase, mid, plan[mid])
+        active.append(mid)
     plan, status = phase_status(prod, phase)
     # 3. 每个进行中的 mission 走一步，收集它们的 next
     waits: List[str] = []

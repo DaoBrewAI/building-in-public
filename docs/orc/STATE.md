@@ -345,7 +345,7 @@ pending → running → submitted → integrated
 - phase 文档要有标题含「依赖」的一节，每个 mission 一行：`- P1-1：无`、`- P1-4：依赖 P1-2`、`- P1-5a：依赖 P1-1、P1-2`。mission 文件在 mission 目录里，文件名是 `<id>.md` 或 `<id>-<说明>.md`；文件头 `仓库: <名字>`（产品配置里的仓库），orc 做不完的写 `执行: 人工`。依赖表缺失、mission 文件找不到或多于一个、依赖不存在、有环、仓库没写或不认识，都 `next: error` 说明。
 - `orc phase --product <产品> --phase <P>` 走一步：
   1. 已清理、等合并的 mission：`gh pr view` 查 PR 合并了没有，合并了记 `merged`。
-  2. 依赖都完成的 mission：从产品仓库默认分支的最新提交开始（工作区必须干净、在默认分支上，先 fast-forward），请求就是 mission 文件全文。没有依赖关系的同时启动。
+  2. 依赖都完成的 mission：从产品仓库默认分支的最新提交开始（工作区必须干净、在默认分支上，先 fast-forward），请求就是 mission 文件全文。没有依赖关系的同时启动；但同一个仓库里 `scope` 有重叠（或没写 scope）的，等前一个合并后再开始：它们的 PR 都从同一个 main 开始，先合并的会让后一个冲突（和节点层面「并行的节点文件不重叠」同一条规则）。
   3. 进行中的 mission 各走一步（`orc step`）；有要人处理的（go-gate、sign、ask-user、mediate、error），交出第一个，前面带 `[mission 名]`。
   4. 人工 mission 依赖都完成时列成待办：用户做完运行 `orc done --product <产品> --phase <P> <mission>`。orc 跑的 mission 不能手动标完成：它的 PR 合并了才算。
   5. 全部完成后，`review` 模型（没有工具）对照 phase 文档的「完成标准」逐条给结论：`met`、`not-met`、`needs-human`（要人亲手验收的，写清楚人要做什么，orc 不代做）。记 `phase-conclusion`，输出 `next: report <汇总页链接>`。
