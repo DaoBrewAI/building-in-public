@@ -510,6 +510,42 @@ class Gate(ExecCase):
         self.assertIn("b.txt", first["reason"])
 
 
+class TestCrossesDag(ExecCase):
+    """提交关口的兜底：冻结的测试导入了不是前置节点的节点新建的文件（两层冻结前的检查都漏了），orc 直接停下说明。"""
+
+    def sibling(self, service_test, service_py):
+        tasks = [task("fakes", ["fake.py"], ["fake.py 有 done"]), task("service", ["service.py"], ["service.py 有 run"])]
+        tests = {"tests/orc/test_fakes.py": "import sys\nsys.path.insert(0, '.')\nfrom fake import done\n",
+                 "tests/orc/test_service.py": service_test}
+        checks = [{"id": n, "node": n, "acceptance": [1], "command": f"python3 tests/orc/test_{n}.py", "expect_before": "fail"}
+                  for n in ("fakes", "service")]
+        self.signed(tasks, checks, tests)
+        self.script("fakes", commit({"fake.py": "done = 1\n"}, [1]))
+        self.script("service", commit({"service.py": service_py}, [1]),
+                    json.dumps({"out": {"status": "question", "question": "停一下"}}))
+
+    def test_frozen_test_importing_a_sibling_file_stops_with_the_reason(self):
+        self.sibling("import sys\nsys.path.insert(0, '.')\nfrom fake import done\nimport service\n", "run = 1\n")
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        gate = self.ev("job-exit", type="gate", node="service")
+        self.assertEqual(gate[-1]["outcome"], "test-crosses-dag")
+        self.assertIn("检查 `service` 失败在导入 fake.py 上", gate[-1]["reason"])
+        self.assertIn("节点 fakes 新建", gate[-1]["reason"])
+        blocked = self.ev("node-blocked", node="service")[-1]
+        self.assertEqual(blocked["reason"], "冻结的测试越过了依赖")
+        self.assertIn("orc abandon --mission m1", (self.mdir / "questions" / f"{blocked['question']}.md").read_text())
+        self.assertEqual(len(self.calls("exec-service")), 1)        # 没有把纠偏单退回给执行会话
+
+    def test_implementation_importing_a_sibling_file_is_the_executors_fault(self):
+        # 测试本身没写 fake：是实现去导入了别的节点的文件，照常退回执行会话
+        self.sibling("import sys\nsys.path.insert(0, '.')\nimport service\n", "from fake import done\nrun = 1\n")
+        self.drive()
+        gate = self.ev("job-exit", type="gate", node="service")
+        self.assertEqual(gate[0]["outcome"], "rejected")
+        self.assertEqual(len(self.calls("exec-service")), 2)
+
+
 class ExecutorResults(ExecCase):
     def test_result_that_does_not_match_the_worktree_is_sent_back(self):
         self.simple(("a",))
