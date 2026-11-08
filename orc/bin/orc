@@ -1965,7 +1965,9 @@ def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     # 评审通过：写提交请求交给复用的 broker。diff_sha256 把提交绑定到评审过的字节
     base = read1(ctl / "worktrees.txt").split("\t")[2]
     clauses = task.get("clauses", [])
-    message = f"[{','.join(clauses)}] {node}：{result['message'].strip()}" if clauses else f"[orc] {node}：{result['message'].strip()}"
+    # 执行会话常按仓库的提交约定自己带上 [N#]（实测 2026-11-08）；条款标签由 orc 统一加，去掉它带的，免得重复
+    text_ = re.sub(r"^\[[^\]]*\]\s*", "", result["message"].strip())
+    message = f"[{','.join(clauses)}] {node}：{text_}" if clauses else f"[orc] {node}：{text_}"
     digest = hashlib.sha256(json.dumps({"job": job, "result": result}, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
     numbers = [int(p.stem.rsplit("-", 1)[1]) for p in work.glob("COMMIT-*-*.json") if p.stem.rsplit("-", 1)[1].isdigit()]
     n = max(numbers, default=0) + 1
