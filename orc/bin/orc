@@ -1240,7 +1240,7 @@ def render_verification(m: Mission) -> str:
             + "".join(rows) + "</table></div>" + "".join(files))
 
 
-def run_publisher(m: Mission, site: Path, page: str, url: Optional[str]) -> dict:
+def run_publisher(m: Mission, site: Path, page: str, url: Optional[str], description: str) -> dict:
     """发布适配层：用 claude -p 的 Artifact 工具把 orc 生成的网页发布成仅本人可见的 Claude Artifact。
 
     发布会话只放行 Read 和 Artifact：它只读这一个文件、发布，不写任何东西。已经发布过的页面带上原链接更新，链接不变。
@@ -1254,7 +1254,7 @@ def run_publisher(m: Mission, site: Path, page: str, url: Optional[str]) -> dict
         target = "这是第一次发布：不传 `url`，`icon` 用 `checklist`。"
     prompt = (ORC_ROOT / "templates" / "publish-artifact.md").read_text(encoding="utf-8")
     for key, value in (("{{PAGE}}", page), ("{{TARGET}}", target),
-                       ("{{DESCRIPTION}}", f"orc mission {m.name} 的计划审阅页：设计、计划、任务 DAG 和要签名的哈希。")):
+                       ("{{DESCRIPTION}}", description)):
         prompt = prompt.replace(key, value)
     cfg = m.roles()["plan"]
     argv = ["claude", "-p", "--model", cfg["model"], "--effort", "low", "--output-format", "json",
@@ -1288,7 +1288,7 @@ def run_publisher(m: Mission, site: Path, page: str, url: Optional[str]) -> dict
     return result
 
 
-def ensure_published(m: Mission, route: str, html_text: str) -> str:
+def ensure_published(m: Mission, route: str, html_text: str, description: str) -> str:
     digest = hashlib.sha256(html_text.encode()).hexdigest()
     receipts_path = m.dir / "publish.json"
     receipts = json.loads(receipts_path.read_text()) if receipts_path.is_file() else {}
@@ -1299,7 +1299,7 @@ def ensure_published(m: Mission, route: str, html_text: str) -> str:
     site.mkdir(parents=True, exist_ok=True)
     page = f"{route}.html"
     write_atomic(site / page, html_text)
-    result = run_publisher(m, site, page, current.get("url"))
+    result = run_publisher(m, site, page, current.get("url"), description)
     receipts[route] = {"url": result["url"], "sha256": digest, "at": now()}
     write_atomic(receipts_path, json.dumps(receipts, ensure_ascii=False, indent=2) + "\n")
     m.append("published", "orc step", route=route, url=result["url"], sha256=digest)
@@ -1326,7 +1326,8 @@ def h_plan_review(m: Mission):
         print(f"mission {m.name}：plan-review → approved")
         return None, True
     try:
-        url = ensure_published(m, "plan", render_review(m))
+        url = ensure_published(m, "plan", render_review(m),
+                               f"orc mission {m.name} 的计划审阅页：设计、计划、任务 DAG 和要签名的哈希。")
     except OrcError as error:
         return f"error {error}", False
     return f"go-gate {url}", False
@@ -1390,7 +1391,7 @@ EXEC_KEYS = ("max_parallel", "session_timeout_seconds", "crash_retries")
 RESULT_REPAIRS = 2              # 执行会话的结果格式不对时，发回同一个会话修的次数
 STREAK_FRESH, STREAK_BLOCK = 2, 3   # 连续被拒第 2 次：撤回改动、新开会话；第 3 次：节点 blocked
 REVIEW_TIMEOUT = 1800           # 一次对齐评审最多等多久（秒）；超时按「评审服务出错」处理，不放行
-NODE_EVENTS = {"node-start", "job-start", "job-exit", "node-blocked", "node-unblocked"}
+NODE_EVENTS = {"node-start", "job-start", "job-exit", "node-blocked", "node-unblocked", "node-reopen"}
 ORC_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "user.name=orc", "-c", "user.email=orc@localhost"]
 
 
@@ -1673,7 +1674,7 @@ def job_age_seconds(start: dict) -> float:
 
 def session_overdue(start: dict, cfg: dict) -> bool:
     """模型会话（执行会话的一轮、判断测试对错）超过 session_timeout_seconds 就算超时。"""
-    return start["type"] in ("executor", "dispute") and job_age_seconds(start) > cfg["session_timeout_seconds"]
+    return start["type"] in ("executor", "dispute", "notes") and job_age_seconds(start) > cfg["session_timeout_seconds"]
 
 
 def kill_job(start: dict) -> None:
@@ -2033,8 +2034,12 @@ def cmd_gate(args) -> int:
     data = json.loads(sys.stdin.read())
     if args.kind == "gate":
         outcome = run_gate(m, data["node"], args.job, data["result"])
-    else:
+    elif args.kind == "submit":
         outcome = run_submit(m, data["node"], args.job)
+    elif args.kind == "final":
+        outcome = run_final(m, args.job, data["tip"])
+    else:
+        outcome = run_ci(m, args.job, data["pr"], data["tip"])
     write_atomic(job_file(m, args.job, "result.json"), json.dumps(outcome, ensure_ascii=False) + "\n")
     return 0
 
@@ -2092,6 +2097,9 @@ def launch_integrate(m: Mission, node: str) -> None:
     argv = ["bash", str(SCRIPTS / "integrate-task.sh"), "--control-dir", os.path.realpath(m.control),
             "--task-dir", os.path.realpath(work), "--mission", m.name, "--task-id", node,
             "--parent-worktree", os.path.realpath(parent), "--expected-parent-tip", tip]
+    # 合并提交也带 [N#]：产品仓库 CI 的「commit 必须带 [N#]」检查每个提交（proposals/2026-11-08-phase5-open-points.md 第 2 条）
+    clauses = approved_tasks(m)[node].get("clauses", [])
+    argv += ["--message", f"[{','.join(clauses)}] Integrate {node}" if clauses else f"[orc] Integrate {node}"]
     launch_job(m, "integrate", node, argv, os.path.realpath(parent), "", head=head, parent_tip=tip)
     print(f"节点 {node}：开始集成到 {mission_branch(m)}")
 
@@ -2206,6 +2214,10 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
     kind = last["kind"]
     if kind == "node-start":
         launch_executor(m, node, None)
+        return
+    if kind == "node-reopen":
+        launch_executor(m, node, f"mission 的最终审查没通过，节点 {node} 被重新打开。纠偏单：\n\n{card_text(last.get('card'))}\n\n"
+                                 "修好后按 commit 格式结束这一轮；acceptance 写这次修的验收标准编号，没有对应的就写 []。")
         return
     if kind == "node-unblocked":
         answer = Path(last["answer"]).read_text(encoding="utf-8").strip()
@@ -2393,7 +2405,7 @@ def h_executing(m: Mission):
     busy = {s["node"] for s in running_jobs(m)}
     for node in tasks:
         evs = node_events(m, node)
-        if evs and node not in busy and evs[-1]["kind"] in ("node-start", "node-unblocked", "job-exit"):
+        if evs and node not in busy and evs[-1]["kind"] in ("node-start", "node-unblocked", "job-exit", "node-reopen"):
             decide(m, node, evs[-1], cfg)
     record_node_states(m)
     # 4. 有没回答的问题：mission 进入 blocked（一次一个）
@@ -2433,6 +2445,666 @@ def h_executing(m: Mission):
             "这是 orc 的 bug；把 events.jsonl 给用户看。"), False
 
 
+# ---------------------------------------------------------------- 验收（阶段 5，STATE.md「验收」）
+
+MISSION_JOBS = "_mission"        # mission 级后台任务（最终审查、等 CI、状态页说明）用的节点名；DAG 节点 id 不以 _ 开头
+FINAL_ROUNDS = 2                 # 最终审查最多打回几轮；连续第 3 次不通过就 mediate
+NOTES_REPAIRS = 2                # 状态页说明不合格时发回修的次数
+MAX_INLINE_DIFF = 60000          # 和 northstar-review 的上限一致：更大的 diff 不放进提示词，让评审用 Read 看代码
+ACCEPT_KEYS = ("required_checks", "ci_timeout_seconds")
+PROGRESS_WORDS = re.compile(r"完成|done|complete|passed|100%", re.I)
+REF_RE = re.compile(r"\[(commit|check|file):([^\]]+)\]")
+
+
+def accept_config(path: Path = EXEC_CONFIG) -> dict:
+    """orc.toml 的 [acceptance]：进入 accepted 前 PR 上必须通过的 CI 检查（逗号分隔的名字），以及等 CI 最多多久。"""
+    data = parse_toml(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    section = data.get("acceptance")
+    if not isinstance(section, dict):
+        raise OrcError(f"{path} 缺少 [acceptance] 段（required_checks、ci_timeout_seconds）。照 orc/config/orc.toml 的模板补上。")
+    names = [n.strip() for n in str(section.get("required_checks", "")).split(",") if n.strip()]
+    timeout = str(section.get("ci_timeout_seconds", ""))
+    if not names:
+        raise OrcError("orc.toml 的 [acceptance] required_checks 不能为空：至少要有 northstar 的 verify。")
+    if not timeout.isdigit() or int(timeout) < 1:
+        raise OrcError(f"orc.toml 的 [acceptance] ci_timeout_seconds 必须是正整数（带引号的字符串），现在是「{timeout}」。")
+    return {"required_checks": names, "ci_timeout_seconds": int(timeout)}
+
+
+def event_index(m: Mission, event: dict) -> int:
+    return m.events().index(event)
+
+
+def answered_after(m: Mission, event: Optional[dict]) -> bool:
+    """这件事之后 mission 进入过 blocked 又被回答（blocked → 原状态）：它引出的问题已经处理，结果作废、重来。"""
+    if event is None:
+        return False
+    evs = m.events()
+    i = evs.index(event)
+    return any(e.get("kind") == "state" and e.get("from") == "blocked" for e in evs[i + 1:])
+
+
+def mission_exit(m: Mission, type_: str, tip: str) -> Optional[dict]:
+    """针对这个提交（mission 分支的 tip）最近一次结束的 mission 级任务；之后被回答过的问题作废它。"""
+    exits = [e for e in job_exits(m, MISSION_JOBS, type_) if e.get("tip") == tip]
+    last = exits[-1] if exits else None
+    # 通过的结果一直有效（后面别的环节出问题、回答过，不用重新审查）；没通过的，回答过就重来
+    if last is not None and last.get("outcome") not in ("passed", "valid") and answered_after(m, last):
+        return None
+    return last
+
+
+def mission_running(m: Mission, type_: Optional[str] = None) -> List[dict]:
+    return [s for s in running_jobs(m) if s["node"] == MISSION_JOBS and (type_ is None or s["type"] == type_)]
+
+
+def mission_tip(m: Mission) -> str:
+    return run_git(parent_worktree(m), "rev-parse", "HEAD")
+
+
+def export_tree(m: Mission, tip: str, dest: Path, drop: Tuple[str, ...] = ()) -> None:
+    """把一个提交的内容导出成没有 .git 的副本（drop 里的顶层目录不导出）。"""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True)
+    archive = subprocess.run(["git", "-C", str(m.repo()), "archive", "--format=tar", tip], capture_output=True, check=True)
+    subprocess.run(["tar", "-x", "-C", str(dest)], input=archive.stdout, check=True)
+    for name in drop:
+        shutil.rmtree(dest / name, ignore_errors=True)
+
+
+def mission_commits(m: Mission, tip: str) -> List[Tuple[str, str]]:
+    """基线之后、不含合并提交的提交：(短哈希, 说明)。冻结测试的提交和每个节点的提交都在里面。"""
+    base = exec_setup(m)["base"]
+    out = run_git(m.repo(), "log", "--no-merges", "--reverse", "--format=%h %s", f"{base}..{tip}")
+    return [tuple(line.split(" ", 1)) for line in out.splitlines() if line.strip()]  # type: ignore[misc]
+
+
+def final_checks(m: Mission, where: Path) -> Tuple[Dict[str, bool], List[dict], List[dict]]:
+    """合并后的代码上跑全部冻结检查，以及产品仓库自己的 .northstar/checks/run_all.sh（有的话）。"""
+    checks = list(approved_checks(m)["checks"])
+    suite = [{"id": "run-all", "node": None, "command": "bash .northstar/checks/run_all.sh"}] \
+        if (where / ".northstar" / "checks" / "run_all.sh").is_file() else []
+    results = run_check_commands(where, checks + suite)
+    for r, c in zip(results, checks + suite):
+        r["node"] = c.get("node")
+    return {r["id"]: r["rc"] == 0 for r in results}, results, checks + suite
+
+
+def run_final(m: Mission, job: str, tip: str) -> dict:
+    """最终审查（STATE.md）：合并后的代码上重跑全部检查；都过了再请 review 模型对照 NORTHSTAR 和签名的设计审查整个 mission。"""
+    import tempfile
+    out: dict = {"tip": tip, "checks": {}}
+    copy = jobs_dir(m) / f"{job}.copy"
+    try:
+        export_tree(m, tip, copy)
+        out["checks"], results, _ = final_checks(m, copy)
+    finally:
+        shutil.rmtree(copy, ignore_errors=True)
+    failed = [r for r in results if r["rc"] != 0]
+    if failed:
+        unroutable = [r for r in failed if not r["node"]]
+        issues = [{"node": r["node"], "problem": f"合并后的代码上，检查 `{r['id']}`（`{r['command']}`）没通过，退出码 {r['rc']}",
+                   "evidence": "\n".join(r["tail"])} for r in failed if r["node"]]
+        if unroutable:
+            return {**out, "outcome": "unroutable", "issues": issues,
+                    "reason": "产品仓库自己的检查 .northstar/checks/run_all.sh 在合并后的代码上没通过，落不到某个节点：\n\n"
+                              + "\n".join(unroutable[0]["tail"])}
+        return {**out, "outcome": "rework", "issues": issues}
+    tasks = approved_tasks(m)
+    base = exec_setup(m)["base"]
+    diff = run_git(m.repo(), "diff", "--no-color", "--no-renames", f"{base}..{tip}")
+    if len(diff.encode()) > MAX_INLINE_DIFF:
+        diff = (f"（diff 有 {len(diff.encode())} 字节，超过 {MAX_INLINE_DIFF}，不放在这里。改动的文件：\n\n"
+                + run_git(m.repo(), "diff", "--stat", f"{base}..{tip}") + "\n\n用 Read 看当前目录里的这些文件。）")
+    else:
+        diff = f"```diff\n{diff}\n```"
+    northstar = run_git(m.repo(), "show", f"{tip}:.northstar/NORTHSTAR.md", check=False) or "（没有 NORTHSTAR）"
+    values = {"{{MISSION}}": m.name, "{{NORTHSTAR}}": northstar,
+              "{{DESIGN}}": (m.control / "approved-design.md").read_text(encoding="utf-8").strip(),
+              "{{DAG}}": json.dumps(list(tasks.values()), ensure_ascii=False, indent=2),
+              "{{CHECKS}}": "\n".join(f"- {r['id']}（{r['command']}）：通过" for r in results),
+              "{{BASE}}": base[:12], "{{TIP}}": tip[:12], "{{DIFF}}": diff}
+    prompt = (ORC_ROOT / "templates" / "final-review-brief.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        prompt = prompt.replace(key, value)
+    cfg = m.roles()["review"]
+    argv = ["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
+            "--permission-mode", "default", "--allowedTools=Read", "--session-id", str(__import__("uuid").uuid4())]
+    # 评审在仓库外的临时目录里看代码副本（不带 .northstar：材料都在提示词里），Stop hook 不会因为「未提交的改动」拦它
+    review_dir = Path(tempfile.mkdtemp(prefix="orc-final-review."))
+    try:
+        export_tree(m, tip, review_dir, drop=(".northstar", ".github"))
+        run = subprocess.run(argv, input=prompt, cwd=str(review_dir), capture_output=True, text=True,
+                             timeout=REVIEW_TIMEOUT, env=dict(os.environ, ORC_ROLE="final-review"))
+        write_atomic(job_file(m, job, "review.json"), run.stdout)
+        text, error = claude_result(job_file(m, job, "review.json")) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+    except subprocess.TimeoutExpired:
+        text, error = None, f"超过 {REVIEW_TIMEOUT} 秒没有结束"
+    finally:
+        shutil.rmtree(review_dir, ignore_errors=True)
+    obj = last_json_object(text) if text is not None else None
+    if error or not obj or obj.get("verdict") not in ("pass", "fail") or not isinstance(obj.get("issues", []), list):
+        return {**out, "outcome": "unavailable", "reason": error or "最终审查没有按格式给出 verdict 和 issues"}
+    issues = [i for i in obj.get("issues", []) if isinstance(i, dict)]
+    out["review"] = {"verdict": obj["verdict"], "issues": issues}
+    if obj["verdict"] == "pass":
+        return {**out, "outcome": "passed"}
+    bad = [str(i.get("node")) for i in issues if i.get("node") not in tasks]
+    if not issues or bad:
+        return {**out, "outcome": "unavailable",
+                "reason": "最终审查判不通过，但" + ("没有列出问题" if not issues else f"问题落在不存在的节点上：{'、'.join(bad)}")}
+    return {**out, "outcome": "rework", "issues": issues}
+
+
+def gh(m: Mission, *args: str, check: bool = True) -> str:
+    if shutil.which("gh") is None:
+        raise OrcError("PATH 里找不到 gh（GitHub CLI），开不了 PR、查不了 CI → 安装并登录 gh 后再运行 orc step。")
+    r = subprocess.run(["gh", *args], cwd=str(m.repo()), capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise OrcError(f"gh {' '.join(args[:2])} 失败：{(r.stderr or r.stdout).strip()[:300]}。检查网络代理和 gh 登录后再运行 orc step。")
+    return r.stdout.strip()
+
+
+def ensure_pr(m: Mission, tip: str) -> dict:
+    """把 mission 分支推到产品仓库的 origin，开（或找到已有的）指向默认分支的 PR。合并由用户来做。"""
+    repo, branch = m.repo(), mission_branch(m)
+    if subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"], capture_output=True).returncode != 0:
+        raise OrcError(f"产品仓库 {repo} 没有 origin：mission 要开 PR、等 CI（northstar / verify 和隐藏考题）通过才能验收。"
+                       "先让用户在 GitHub 上建好仓库并设成 origin，再运行 orc step。")
+    push = subprocess.run(["git", "-C", str(repo), "push", "--quiet", "origin", f"{branch}:refs/heads/{branch}"],
+                          capture_output=True, text=True)
+    if push.returncode != 0:
+        raise OrcError(f"推送 {branch} 到 origin 失败：{push.stderr.strip()[:300]}。检查网络代理和 token 后再运行 orc step；"
+                       "远端的同名分支有别的提交时，把这条消息告诉用户。")
+    found = json.loads(gh(m, "pr", "list", "--head", branch, "--state", "open", "--json", "url,number") or "[]")
+    if found:
+        pr = found[0]
+    else:
+        default = gh(m, "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name")
+        request = (m.dir / "request.md").read_text(encoding="utf-8").strip()
+        body = (f"orc mission `{m.name}`。\n\n**请求**：{request}\n\n全部节点已集成、最终审查通过。"
+                "CI（northstar / verify 和隐藏考题）通过、orc 发布状态页后，由你合并。\n\n🤖 orc")
+        url = gh(m, "pr", "create", "--base", default, "--head", branch, "--title", f"orc mission {m.name}：{request[:60]}",
+                 "--body", body).splitlines()[-1].strip()
+        pr = {"url": url, "number": int(url.rstrip("/").rsplit("/", 1)[1])}
+    event = m.append("pr", "orc step", url=pr["url"], number=pr["number"], tip=tip, branch=branch)
+    print(f"mission {m.name}：PR {pr['url']}")
+    return event
+
+
+def current_pr(m: Mission, tip: str) -> Optional[dict]:
+    prs = [e for e in m.events() if e.get("kind") == "pr" and e.get("tip") == tip]
+    return prs[-1] if prs else None
+
+
+def run_ci(m: Mission, job: str, pr_url: str, tip: str) -> dict:
+    """等 PR 上的 CI：required_checks 里每一个都出现并结束为止，最多 ci_timeout_seconds 秒。PR 的 head 必须就是 mission 分支的 tip。"""
+    import time
+    cfg = accept_config()
+    poll = int(os.environ.get("ORC_CI_POLL_SECONDS", "20"))
+    deadline = time.monotonic() + cfg["ci_timeout_seconds"]
+    out: dict = {"tip": tip, "pr": pr_url, "checks": {}}
+    while True:
+        head = gh(m, "pr", "view", pr_url, "--json", "headRefOid", "--jq", ".headRefOid", check=False)
+        if head and head != tip:
+            return {**out, "outcome": "failed", "reason": f"PR 的 head 是 {head[:12]}，不是 orc 审查过的 {tip[:12]}：有别人推送了这个分支"}
+        raw = gh(m, "pr", "checks", pr_url, "--json", "name,bucket", check=False)
+        try:
+            rows = json.loads(raw) if raw else []
+        except ValueError:
+            rows = []
+        states = {r["name"]: r["bucket"] for r in rows if isinstance(r, dict) and r.get("name")}
+        out["checks"] = states
+        done = all(states.get(n) in ("pass", "fail", "cancel", "skipping") for n in cfg["required_checks"])
+        if done:
+            bad = {n: states[n] for n in cfg["required_checks"] if states[n] != "pass"}
+            if bad:
+                return {**out, "outcome": "failed", "reason": "CI 没通过：" + "、".join(f"{n}（{s}）" for n, s in bad.items())}
+            return {**out, "outcome": "passed"}
+        if time.monotonic() > deadline:
+            missing = [n for n in cfg["required_checks"] if n not in states]
+            return {**out, "outcome": "timeout", "reason": f"等了 {cfg['ci_timeout_seconds']} 秒 CI 还没结束"
+                    + (f"；PR 上没有这些检查：{'、'.join(missing)}（workflow 没推、或名字不对）" if missing else "")}
+        time.sleep(poll)
+
+
+def notes_problems(m: Mission, tip: str, text: str) -> List[str]:
+    """状态页说明的核对（沿用 northstar-status 的规则）：每行带引用、引用都存在、每个提交都被交代、不写进度判断。"""
+    problems: List[str] = []
+    commits = [c[0] for c in mission_commits(m, tip)]
+    check_ids = {c["id"] for c in approved_checks(m)["checks"]}
+    lines = [l for l in text.strip().splitlines() if l.strip()]
+    if not lines:
+        return ["说明是空的"]
+    cited = set()
+    for i, line in enumerate(lines, 1):
+        if not line.lstrip().startswith(("- ", "* ")):
+            problems.append(f"第 {i} 行不是列表项（每行以「- 」开头）")
+            continue
+        refs = REF_RE.findall(line)
+        if not refs:
+            problems.append(f"第 {i} 行没有引用证据")
+        if PROGRESS_WORDS.search(line):
+            problems.append(f"第 {i} 行含进度判断，进度只能由 orc 给出")
+        for kind, value in refs:
+            value = value.strip()
+            if kind == "commit":
+                hit = [c for c in commits if len(value) >= 7 and (c.startswith(value) or value.startswith(c))]
+                if hit:
+                    cited.update(hit)
+                else:
+                    problems.append(f"第 {i} 行：commit {value} 不是这个 mission 的提交")
+            elif kind == "check" and value not in check_ids:
+                problems.append(f"第 {i} 行：检查 {value} 不存在")
+            elif kind == "file":
+                path, _, line_no = value.partition(":")
+                body = run_git(m.repo(), "show", f"{tip}:{path}", check=False) if safe_rel(path) else ""
+                if not body:
+                    problems.append(f"第 {i} 行：文件 {path} 在合并后的代码里不存在")
+                elif line_no.isdigit() and int(line_no) > len(body.splitlines()):
+                    problems.append(f"第 {i} 行：{path} 没有第 {line_no} 行")
+    problems += [f"提交 {c} 没有在说明里交代" for c in commits if c not in cited]
+    return problems
+
+
+def launch_notes(m: Mission, tip: str, feedback: str = "") -> None:
+    commits = mission_commits(m, tip)
+    base = exec_setup(m)["base"]
+    diff = run_git(m.repo(), "diff", "--no-color", f"{base}..{tip}")
+    if len(diff.encode()) > MAX_INLINE_DIFF:
+        diff = run_git(m.repo(), "diff", "--stat", f"{base}..{tip}")
+    values = {"{{MISSION}}": m.name, "{{REQUEST}}": (m.dir / "request.md").read_text(encoding="utf-8").strip(),
+              "{{DESIGN}}": (m.control / "approved-design.md").read_text(encoding="utf-8").strip(),
+              "{{COMMITS}}": "\n".join(f"- `{h}` {s}" for h, s in commits),
+              "{{CHECKS}}": "\n".join(f"- `{c['id']}`（节点 {c['node']}）：{c['command']}" for c in approved_checks(m)["checks"]),
+              "{{DIFF}}": f"```diff\n{diff}\n```",
+              "{{FEEDBACK}}": f"## 上一次写的没通过核对\n\n{feedback}\n" if feedback else ""}
+    prompt = (ORC_ROOT / "templates" / "status-notes-brief.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        prompt = prompt.replace(key, value)
+    cfg = m.roles()["plan"]
+    import tempfile
+    cwd = tempfile.mkdtemp(prefix="orc-notes.")      # 没有工具、在仓库外：只按提示词里的材料写
+    argv = ["claude", "-p", "--model", cfg["model"], "--effort", "low", "--output-format", "json", "--tools", ""]
+    launch_job(m, "notes", MISSION_JOBS, argv, cwd, prompt, {"ORC_ROLE": "notes"}, tip=tip)
+    print(f"mission {m.name}：开始写状态页的说明")
+
+
+def launch_mission_job(m: Mission, kind: str, tip: str, payload: dict) -> None:
+    job = f"{MISSION_JOBS}.{kind}.{len(job_starts(m, MISSION_JOBS, kind)) + 1}"
+    launch_job(m, kind, MISSION_JOBS, orc_self("gate", "--kind", kind, "--mission", m.name, "--job", job),
+               exec_dir(m), json.dumps({"tip": tip, **payload}), tip=tip)
+    label = {"final": "最终审查", "ci": "等 PR 的 CI"}[kind]
+    print(f"mission {m.name}：{label}开始")
+
+
+def finish_mission_job(m: Mission, start: dict, status: str, rc: Optional[int], timed_out: bool) -> None:
+    type_, job = start["type"], start["job"]
+    fields: dict = {"job": job, "type": type_, "node": MISSION_JOBS, "rc": rc, "tip": start.get("tip")}
+    if type_ in ("final", "ci"):
+        path = job_file(m, job, "result.json")
+        if path.is_file():
+            fields.update(json.loads(path.read_text(encoding="utf-8")))
+        else:
+            fields.update(outcome="unavailable", reason=f"异常结束（退出码 {rc}）：{read1(job_file(m, job, 'err'))[-500:]}")
+    else:   # notes
+        text, error = (claude_result(job_file(m, job, "out")) if status == "done" and rc == 0
+                       else (None, "超时被结束" if timed_out else f"异常结束（退出码 {rc}）"))
+        problems = [error] if error else notes_problems(m, start["tip"], text or "")
+        if problems:
+            fields.update(outcome="invalid", problems=problems)
+        else:
+            path = exec_dir(m) / "site" / "notes.md"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(path, text.strip() + "\n")
+            fields.update(outcome="valid", file=str(path), sha256=sha256_file(path))
+    m.append("job-exit", "orc step", **fields)
+    if type_ == "final":
+        for cid, ok in fields.get("checks", {}).items():
+            m.append("check", "orc step", node=None, id=cid, passed=ok, log=job, stage="final")
+        if fields.get("review"):
+            m.append("review", "orc step", node=None, stage="final",
+                     verdict="PASS" if fields["review"]["verdict"] == "pass" else "FAIL",
+                     reason=json.dumps(fields["review"]["issues"], ensure_ascii=False)[:1000])
+    print(f"mission {m.name}：{type_} 结束（{fields.get('outcome')}）")
+
+
+def reopen_node(m: Mission, node: str, issues: List[dict], round_: int) -> None:
+    """最终审查打回：节点从 integrated 回到 rework。节点分支快进到 mission 分支的 tip（它已经包含全部节点），
+    基线也改成这个 tip，之后的提交关口和集成只看这次的修复。复用的 integrate-task.sh 对同一分支再合并一次，不用改。"""
+    wt, ctl, work, tip = m.worktree(node), node_ctl(m, node), node_work(m, node), mission_tip(m)
+    if changed_paths(wt):
+        raise OrcError(f"节点 {node} 的 worktree 有没提交的改动，重新打开前不能覆盖。把这条消息告诉用户。")
+    run_git(wt, "merge", "-q", "--ff-only", tip)
+    row = read1(ctl / "worktrees.txt").split("\t")
+    row[2] = tip
+    for d in (ctl, work):
+        write_atomic(d / "worktrees.txt", "\t".join(row) + "\n")
+        write_atomic(d / "state", "ready\n")
+    k = len(list(work.glob("correction-*.md"))) + 1
+    detail = "\n\n".join(f"- **问题**：{i.get('problem', '')}\n  **证据**：{i.get('evidence', '')}" for i in issues)
+    card = work / f"correction-{k}.md"
+    write_atomic(card, f"# 纠偏单：节点 {node}，第 {k} 张\n\n## 被打回的原因：mission 的最终审查（第 {round_} 轮）没有通过\n\n"
+                       f"{detail}\n\n## 相关验收标准（原文）\n\n{acceptance_lines(m, node)}\n\n"
+                       "worktree 已经移到 mission 分支的最新提交上（含其他节点的改动）。只改本节点的声明文件；"
+                       "不要改测试或检查来让它通过。\n")
+    write_atomic(ctl / "unresolved-rework", str(card) + "\n")
+    m.append("node-reopen", "orc step", node=node, base=tip, card=str(card), round=round_)
+    print(f"节点 {node}：最终审查打回，重新打开（基线 {tip[:12]}）")
+
+
+def final_streak(m: Mission) -> int:
+    """最终审查连续打回的次数；用户回答过 mediate（blocked → reviewing）后清零。"""
+    count = 0
+    for e in m.events():
+        if e.get("kind") == "state" and e.get("from") == "blocked" and e.get("to") == "reviewing":
+            count = 0
+        elif e.get("kind") == "job-exit" and e.get("node") == MISSION_JOBS and e.get("type") == "final" \
+                and e.get("outcome") == "rework":
+            count += 1
+    return count
+
+
+def issues_text(issues: List[dict]) -> str:
+    return "\n".join(f"- 节点 `{i.get('node') or '—'}`：{i.get('problem', '')}（证据：{str(i.get('evidence', ''))[:300]}）"
+                     for i in issues)
+
+
+def acceptance_problem(m: Mission, tip: str, final: dict, ci: dict) -> Optional[str]:
+    """进入 accepted 之前不只信日志：重新核对协议文件、PR 的 head、最终审查和 CI 都针对同一个提交且都通过。"""
+    problem = recheck_integrated(m)
+    if problem:
+        return problem
+    if mission_tip(m) != tip:
+        return f"mission 分支的 tip 变了（{mission_tip(m)[:12]}），最终审查看的是 {tip[:12]}"
+    if not final.get("checks") or not all(final["checks"].values()):
+        return "最终审查记录里的检查结果不是全部通过"
+    expected = {c["id"] for c in approved_checks(m)["checks"]}
+    if not expected <= set(final["checks"]):
+        return "最终审查没有跑全部冻结检查：缺 " + "、".join(sorted(expected - set(final["checks"])))
+    head = gh(m, "pr", "view", ci["pr"], "--json", "headRefOid", "--jq", ".headRefOid")
+    if head != tip:
+        return f"PR 的 head 是 {head[:12]}，不是审查过的 {tip[:12]}"
+    required = accept_config()["required_checks"]
+    if any(ci.get("checks", {}).get(n) != "pass" for n in required):
+        return "CI 记录里 required_checks 不是全部通过"
+    return None
+
+
+def h_reviewing(m: Mission):
+    for start in mission_running(m):
+        status, rc = job_status(m, start)
+        timed_out = False
+        if status == "running":
+            if not session_overdue(start, exec_setup(m)["config"]):
+                continue
+            kill_job(start)
+            timed_out = True
+        finish_mission_job(m, start, status, rc, timed_out)
+    if mission_running(m):
+        return "wait", False
+    tip = mission_tip(m)
+    # 1. 最终审查
+    final = mission_exit(m, "final", tip)
+    if final is None:
+        launch_mission_job(m, "final", tip, {})
+        return "wait", False
+    outcome = final.get("outcome")
+    if outcome == "rework":
+        streak = final_streak(m)
+        if streak > FINAL_ROUNDS:
+            m.block(f"最终审查连续 {streak} 次没通过", f"mission {m.name} 的最终审查连续 {streak} 次没通过，已熔断。最近一次的问题：\n\n"
+                    f"{issues_text(final['issues'])}\n\n回答后 orc 会重新做最终审查。", "mediate", "orc step")
+            return None, True
+        done = {e["node"] for e in m.events()[event_index(m, final):] if e.get("kind") == "node-reopen"}
+        by_node: Dict[str, List[dict]] = {}
+        for issue in final["issues"]:
+            by_node.setdefault(issue["node"], []).append(issue)
+        for node, issues in by_node.items():
+            if node not in done:
+                reopen_node(m, node, issues, streak)
+        m.transition("executing", "orc step", reason=f"最终审查第 {streak} 轮没通过，打回节点：{'、'.join(by_node)}")
+        print(f"mission {m.name}：reviewing → executing（打回 {'、'.join(by_node)}）")
+        return None, True
+    if outcome != "passed":
+        why = final.get("reason", "")
+        qtype = "mediate" if outcome == "unroutable" else "ask-user"
+        m.block("最终审查没能完成" if outcome == "unavailable" else "合并后的检查落不到节点",
+                f"mission {m.name} 的最终审查没能完成：{why}\n\n评审不降级、出错时不放行。排除问题后回答「重试」，orc 会重新做最终审查。",
+                qtype, "orc step")
+        return None, True
+    # 2. PR 和 CI
+    try:
+        pr = current_pr(m, tip) or ensure_pr(m, tip)
+    except OrcError as error:
+        return f"error {error}", False
+    ci = mission_exit(m, "ci", tip)
+    if ci is None:
+        launch_mission_job(m, "ci", tip, {"pr": pr["url"]})
+        return "wait", False
+    if ci.get("outcome") != "passed":
+        m.block("PR 的 CI 没通过", f"mission {m.name} 的 PR {pr['url']} 的 CI 没通过：{ci.get('reason')}\n\n"
+                "隐藏考题只报通过或失败，orc 不知道具体是哪一题。处理后回答「重试」，orc 会重新等 CI。", "ask-user", "orc step")
+        return None, True
+    # 3. 进入 accepted 前重新核对
+    try:
+        problem = acceptance_problem(m, tip, final, ci)
+    except OrcError as error:
+        return f"error {error}", False
+    if problem:
+        return (f"error mission {m.name} 验收前重新核对发现：{problem}。日志和实际状态对不上，不要继续；把这条消息告诉用户。"), False
+    # 4. 状态页：说明由会话写、orc 核对；页面由 orc 生成、发布
+    notes = mission_exit(m, "notes", tip)
+    if notes is None or notes.get("outcome") != "valid":
+        if notes is not None:
+            n = consecutive([e for e in job_exits(m, MISSION_JOBS, "notes") if e.get("tip") == tip], {"invalid"})
+            if n > NOTES_REPAIRS:
+                m.block("状态页的说明连续不合格", f"mission {m.name} 状态页的说明连续 {n} 次没通过核对：\n"
+                        + "\n".join(f"- {p}" for p in notes["problems"]) + "\n\n回答后 orc 会重新写一次。", "mediate", "orc step")
+                return None, True
+            launch_notes(m, tip, "\n".join(f"- {p}" for p in notes["problems"]))
+        else:
+            launch_notes(m, tip)
+        return "wait", False
+    try:
+        url = ensure_published(m, "status", render_status(m, tip), f"orc mission {m.name} 的状态页：节点、检查、提交和 PR，全部由日志生成。")
+    except OrcError as error:
+        return f"error {error}", False
+    m.transition("accepted", "orc step", reason=f"最终审查通过、CI 通过、状态页已发布（{url}）")
+    print(f"mission {m.name}：reviewing → accepted")
+    return None, True
+
+
+def cleanup_items(m: Mission) -> List[Tuple[str, str, str]]:
+    """要清理的东西，只来自 orc 自己记录过的：每个节点控制目录的 worktrees.txt，和 exec-setup 里的父 worktree。
+    返回 (类型, 路径或分支, 说明)。mission 分支留着：PR 还没合并。"""
+    items: List[Tuple[str, str, str]] = []
+    for node in approved_tasks(m):
+        row = read1(node_ctl(m, node) / "worktrees.txt").split("\t")
+        if len(row) == 4:
+            items.append(("worktree", row[0], f"节点 {node} 的 worktree"))
+            items.append(("branch", row[1], f"节点 {node} 的分支"))
+    items.append(("worktree", exec_setup(m)["parent_worktree"], f"mission 分支 {mission_branch(m)} 的 worktree（分支保留给 PR）"))
+    return items
+
+
+def h_accepted(m: Mission):
+    repo = m.repo()
+    listed = run_git(repo, "worktree", "list", "--porcelain")
+    worktrees = {os.path.realpath(l[len("worktree "):]) for l in listed.splitlines() if l.startswith("worktree ")}
+    items = cleanup_items(m)
+    print(f"mission {m.name}：要清理的（只动 orc 记录过的）：")
+    for kind, target, label in items:
+        print(f"  - {label}：{target}")
+    removed = []
+    for kind, target, label in items:
+        if kind == "worktree":
+            if os.path.realpath(target) not in worktrees:
+                continue                              # 已经清理过（中断后重跑）
+            if changed_paths(Path(target)):
+                return f"error {label} {target} 里有没提交的改动，orc 不删。把这条消息告诉用户。", False
+            run_git(repo, "worktree", "remove", target)
+        else:
+            if subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"refs/heads/{target}"],
+                              capture_output=True).returncode != 0:
+                continue
+            if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", f"refs/heads/{target}",
+                               f"refs/heads/{mission_branch(m)}"]).returncode != 0:
+                return f"error {label} {target} 有没集成进 {mission_branch(m)} 的提交，orc 不删。把这条消息告诉用户。", False
+            run_git(repo, "branch", "-D", target)
+        removed.append(target)
+    m.append("cleanup", "orc step", removed=removed, kept=[mission_branch(m)])
+    m.transition("cleaned", "orc step", reason="已集成节点的 worktree 和分支已清理")
+    print(f"mission {m.name}：accepted → cleaned")
+    return None, True
+
+
+def h_cleaned(m: Mission):
+    """终态：状态页（含清理结果）是最新的才输出 report；没有状态页就不报告完成。"""
+    receipts = json.loads((m.dir / "publish.json").read_text()) if (m.dir / "publish.json").is_file() else {}
+    if "status" not in receipts:
+        return f"error mission {m.name} 已清理，但没有状态页：不报告完成。这是 orc 的 bug；把 events.jsonl 给用户看。", False
+    tip = run_git(m.repo(), "rev-parse", f"refs/heads/{mission_branch(m)}")
+    try:
+        url = ensure_published(m, "status", render_status(m, tip), f"orc mission {m.name} 的状态页：节点、检查、提交和 PR，全部由日志生成。")
+    except OrcError as error:
+        return f"error {error}", False
+    return f"report {url}", False
+
+
+def render_status(m: Mission, tip: str) -> str:
+    """状态页（PLAN 阶段 5）：每个 DAG 节点一行；状态、检查、提交都由 orc 从 events.jsonl 和它自己跑的验证记录算出来，
+    每条事实后面标着日志行号，可以回去核对。只有「说明」一节是会话写的，每条带引用，已经由 notes_problems 核对过。"""
+    import html as _h
+    esc = _h.escape
+    events = m.events()
+    line = {id(e): i for i, e in enumerate(events, 1)}            # events.jsonl 的行号
+    ref = lambda e: f'<span class="ln">日志 {line[id(e)]}</span>' if e is not None else ""
+    # 只读一次日志：行号按对象查，所有事件都要来自同一份列表
+    job_exits = lambda _m, node, type_: [e for e in events if e.get("kind") == "job-exit" and e.get("node") == node  # noqa: E731
+                                     and e.get("type") == type_]
+    tasks = approved_tasks(m)
+    states = m.node_states()
+    state = m.replay()["state"]
+    final = next((e for e in reversed(job_exits(m, MISSION_JOBS, "final")) if e.get("tip") == tip), None)
+    ci = next((e for e in reversed(job_exits(m, MISSION_JOBS, "ci")) if e.get("tip") == tip), None)
+    pr = next((e for e in reversed(events) if e.get("kind") == "pr" and e.get("tip") == tip), None)
+    cleanup = next((e for e in reversed(events) if e.get("kind") == "cleanup"), None)
+    final_checks_ = (final or {}).get("checks", {})
+    rounds = [e for e in job_exits(m, MISSION_JOBS, "final")]
+
+    # 流程条
+    flow = ["planning", "verifying", "plan-review", "approved", "executing", "reviewing", "accepted", "cleaned"]
+    reached = {e.get("to") for e in events if e.get("kind") == "state"}
+    steps = "".join(f'<span class="step {"you" if s == state else "done" if s in reached else ""}">{s}</span>' for s in flow)
+
+    # 组件图：按 DAG 里的 component 分组，按最终检查着色；组件之间的箭头来自节点的 depends_on
+    comp_nodes: Dict[str, List[str]] = {}
+    for node, t in tasks.items():
+        comp_nodes.setdefault(str(t.get("component") or "—"), []).append(node)
+    node_ok = {}
+    for node in tasks:
+        ids = [c["id"] for c in node_checks(m, node)]
+        node_ok[node] = None if not ids or any(i not in final_checks_ for i in ids) else all(final_checks_[i] for i in ids)
+    comp_cards, comp_edges = [], set()
+    for comp, nodes in comp_nodes.items():
+        oks = [node_ok[n] for n in nodes]
+        cls = "bad" if False in oks else "ok" if all(o is True for o in oks) else "unk"
+        label = {"ok": "检查全部通过", "bad": "有检查没通过", "unk": "还没有最终检查结果"}[cls]
+        chips = "".join(f'<span class="chip {states.get(n, "pending")}">{esc(n)}</span>' for n in nodes)
+        comp_cards.append(f'<div class="comp {cls}"><b>{esc(comp)}</b><div class="muted">{label}</div><div>{chips}</div></div>')
+        for n in nodes:
+            for d in tasks[n].get("depends_on", []):
+                dc = str(tasks.get(d, {}).get("component") or "—")
+                if dc != comp:
+                    comp_edges.add((dc, comp))
+    edges = "".join(f"<li><b>{esc(a)}</b> → <b>{esc(b)}</b></li>" for a, b in sorted(comp_edges))
+
+    # 每个节点一行（不省略）
+    rows = []
+    for node, t in tasks.items():
+        commits = [e for e in events if e.get("kind") == "commit" and e.get("node") == node]
+        integ = [e for e in job_exits(m, node, "integrate") if e.get("outcome") == "integrated"]
+        reopen = [e for e in events if e.get("kind") == "node-reopen" and e.get("node") == node]
+        corrections = [e for e in events if e.get("kind") == "correction" and e.get("node") == node]
+        checks = []
+        for c in node_checks(m, node):
+            ok = final_checks_.get(c["id"])
+            cls, mark = ("ok", "✓") if ok else ("bad", "✗") if ok is False else ("unk", "?")
+            checks.append(f'<span class="pill {cls}" title="{esc(c["command"])}">{mark} {esc(c["id"])}</span>')
+        commit_cells = "<br>".join(f"<code>{e['sha'][:12]}</code> {ref(e)}" for e in commits) or "—"
+        integ_cell = f"<code>{integ[-1]['sha'][:12]}</code> {ref(integ[-1])}" if integ else "—"
+        rows.append(f"<tr><td><code>{esc(node)}</code><div class='muted'>{esc(str(t.get('component', '')))}</div></td>"
+                    f"<td><span class='chip {states.get(node, 'pending')}'>{states.get(node, 'pending')}</span></td>"
+                    f"<td>{len(t.get('acceptance', []))}</td><td>{''.join(checks) or '—'}</td><td>{commit_cells}</td>"
+                    f"<td>{integ_cell}</td><td>{len(corrections)} 次纠偏" + (f"，最终审查打回 {len(reopen)} 次" if reopen else "")
+                    + "</td></tr>")
+
+    # 最终审查、PR、CI
+    def round_line(e: dict) -> str:
+        verdict = {"passed": "通过", "rework": "打回节点", "unavailable": "没能完成", "unroutable": "落不到节点"}.get(e.get("outcome"), e.get("outcome"))
+        issues = "".join(f"<li>节点 <code>{esc(str(i.get('node')))}</code>：{esc(str(i.get('problem', '')))}</li>" for i in e.get("issues", []))
+        return f"<li>第 {rounds.index(e) + 1} 轮（<code>{str(e.get('tip', ''))[:12]}</code>）：{verdict} {ref(e)}" + (f"<ul>{issues}</ul>" if issues else "") + "</li>"
+    suite = final_checks_.get("run-all")
+    ci_rows = "".join(f"<li><code>{esc(n)}</code>：{esc(s)}</li>" for n, s in sorted(((ci or {}).get("checks") or {}).items()))
+    notes_exit = next((e for e in reversed(job_exits(m, MISSION_JOBS, "notes")) if e.get("tip") == tip and e.get("outcome") == "valid"), None)
+    notes = Path(notes_exit["file"]).read_text(encoding="utf-8") if notes_exit and Path(notes_exit["file"]).is_file() else ""
+    request = (m.dir / "request.md").read_text(encoding="utf-8").strip()
+    n_checks = len(approved_checks(m)["checks"])
+    n_pass = sum(1 for c in approved_checks(m)["checks"] if final_checks_.get(c["id"]))
+    commits_total = len([e for e in events if e.get("kind") == "commit"])
+    cleaned = ("".join(f"<li><code>{esc(x)}</code></li>" for x in cleanup["removed"]) + f"</ul><p class='muted'>保留：{esc('、'.join(cleanup['kept']))}（PR 合并后可删） {ref(cleanup)}</p>"
+               if cleanup else "</ul><p class='muted'>还没清理。</p>")
+    return f"""<title>{esc(m.name)} 状态</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+:root{{--bg:#fbfbfa;--fg:#1d1f22;--muted:#5f646b;--line:#dcdfe3;--code:#eef0f2;--accent:#2b5fab;--card:#ffffff;--ok:#1f7a4d;--okbg:#e3f2ea;--bad:#b3261e;--badbg:#fbe4e2;--unk:#8a6d00;--unkbg:#f6eecf}}
+@media (prefers-color-scheme:dark){{:root:not([data-theme="light"]){{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;--card:#1d2024;--ok:#6fcf9b;--okbg:#1d3328;--bad:#f2a49c;--badbg:#3a1f1d;--unk:#e6c867;--unkbg:#352d12;color-scheme:dark}}}}
+:root[data-theme="dark"]{{--bg:#16181b;--fg:#e8eaed;--muted:#a0a6ad;--line:#33373c;--code:#22262a;--accent:#8db4ef;--card:#1d2024;--ok:#6fcf9b;--okbg:#1d3328;--bad:#f2a49c;--badbg:#3a1f1d;--unk:#e6c867;--unkbg:#352d12;color-scheme:dark}}
+body{{background:var(--bg);color:var(--fg);font:16px/1.6 -apple-system,"PingFang SC",system-ui,sans-serif}}
+main{{max-width:1000px;margin:0 auto;padding-block:16px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}}
+h1{{font-size:1.5em;text-wrap:balance}} h2{{border-top:1px solid var(--line);padding-top:1em;text-wrap:balance}}
+a{{color:var(--accent)}} code{{background:var(--code);border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:.9em;overflow-wrap:anywhere}}
+blockquote{{margin:0;padding-left:12px;border-left:3px solid var(--line);color:var(--muted)}} .muted{{color:var(--muted);font-size:14px}}
+table{{border-collapse:collapse;width:100%;font-size:14px}} td,th{{border:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}} .wrap{{overflow-x:auto}}
+.flow{{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0 12px}} .step{{padding:4px 10px;border-radius:999px;border:1px solid var(--line);font-size:14px;color:var(--muted)}}
+.step.done{{background:var(--okbg);color:var(--ok);border-color:transparent}} .step.you{{background:var(--accent);color:var(--bg);border-color:transparent;font-weight:600}}
+.stats{{display:flex;flex-wrap:wrap;gap:16px;color:var(--muted)}} .stats b{{color:var(--fg);font-size:1.3em}}
+.comps{{display:flex;flex-wrap:wrap;gap:12px}} .comp{{border:2px solid var(--line);border-radius:10px;padding:10px 12px;min-width:200px;background:var(--card)}}
+.comp.ok{{border-color:var(--ok)}} .comp.bad{{border-color:var(--bad)}} .comp.unk{{border-color:var(--unk)}}
+.chip{{display:inline-block;font:12px ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:999px;margin:4px 4px 0 0;background:var(--code)}}
+.chip.integrated{{background:var(--okbg);color:var(--ok)}} .chip.blocked,.chip.rework{{background:var(--badbg);color:var(--bad)}}
+.pill{{display:inline-block;font-size:12px;padding:1px 6px;border-radius:999px;margin:0 4px 4px 0}} .pill.ok{{background:var(--okbg);color:var(--ok)}}
+.pill.bad{{background:var(--badbg);color:var(--bad)}} .pill.unk{{background:var(--unkbg);color:var(--unk)}} .ln{{font-size:11px;color:var(--muted)}}
+</style>
+<main>
+<h1>mission 状态：{esc(m.name)}</h1>
+<p class="muted">除「说明」一节外，页面上的每一项都由 orc 从 <code>events.jsonl</code> 和它自己跑的验证记录生成；「日志 N」是 <code>{esc(str(m.events_path))}</code> 的行号，可以回去核对。</p>
+<div class="flow">{steps}</div>
+<div class="stats"><span><b>{len(tasks)}</b> 个节点</span><span><b>{n_pass}/{n_checks}</b> 个冻结检查在合并后的代码上通过</span>
+<span><b>{commits_total}</b> 次提交</span><span><b>{len(rounds)}</b> 轮最终审查</span></div>
+<h2>请求（原话）</h2><blockquote>{esc(request)}</blockquote>
+<h2>架构（按组件，颜色是合并后代码上的检查结果）</h2>
+<div class="comps">{''.join(comp_cards)}</div>
+{f'<p class="muted">组件之间的依赖：</p><ul>{edges}</ul>' if edges else ''}
+<h2>节点（DAG 里的每一个）</h2>
+<div class="wrap"><table><tr><th>节点</th><th>状态</th><th>验收标准</th><th>冻结检查（合并后）</th><th>提交</th><th>集成</th><th>纠偏</th></tr>
+{''.join(rows)}</table></div>
+<h2>最终审查</h2>
+<p>合并后代码上的检查：{n_pass}/{n_checks} 通过{'；产品仓库自己的 run_all.sh：' + ('通过' if suite else '没通过') if suite is not None else ''}（提交 <code>{tip[:12]}</code>）</p>
+<ul>{''.join(round_line(e) for e in rounds) or '<li>还没有</li>'}</ul>
+<h2>PR 和 CI</h2>
+{f'<p><a href="{esc(pr["url"])}">{esc(pr["url"])}</a> {ref(pr)}</p>' if pr else '<p class="muted">还没有 PR。</p>'}
+<ul>{ci_rows or '<li>还没有 CI 结果</li>'}</ul>{ref(ci) if ci else ''}
+<p class="muted">合并由你来做。</p>
+<h2>清理</h2><ul>{cleaned}
+<h2>说明（会话撰写，每条引用已核对）</h2>
+{md_to_html(notes) if notes.strip() else '<p class="muted">还没有。</p>'}
+</main>
+"""
+
+
 HANDLERS: Dict[str, Handler] = {
     "new": h_new,
     "planning": h_planning,
@@ -2440,10 +3112,10 @@ HANDLERS: Dict[str, Handler] = {
     "plan-review": h_plan_review,
     "approved": h_approved,
     "executing": h_executing,
-    "reviewing": not_yet("阶段 5"),
-    "accepted": not_yet("阶段 5"),
+    "reviewing": h_reviewing,
+    "accepted": h_accepted,
     "blocked": h_blocked,
-    "cleaned": h_terminal,
+    "cleaned": h_cleaned,
     "failed": h_terminal,
 }
 
@@ -2654,7 +3326,7 @@ def cmd_wait(args) -> int:
     label = ""
     while time.monotonic() < deadline:
         state = m.replay()["state"]
-        if state == "executing":
+        if state in ("executing", "reviewing"):
             # 任何一个后台任务结束（或超时该被结束）就返回，让 coordinator 运行 orc step 处理
             jobs = running_jobs(m)
             setup = exec_setup(m)
@@ -2811,7 +3483,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--mission", required=True)
     p.set_defaults(func=cmd_go)
     p = sub.add_parser("gate", help="（orc 内部用）提交关口或整体评审的后台任务")
-    p.add_argument("--kind", choices=("gate", "submit"), required=True)
+    p.add_argument("--kind", choices=("gate", "submit", "final", "ci"), required=True)
     p.add_argument("--mission", required=True)
     p.add_argument("--job", required=True)
     p.set_defaults(func=cmd_gate)

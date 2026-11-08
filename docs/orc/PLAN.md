@@ -137,6 +137,7 @@
 - [ ] **【Claude Code】** 状态页由脚本生成：每个 DAG 节点一行，不能省略；状态和测试结果来自 `events.jsonl` 和 `orc` 自己运行的验证记录；架构图按组件着色；agent 只写说明，每条带可核对的引用（沿用 `northstar-status` 的校验规则）。发布成 Artifact（每个 mission 一个状态页，链接不变）。
 - [ ] **【Claude Code】** "完成"之前必须有最新的状态页；`orc` 在没有状态页时不会输出 `report`。
 - [ ] **【Claude Code】** 清理：对已集成的节点执行 `git worktree remove` 并删除分支，只动 `orc` 自己记录过的 worktree 和分支；先输出清单，再执行。
+- 实现说明（阶段 5）：开工前定下的四件事见 `proposals/2026-11-08-phase5-open-points.md`（orc 开 PR、你合并；合并提交带 `[N#]`；考题放在 `DaoBrewAI/LY_orchestrator-hub`；最终审查不通过就重新打开节点，最多 2 轮）。具体做法见 STATE.md「验收（阶段 5）」。
 - [ ] **【你】** 审 PR，打开状态页抽查两三条能否追溯到证据。
 
 **完成标志**：状态页上每个状态都来自脚本；清理只动记录过的资源。
