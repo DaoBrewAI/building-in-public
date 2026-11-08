@@ -33,6 +33,9 @@ jobs:
       - name: 进度报告与代码一致
         run: |
           [ -f .northstar/architecture.json ] || exit 0
+          # 只在有进度报告可查时运行：单个 mission 流程（northstar start 写的 ACTIVE）或者已经有报告。
+          # orc 的流程没有这两样，进度由 orc 的状态页给出（proposals/2026-11-08-ci-progress-report-step.md）
+          [ -f .northstar/missions/ACTIVE ] || [ -f status/status.json ] || exit 0
           cp status/status.json /tmp/claimed.json
           python3 .github/workflows/northstar_status.py
           diff <(jq -S . /tmp/claimed.json) <(jq -S . status/status.json)
