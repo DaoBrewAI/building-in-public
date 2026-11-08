@@ -189,6 +189,8 @@
 
 ## 阶段 7：薄 skill 与上生产
 
+**2026-11-08 林翰定：取消阶段 7**（阶段 6 的实跑之后）。不再在 northstar-trial 上实跑并行和出错路径，直接用 orc 跑 daoharness-core 的真实 mission，遇到问题再修。coordinator skill（`orc/skill/SKILL.md`）和 FinTelli P1 的提案（`proposals/2026-11-08-fintelli-p1-on-orc.md`）已在阶段 6 的 PR 里完成。下面是取消前的计划，留作记录。
+
 2026-11-08 林翰定：不单独做试运行阶段，压缩成上生产的第一步。Fintelli 的一次性设置（NORTHSTAR、CI、隐藏考题、secret）可以和阶段 6 同时做。
 
 - [ ] **【Claude Code】** 按 `slim/SKILL.md` 写 coordinator 的 skill，把其中关于子任务的描述改成 `claude -p` 执行会话的方式；常驻规则不超过 7 条。用户说「跑 P<n>」时，skill 让 orc 把这个 phase 跑完。
