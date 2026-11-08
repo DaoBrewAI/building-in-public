@@ -55,9 +55,9 @@ class ProductCase(AcceptCase):
         evs = [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
         return [e for e in evs if kind is None or e["kind"] == kind]
 
-    def done_mission(self, mid, merged=True, design="# 设计\n\n所有导出都走 export_api。\n", recorded=False):
+    def done_mission(self, mid, merged=True, design="# 设计\n\n所有导出都走 export_api。\n", recorded=False, upto="cleaned"):
         """造一个已经跑完（cleaned）、开过 PR 的 phase mission，不跑真实流程。merged：PR 在假 gh 里已合并；
-        recorded：产品的事件记录里已经记下合并（等于 orc phase 之前查到过）。"""
+        recorded：产品的事件记录里已经记下合并（等于 orc phase 之前查到过）；upto="accepted"：停在清理之前。"""
         orc = self.orc
         name = f"shop-{mid.lower()}"
         m = orc.create_mission(f"# MISSION: {mid}\n仓库: main\n", str(self.repo), name)
@@ -66,7 +66,8 @@ class ProductCase(AcceptCase):
         (m.control / "approved-design.md").write_text(design)
         url = f"https://github.com/o/r/pull/{100 + len(list(self.home.glob('missions/*')))}"
         with m:
-            for to in ("planning", "verifying", "plan-review", "approved", "executing", "reviewing", "accepted", "cleaned"):
+            states = ("planning", "verifying", "plan-review", "approved", "executing", "reviewing", "accepted", "cleaned")
+            for to in states[:states.index(upto) + 1]:
                 m.transition(to, "test")
             m.append("pr", "test", url=url, number=1, tip="0" * 40, branch=f"orc/{name}")
         if merged:
@@ -207,6 +208,29 @@ class Phase(ProductCase):
         r = self.run_phase()
         self.assertEqual([e["mission_id"] for e in self.pevents("merged")], ["P1-1"])
         self.assertEqual([e["mission_id"] for e in self.pevents("mission-start")], ["P1-2"])
+
+    def test_finished_mission_reports_to_the_user_once_then_the_phase_waits_for_the_merge(self):
+        # 实跑发现：mission 清理完输出的 report（状态页，PR 等用户合并）原来被当成 wait，只出现在中间一行，没人叫用户去合并。
+        # 这里只测 phase 怎么转交 mission 的 next：mission 自己的一步换成假的（清理 → cleaned → report）
+        self.phase({"P1-1": "无", "P1-2": "无"}, {"P1-1": "仓库: main\nscope: core", "P1-2": "仓库: main\nscope: ui"})
+        self.done_mission("P1-1", merged=False, upto="accepted")
+        self.done_mission("P1-2", merged=False, upto="accepted")
+        orc = self.orc
+
+        def fake_step(m):
+            if m.name == "shop-p1-1":
+                return "ask-user 要不要 X"                 # 排在前面的 mission 有别的事要问：report 也不能被它盖掉
+            with m:
+                m.transition("cleaned", "test")
+            return "report https://claude.ai/artifact/fake-status"
+        saved = orc.step, orc.publish_summary
+        orc.step, orc.publish_summary = fake_step, lambda prod: "https://claude.ai/artifact/fake-summary"
+        try:
+            prod = orc.Product("shop")
+            self.assertEqual(orc.phase_step(prod, "P1"), "report [shop-p1-2] https://claude.ai/artifact/fake-status")
+            self.assertEqual(orc.phase_step(prod, "P1"), "ask-user [shop-p1-1] 要不要 X")    # 只报一次；之后 P1-2 等合并
+        finally:
+            orc.step, orc.publish_summary = saved
 
     def test_manual_mission_waits_for_orc_done_then_phase_concludes(self):
         self.phase({"P1-1": "无", "P1-2": "依赖 P1-1"}, {"P1-1": "仓库: main", "P1-2": "执行: 人工"})

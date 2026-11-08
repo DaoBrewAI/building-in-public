@@ -3515,7 +3515,10 @@ def phase_step(prod: Product, phase: str) -> str:
         nxt = step(m)
         print(f"phase {phase}：{mid}（{m.name}）：next: {nxt}")
         kind, _, rest = nxt.partition(" ")
-        if kind in ("go-gate", "sign", "ask-user", "mediate", "error"):
+        if kind == "report":
+            # mission 清理完、PR 等用户合并：report 只出现这一次（之后 mission 等合并，不再走），排在最前面交出去
+            actions.insert(0, f"report [{m.name}] {rest}".rstrip())
+        elif kind in ("go-gate", "sign", "ask-user", "mediate", "error"):
             actions.append(f"{kind} [{m.name}] {rest}".rstrip())     # 每个 mission 都先走一步，再交出第一个要人处理的
         else:
             waits.append(mid)
