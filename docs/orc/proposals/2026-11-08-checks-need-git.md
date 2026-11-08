@@ -1,6 +1,6 @@
 # 提案：orc 跑检查用的副本没有 `.git`，daoharness-core 自己的检查跑不起来
 
-状态：**等林翰定**。FinTelli 第一个真实 mission（`fintelli-p1-1`）的验证阶段发现。
+状态：**林翰 2026-11-08 选 A**，已实现（`git_copy`；提交关口在 clone 上盖 worktree 没提交的改动）。用 daoharness-core 的 main 实测：签名的 `run_all.sh` 在旧副本里 5 条报 `not a git repository`，在新副本里全部通过。FinTelli 第一个真实 mission（`fintelli-p1-1`）的验证阶段发现。
 
 ## 发生了什么
 

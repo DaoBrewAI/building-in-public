@@ -157,11 +157,12 @@ pending → running → submitted → integrated
 
 - **模型**：`review` 角色（目前 Fable 5.1），和执行用的模型不同。启动方式、沙箱、提问、自动修 2 次再 `mediate`，都和规划会话一样。
 - **每一轮从头开始**：每次 `planning → verifying` 都清空 `~/.orc-worktrees/<mission>/verify-work/`，新开会话（不 resume 上一轮）。轮内的提问回答和修复仍回到同一个会话。
-- **只给**：`spec/design.md`、`spec/task-dag.json`（orc 从 `plan/` 复制）、`repo/`（产品仓库当前提交的副本，没有 `.git`，提交号写进 `verify-snapshot`）、用户在审阅时提过的意见。**不给** `plan.md`，也看不到规划会话的过程。
+- **只给**：`spec/design.md`、`spec/task-dag.json`（orc 从 `plan/` 复制）、`repo/`（产品仓库当前提交的副本，带 git 历史，提交号写进 `verify-snapshot`）、用户在审阅时提过的意见。**不给** `plan.md`，也看不到规划会话的过程。
 - **产出**：`repo/` 里新建的测试文件，和工作目录根上的 `checks.json`（`test_files`、`checks`：每个检查有 `id`、`node`、`acceptance`（第几条验收标准）、`command`、`expect_before`（fail / pass））。
 - **检查挂在哪个节点上**（2026-11-08 加，brief 里的规则，orc 不自动判断）：挂在节点 X 上的检查只能依赖 X 和它前置节点的改动；跑整套测试这类检查挂在依赖了所有相关节点的节点上。起因：mission `subtract` 实跑时，跑整套测试的检查挂在了前置节点上，要等后续节点做完才会通过，节点永远完成不了。
 - **orc 校验**：每条验收标准至少一个检查；每个节点至少一个 `fail` 检查；测试文件只能是新文件，不能和任何节点的 `files` 重叠，不能在 `.northstar/`、`.github/`、`.git/` 下。
-- **实际运行**：orc 从当前提交导出一份干净的代码，只放入列出的测试文件，在 macOS 沙箱（`sandbox-exec`）里逐条运行：只能写这份副本（`TMPDIR` 也指向里面），不能联网，每条最多 300 秒。`fail` 的必须失败，`pass` 的必须通过。产品仓库在验证期间有新提交时停下，`next: error`。
+- **检查用的副本**（验证、提交关口、最终审查都一样）：`git clone --shared` 产品仓库再检出对应提交，不跑 git hook。产品仓库自己的检查要用 git（daoharness-core 的 `core_checks.py` 用 `git ls-files`、`git merge-base origin/main HEAD` 比起点），所以副本不能只是文件（`proposals/2026-11-08-checks-need-git.md`）。`--shared` 只读产品仓库的对象，不写它；副本里的 `origin/<分支>` 就是产品仓库本地的分支。给评审模型看的副本仍然只有文件。
+- **实际运行**：orc 用当前提交做一份干净的副本（带 git 历史，见下面「检查用的副本」），只放入列出的测试文件，在 macOS 沙箱（`sandbox-exec`）里逐条运行：只能写这份副本（`TMPDIR` 也指向里面），不能联网，每条最多 300 秒。`fail` 的必须失败，`pass` 的必须通过。产品仓库在验证期间有新提交时停下，`next: error`。
 - **通过**：复制进 mission 的 `verify/`，写 `verify-ready`，状态进入 `plan-review`。
 
 **`plan-review`**：
@@ -217,7 +218,7 @@ pending → running → submitted → integrated
 
 1. **文件范围**：worktree 里实际改动的文件都在本节点的 `files` 里；动了冻结的验收测试直接拒绝。
 2. **测试哈希**：worktree 里每个冻结的测试文件，和 `brief-exec.md` 里签名的哈希一致。
-3. **检查**：跑这次声明完成的验收标准对应的冻结检查，加上本节点此前已经通过的检查。在 worktree 当前内容的副本上、沙箱里运行（同阶段 3：只能写副本、不能联网、每条最多 300 秒），必须全部通过。不通过就拒绝，**不调用评审模型**。
+3. **检查**：跑这次声明完成的验收标准对应的冻结检查，加上本节点此前已经通过的检查。在 worktree 当前内容的副本上（worktree 的 HEAD 带 git 历史，再盖上没提交的改动）、沙箱里运行（同阶段 3：只能写副本、不能联网、每条最多 300 秒），必须全部通过。不通过就拒绝，**不调用评审模型**。
 4. **对齐评审**：`northstar-review --role auto`，在节点的 worktree 里运行（它从这里读 NORTHSTAR）；评审模型本身没有任何工具，在仓库外的空临时目录里运行，只看提示词里的材料（`proposals/2026-11-07-reviewer-stop-hook.md`）。输入是本节点的 DAG 条目、签名的 `approved-design.md`、检查结果和这次的 diff；上一次被判 DRIFT 时带上 `--prev`。退出码 0 ALIGNED、1 DRIFT（拒绝，发纠偏单）。退出码 2 时：diff 超过上限就拒绝、要求拆小；其他原因（评审模型不可用等）**不放行、不降级**，节点 `blocked`，mission `ask-user`。
    - 验收标准已经被之前的提交满足（worktree 没有改动，`files` 是 `[]`）：第 3 步的检查通过就记为完成（`satisfied`），没有 diff，不评审、不提交。2026-11-07 真实运行里遇到：第一次提交的实现顺带满足了后面几条验收标准。
 5. 全部通过：算出 `diff_sha256`，写提交请求 `nodes/<node>/COMMIT-REQUEST-<n>.json`，把两份 `state` 设成 `ready_for_commit`，运行 `commit-broker.sh --once`。broker 在锁里再做一遍它自己的全部校验，并核对 `diff_sha256`：评审之后改了一个字节都提交不进去。
@@ -265,7 +266,7 @@ pending → running → submitted → integrated
 
 ### 1. 最终审查（后台任务 `final`）
 
-- 从 mission 分支的 tip 导出一份没有 `.git` 的副本，在沙箱里重跑**全部**冻结检查，再跑产品仓库自己的 `.northstar/checks/run_all.sh`（有的话）。规则同提交关口：只能写副本、不能联网、每条最多 300 秒。
+- 用 mission 分支的 tip 做一份检查用的副本（带 git 历史），在沙箱里重跑**全部**冻结检查，再跑产品仓库自己的 `.northstar/checks/run_all.sh`（有的话）。规则同提交关口：只能写副本、不能联网、每条最多 300 秒。
 - 有冻结检查没通过：按检查所属的节点打回，**不调用模型**。`run_all.sh` 没通过时落不到节点，停下 `mediate`。
 - 检查都通过：`review` 角色的模型（`claude -p`，只放行 Read）在仓库外的临时目录里看代码副本。副本不带 `.northstar/` 和 `.github/`，Stop hook 不会拦它。提示词里有 NORTHSTAR、签名的设计、DAG、检查结果和整个 mission 的 diff；diff 超过 60000 字节就只给文件列表，让它用 Read 看。模板 `orc/templates/final-review-brief.md`。它最后输出 `{"verdict": "pass" | "fail", "issues": [{"node", "problem", "evidence"}]}`；每个问题必须落在一个 DAG 节点上。格式不对、节点不存在、模型出错，都**不放行、不降级**，停下 `ask-user`，回答后重做。
 

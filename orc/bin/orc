@@ -638,19 +638,29 @@ def verifier_prompt(m: Mission, work: Path) -> str:
     return text
 
 
+def git_copy(source: Path, commit: str, dest: Path) -> None:
+    """检查用的副本：带 git 历史的 clone，检出 commit（detached）。产品仓库自己的检查要用 git（daoharness-core 的
+    core_checks.py：git ls-files、git merge-base origin/main HEAD），所以副本不能只是文件（proposals/2026-11-08-checks-need-git.md）。
+    --shared 只读源仓库的对象、不写它；副本里的 origin/<分支> 就是源仓库本地的分支。不跑任何 git hook。"""
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    quiet = ["-c", "core.hooksPath=/dev/null", "-c", "advice.detachedHead=false"]
+    for argv in (["git", *quiet, "clone", "--quiet", "--shared", "--no-checkout", str(source), str(dest)],
+                 ["git", *quiet, "-C", str(dest), "checkout", "--quiet", "--detach", commit]):
+        run = subprocess.run(argv, capture_output=True, text=True)
+        if run.returncode != 0:
+            raise OrcError(f"做检查用的副本失败（{' '.join(argv[3:5])}：{run.stderr.strip()[:300]}）。")
+
+
 def snapshot_repo(m: Mission, dest: Path) -> str:
-    """把产品仓库当前提交（HEAD）导出成一份没有 .git 的副本，返回提交号。"""
+    """把产品仓库当前提交（HEAD）做成一份检查用的副本（带 git 历史，见 git_copy），返回提交号。"""
     repo = str(m.repo())
     head = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True)
     if head.returncode != 0:
         raise OrcError(f"产品仓库 {repo} 读不到当前提交（{head.stderr.strip()}）。先在产品仓库里至少提交一次，再运行 orc step。")
     base = head.stdout.strip()
-    dest.mkdir(parents=True, exist_ok=True)
-    archive = subprocess.Popen(["git", "-C", repo, "archive", "--format=tar", base], stdout=subprocess.PIPE)
-    untar = subprocess.run(["tar", "-x", "-C", str(dest)], stdin=archive.stdout, capture_output=True, text=True)
-    archive.stdout.close()
-    if archive.wait() != 0 or untar.returncode != 0:
-        raise OrcError(f"导出产品仓库 {repo} 的提交 {base[:12]} 失败（{untar.stderr.strip()}）。")
+    git_copy(m.repo(), base, dest)
     return base
 
 
@@ -1654,17 +1664,24 @@ def pending_diff(wt: Path, paths: List[str]) -> str:
 
 
 def copy_worktree(wt: Path, dest: Path) -> None:
-    """把 worktree 当前的内容（已跟踪和未忽略的新文件，不含 .git）复制成一份副本，检查在副本上跑。"""
-    if dest.exists():
-        shutil.rmtree(dest)
-    dest.mkdir(parents=True)
+    """把 worktree 当前的内容做成检查用的副本：worktree 的 HEAD 做 git_copy，再盖上没提交的改动
+    （已跟踪和未忽略的新文件照 worktree 复制；worktree 里删掉的已跟踪文件，副本里也删掉）。"""
+    head = subprocess.run(["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    git_copy(wt, head, dest)
     out = subprocess.run(["git", "-C", str(wt), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
                          capture_output=True, check=True).stdout
+    present = set()
     for rel in {p.decode("utf-8") for p in out.split(b"\0") if p}:
         src = wt / rel
         if src.is_file() and not src.is_symlink():
             (dest / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dest / rel)
+            present.add(rel)
+        elif src.is_symlink():
+            present.add(rel)                  # 链接留着 clone 里的那份
+    tracked = subprocess.run(["git", "-C", str(dest), "ls-files", "-z"], capture_output=True, check=True).stdout
+    for rel in {p.decode("utf-8") for p in tracked.split(b"\0") if p} - present:
+        (dest / rel).unlink(missing_ok=True)
 
 
 def last_json_object(text: str) -> Optional[dict]:
@@ -2652,7 +2669,7 @@ def run_final(m: Mission, job: str, tip: str) -> dict:
     out: dict = {"tip": tip, "checks": {}}
     copy = jobs_dir(m) / f"{job}.copy"
     try:
-        export_tree(m, tip, copy)
+        git_copy(m.repo(), tip, copy)        # 检查用的副本带 git 历史；给评审模型看的副本仍用 export_tree
         out["checks"], results, _ = final_checks(m, copy)
     finally:
         shutil.rmtree(copy, ignore_errors=True)
