@@ -5,7 +5,7 @@ APPROVAL_HELPER="$(cd "$(dirname "$0")" && pwd -P)/verify-approved-authority.py"
 LIFECYCLE_HELPER="$(cd "$(dirname "$0")" && pwd -P)/coordinator_lifecycle_lock.py"
 
 usage() {
-  echo "usage: integrate-task.sh --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --parent-worktree <dir> --expected-parent-tip <sha>" >&2
+  echo "usage: integrate-task.sh --control-dir <dir> --task-dir <dir> --mission <slug> --task-id <id> --parent-worktree <dir> --expected-parent-tip <sha> [--message <one-line merge subject>]" >&2
 }
 
 fail() {
@@ -196,6 +196,7 @@ MISSION=""
 TASK_ID=""
 PARENT_WORKTREE=""
 EXPECTED_PARENT_TIP=""
+MERGE_MESSAGE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -205,6 +206,8 @@ while [[ $# -gt 0 ]]; do
     --task-id) [[ $# -ge 2 ]] || { usage; exit 1; }; TASK_ID="$2"; shift 2 ;;
     --parent-worktree) [[ $# -ge 2 ]] || { usage; exit 1; }; PARENT_WORKTREE="$2"; shift 2 ;;
     --expected-parent-tip) [[ $# -ge 2 ]] || { usage; exit 1; }; EXPECTED_PARENT_TIP="$2"; shift 2 ;;
+    # orc: optional merge subject (e.g. "[N1] Integrate a") so the product CI's [N#] commit check passes
+    --message) [[ $# -ge 2 ]] || { usage; exit 1; }; MERGE_MESSAGE="$2"; shift 2 ;;
     *) fail "unknown argument: $1" ;;
   esac
 done
@@ -215,6 +218,7 @@ done
 valid_identity "$MISSION" || fail "invalid mission identity"
 valid_identity "$TASK_ID" || fail "invalid task identity"
 case "$EXPECTED_PARENT_TIP" in *[!0-9a-fA-F]*|'') fail "invalid expected parent tip" ;; esac
+[[ "$MERGE_MESSAGE" != *$'\n'* ]] || fail "merge message must be one line"
 
 CONTROL_PHYS="$(physical_existing_dir "$CONTROL_DIR")" || fail "control directory is missing or symlinked"
 command -v python3 >/dev/null 2>&1 || fail "python3 is required for coordinator lifecycle locking"
@@ -335,7 +339,7 @@ else
   [[ "$(git -C "$REPO_PHYS" cat-file -t "$INTENT_TREE" 2>/dev/null || true)" == tree ]] || fail "merge-tree did not produce one exact tree"
   validate_approved_task_scope "$CONTROL_PHYS" "$REPO_PHYS" "$TASK_ID" "$EXPECTED_PARENT_TIP" "$INTENT_TREE" || \
     fail "integration merge tree violates approved task DAG scope"
-  INTENT_COMMIT="$(printf 'Integrate %s\n' "$TASK_ID" | git -C "$REPO_PHYS" -c core.hooksPath=/dev/null commit-tree "$INTENT_TREE" -p "$EXPECTED_PARENT_TIP" -p "$CHILD_TIP" 2>/dev/null)" || \
+  INTENT_COMMIT="$(printf '%s\n' "${MERGE_MESSAGE:-Integrate $TASK_ID}" | git -C "$REPO_PHYS" -c core.hooksPath=/dev/null commit-tree "$INTENT_TREE" -p "$EXPECTED_PARENT_TIP" -p "$CHILD_TIP" 2>/dev/null)" || \
     fail "could not create hook-free integration commit"
   INTENT_TMP="$(mktemp "$CONTROL_TASK/.integration-intent.XXXXXX")" || fail "cannot stage integration intent"
   printf '%s\t%s\t%s\t%s\t%s\n' "$EXPECTED_PARENT_TIP" "$CHILD_TIP" "$ROW_BRANCH" "$INTENT_TREE" "$INTENT_COMMIT" > "$INTENT_TMP"
