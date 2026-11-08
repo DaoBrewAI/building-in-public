@@ -3434,6 +3434,17 @@ def orc_mission_name(prod: Product, mid: str) -> str:
     return f"{prod.name}-{mid.lower()}"[:64]
 
 
+def phase_mission(prod: Product, mid: str) -> "Mission":
+    """phase 里这个编号现在对应的 mission：最近一次 mission-start 记下的那个（用户放弃后重开的，名字带 -2、-3）；
+    没有记录时用默认名字。"""
+    starts = [e for e in prod.events() if e.get("kind") == "mission-start" and e.get("mission_id") == mid]
+    return Mission(starts[-1]["mission"] if starts else orc_mission_name(prod, mid))
+
+
+def abandoned(m: "Mission") -> bool:
+    return any(e.get("kind") == "abandoned" for e in m.events())
+
+
 def pr_merged(m: Mission) -> Optional[str]:
     """mission 的 PR 合并了没有（gh pr view）：合并了返回合并提交，没有返回 None。"""
     prs = [e for e in m.events() if e.get("kind") == "pr"]
@@ -3480,9 +3491,9 @@ def phase_status(prod: Product, phase: str) -> Tuple[Dict[str, dict], Dict[str, 
         if item["manual"]:
             status[mid] = "done" if mid in manual_done else "manual-todo"
             continue
-        m = Mission(orc_mission_name(prod, mid))
-        if not m.exists():
-            status[mid] = "not-started"
+        m = phase_mission(prod, mid)
+        if not m.exists() or abandoned(m):
+            status[mid] = "not-started"           # 用户放弃的：用新名字重新开始
         elif mission_done(prod, m):
             status[mid] = "done"
         elif m.replay()["state"] == "cleaned":
@@ -3498,7 +3509,11 @@ def phase_status(prod: Product, phase: str) -> Tuple[Dict[str, dict], Dict[str, 
 def launch_phase_mission(prod: Product, phase: str, mid: str, item: dict) -> Mission:
     repo = prod.config()["repos"][item["repo"]]
     update_base(repo)
-    m = create_mission(item["text"], str(repo), orc_mission_name(prod, mid))
+    name, n = orc_mission_name(prod, mid), 1
+    while Mission(name).exists():             # 放弃过的 mission 留着（分支、worktree 给用户看），新的一次换个名字
+        n += 1
+        name = f"{orc_mission_name(prod, mid)[:60]}-{n}"
+    m = create_mission(item["text"], str(repo), name)
     for name, value in (("product", prod.name), ("phase", phase), ("mission-id", mid)):
         write_atomic(m.dir / name, value + "\n")
     prod.append("mission-start", phase=phase, mission_id=mid, mission=m.name, repo=item["repo"], file=str(item["file"]))
@@ -3512,7 +3527,7 @@ def phase_step(prod: Product, phase: str) -> str:
     # 1. 已经清理、等合并的 mission：查 PR 合并了没有
     for mid, st in status.items():
         if st == "awaiting-merge":
-            m = Mission(orc_mission_name(prod, mid))
+            m = phase_mission(prod, mid)
             sha = pr_merged(m)
             if sha:
                 prod.append("merged", phase=phase, mission_id=mid, mission=m.name, sha=sha)
@@ -3537,7 +3552,7 @@ def phase_step(prod: Product, phase: str) -> str:
     for mid, st in status.items():
         if st != "running":
             continue
-        m = Mission(orc_mission_name(prod, mid))
+        m = phase_mission(prod, mid)
         nxt = step(m)
         print(f"phase {phase}：{mid}（{m.name}）：next: {nxt}")
         kind, _, rest = nxt.partition(" ")
@@ -3577,7 +3592,7 @@ def phase_conclude(prod: Product, phase: str, plan: Dict[str, dict]) -> str:
             if item["manual"]:
                 lines.append(f"- {mid}：人工 mission，用户已确认做完")
                 continue
-            m = Mission(orc_mission_name(prod, mid))
+            m = phase_mission(prod, mid)
             receipts = json.loads((m.dir / "publish.json").read_text()) if (m.dir / "publish.json").is_file() else {}
             final = next((e for e in reversed(job_exits(m, MISSION_JOBS, "final")) if e.get("outcome") == "passed"), {})
             ci = next((e for e in reversed(job_exits(m, MISSION_JOBS, "ci")) if e.get("outcome") == "passed"), {})
@@ -3963,6 +3978,28 @@ def cmd_phase(args) -> int:
     return 0
 
 
+def cmd_abandon(args) -> int:
+    """用户决定放弃一个 mission：记下原因、转到 failed，不再推进。分支、worktree 和记录都留着给用户看；
+    属于某个 phase 的，下一次 orc phase 用新名字重新开始这个编号。"""
+    m = Mission(args.mission)
+    if not m.exists():
+        raise OrcError(f"没有 mission {args.mission}。")
+    with m:
+        state = m.replay()["state"]
+        if state in TERMINAL:
+            raise OrcError(f"mission {m.name} 已经是 {state}，不用放弃。")
+        if mission_busy(m):
+            raise OrcError(f"mission {m.name} 还有后台会话在跑：等它结束（orc wait --mission {m.name}）再放弃。")
+        m.append("abandoned", "orc abandon", reason=args.reason, state=state)
+        m.transition("failed", "orc abandon", reason=f"用户放弃：{args.reason}")
+    print(f"mission {m.name}：{state} → failed（用户放弃：{args.reason}）。分支和 worktree 留着，没有清理。")
+    product = (m.dir / "product").read_text().strip() if (m.dir / "product").is_file() else ""
+    phase = (m.dir / "phase").read_text().strip() if (m.dir / "phase").is_file() else ""
+    if product and phase:
+        print(f"next: 运行 orc phase --product {product} --phase {phase}（这个编号会用新名字重新开始）")
+    return 0
+
+
 def cmd_done(args) -> int:
     prod = Product(args.product)
     plan = phase_plan(prod, args.phase)
@@ -4212,7 +4249,7 @@ def wait_phase(prod: Product, phase: str, timeout: int) -> int:
     start = time.monotonic()
     while time.monotonic() - start < timeout:
         _, status = phase_status(prod, phase)
-        running = [Mission(orc_mission_name(prod, mid)) for mid, st in status.items() if st == "running"]
+        running = [phase_mission(prod, mid) for mid, st in status.items() if st == "running"]
         if any(not mission_busy(m) for m in running):
             break                                   # 有 mission 该 orc step 了
         if not running and ("awaiting-merge" not in status.values() or time.monotonic() - start >= poll):
@@ -4388,6 +4425,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--product", required=True)
     p.add_argument("--phase", required=True)
     p.set_defaults(func=cmd_done)
+    p = sub.add_parser("abandon", help="用户决定放弃一个 mission：停下、留着分支和记录；phase 里的编号会用新名字重新开始")
+    p.add_argument("--mission", required=True)
+    p.add_argument("reason", help="为什么放弃（用户的话）")
+    p.set_defaults(func=cmd_abandon)
     p = sub.add_parser("status", help="查看 mission 状态")
     p.add_argument("--mission")
     p.set_defaults(func=cmd_status)

@@ -232,6 +232,36 @@ class Phase(ProductCase):
         finally:
             orc.step, orc.publish_summary = saved
 
+    def test_abandoned_mission_restarts_under_a_new_name(self):
+        # 用户放弃一个 mission（orc abandon）：它停下、分支和 worktree 留着；phase 里同一个编号用新名字重新开始
+        self.phase({"P1-1": "无"}, {"P1-1": "仓库: main"})
+        r = self.run_phase()
+        first, = self.pevents("mission-start")
+        self.assertEqual(first["mission"], "shop-p1-1")
+        a = self.run_orc("abandon", "--mission", "shop-p1-1", "提交说明没有正文，重跑")
+        self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
+        self.assertIn("next: 运行 orc phase --product shop --phase P1", a.stdout)
+        m = self.orc.Mission("shop-p1-1")
+        self.assertEqual(m.replay()["state"], "failed")
+        abandoned, = [e for e in m.events() if e["kind"] == "abandoned"]
+        self.assertEqual(abandoned["reason"], "提交说明没有正文，重跑")
+        again = self.run_orc("abandon", "--mission", "shop-p1-1", "再来一次")
+        self.assertNotEqual(again.returncode, 0)                          # 已经结束的 mission 不能再放弃
+        r = self.run_phase()
+        self.assertEqual([e["mission"] for e in self.pevents("mission-start")], ["shop-p1-1", "shop-p1-1-2"], r.stdout + r.stderr)
+        self.assertTrue((self.home / "missions" / "shop-p1-1-2").is_dir())
+        self.assertFalse(self.next_line(r).startswith("next: error"), r.stdout + r.stderr)
+
+    def test_a_mission_that_failed_on_its_own_is_not_restarted(self):
+        self.phase({"P1-1": "无"}, {"P1-1": "仓库: main"})
+        self.run_phase()
+        m = self.orc.Mission("shop-p1-1")
+        with m:
+            m.transition("failed", "test", reason="别的原因")
+        r = self.run_phase()
+        self.assertTrue(self.next_line(r).startswith("next: error"), r.stdout + r.stderr)
+        self.assertEqual(len(self.pevents("mission-start")), 1)
+
     def test_manual_mission_waits_for_orc_done_then_phase_concludes(self):
         self.phase({"P1-1": "无", "P1-2": "依赖 P1-1"}, {"P1-1": "仓库: main", "P1-2": "执行: 人工"})
         self.done_mission("P1-1")

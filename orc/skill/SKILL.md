@@ -31,6 +31,9 @@ In a phase, an action names its mission: `<kind> [<m>] …`; use `--mission <m>`
 | `canvas <url>` | Send the URL; the user signs it with `northstar seal`. |
 | `error <msg>` | Tell the user the message once. Do not improvise a fix. |
 
+If the user decides to drop a mission: `orc abandon --mission <m> "<their words>"`; in a phase the next
+`orc phase` restarts that id under a new name.
+
 Batch what the user must do into one message and wait for "done"; do not
 narrate every step.
 
