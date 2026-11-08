@@ -3425,7 +3425,8 @@ def mission_done(prod: Product, m: Mission) -> bool:
 
 def update_base(repo: Path) -> None:
     """新 mission 从产品仓库默认分支的最新提交开始：工作区必须干净、在默认分支上，先 fast-forward。"""
-    if run_git(repo, "status", "--porcelain", check=False):
+    # 只看已跟踪的文件：drafts/、proposals/ 里没提交的草稿不影响 fast-forward，也不会进 mission
+    if run_git(repo, "status", "--porcelain", "--untracked-files=no", check=False):
         raise OrcError(f"产品仓库 {repo} 的工作区有没提交的改动，新 mission 不能从这里开始。把这条消息告诉用户。")
     branch = run_git(repo, "symbolic-ref", "--short", "HEAD", check=False)
     has_origin = subprocess.run(["git", "-C", str(repo), "remote", "get-url", "origin"], capture_output=True).returncode == 0
