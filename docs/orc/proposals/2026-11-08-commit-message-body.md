@@ -1,6 +1,6 @@
 # 提案：orc 的提交说明只有一行，过不了 daoharness-core 的 N12「commit 正文写根因」
 
-状态：**等林翰定**。`fintelli-p1-1` 的最终审查发现（在修好「检查副本没有 .git」之后才会露出来）。
+状态：**林翰 2026-11-08 两部分都选 A**，已实现：执行说明改了（orc 本来就原样保留正文，问题只在说明）；`orc abandon`；daoharness-core 的 `drafts/checks/core_checks.py` 已起草跳过 orc 的冻结测试提交，等你 `northstar seal`。`fintelli-p1-1` 的最终审查发现（在修好「检查副本没有 .git」之后才会露出来）。
 
 ## 发生了什么
 

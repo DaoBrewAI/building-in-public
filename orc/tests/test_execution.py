@@ -274,6 +274,18 @@ class HappyPath(ExecCase):
         msg = self.git("log", "-1", "--format=%s", f"orc-task/m1/b")
         self.assertEqual(msg, "[N1] b：完成")                                   # 执行会话自带的标签和节点名不重复
 
+    def test_commit_message_body_is_kept_for_the_repo_conventions(self):
+        # 实跑（2026-11-08，fintelli-p1-1）：说明只让写一句，执行会话把「根因: …」塞进第一行，
+        # 过不了产品仓库「正文要有一行根因」的检查（proposals/2026-11-08-commit-message-body.md）
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1], message="[N1] a：加 a.txt\n\n根因: 节点 a 还没有文件\n第二行"))
+        self.reached_reviewing(self.drive())
+        body = self.git("log", "-1", "--format=%B", "orc-task/m1/a")
+        self.assertEqual(body, "[N1] a：加 a.txt\n\n根因: 节点 a 还没有文件\n第二行")
+        brief = self.calls("exec-a")[0]["prompt"]
+        self.assertIn("空一行", brief)                       # 说明里写明：仓库约定要求的正文写在空一行之后
+        self.assertIn("AGENTS.md", brief)
+
     def test_only_declared_checks_and_previously_passed_checks_run(self):
         self.simple(("a",), two_acceptance=True)
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a2.txt": "a2\n"}, [2]))

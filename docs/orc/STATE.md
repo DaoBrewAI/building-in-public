@@ -205,7 +205,7 @@ pending → running → submitted → integrated
 
 | `status` | 其他字段 | orc 怎么处理 |
 | --- | --- | --- |
-| `commit` | `acceptance`（这次完成的第几条，从 1 开始；rework 时可以为空）、`files`（改了哪些文件）、`message`（提交说明）、`notes`（遗留问题，可以为空；写进节点的 `report.md`） | 交给提交关口 |
+| `commit` | `acceptance`（这次完成的第几条，从 1 开始；rework 时可以为空）、`files`（改了哪些文件）、`message`（提交说明：第一行一句话；仓库约定要求的正文空一行写在后面，orc 原样保留，第一行前面加 `[N#] 节点名：`）、`notes`（遗留问题，可以为空；写进节点的 `report.md`） | 交给提交关口 |
 | `question` | `question` | 节点 `blocked`，mission 进入 `blocked`（ask-user），回答发回同一个会话 |
 | `test-wrong` | `check`（检查 id）、`reason` | 交给 `review` 模型判断冻结的测试有没有错（见下） |
 
@@ -349,6 +349,7 @@ pending → running → submitted → integrated
   3. 进行中的 mission 各走一步（`orc step`）；有要人处理的（go-gate、sign、ask-user、mediate、error），交出第一个，前面带 `[mission 名]`。
   4. 人工 mission 依赖都完成时列成待办：用户做完运行 `orc done --product <产品> --phase <P> <mission>`。orc 跑的 mission 不能手动标完成：它的 PR 合并了才算。
   5. 全部完成后，`review` 模型（没有工具）对照 phase 文档的「完成标准」逐条给结论：`met`、`not-met`、`needs-human`（要人亲手验收的，写清楚人要做什么，orc 不代做）。记 `phase-conclusion`，输出 `next: report <汇总页链接>`。
+- 放弃：用户决定放弃一个 mission 时运行 `orc abandon --mission <m> "<原因>"`（后台会话还在跑时不行）：记 `abandoned`，转到 `failed`，分支、worktree 和记录都留着，不清理。phase 里这个编号算「没开始」，下一次 `orc phase` 用新名字（`<产品>-<编号>-2`、`-3`）重新开始；编号对应哪个 mission 看最近一次 `mission-start`。自己失败的 mission（没有 `abandoned`）不会自动重开。
 - 等合并时 `orc wait --product <产品> --phase <P>` 每 120 秒（`ORC_MERGE_POLL_SECONDS`）返回一次，让 `orc phase` 再去查。
 
 ### 跨 mission 评审（mission 的 `reviewing` 里，最终审查之后、开 PR 之前）
