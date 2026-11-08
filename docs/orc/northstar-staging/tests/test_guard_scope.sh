@@ -196,6 +196,9 @@ run northstar-scope src/core/a.py;                 expect_rc 3 "control 没有�
 ssh-keygen -Y sign -n northstar -f "$T/key" "$C3/approved.sha256" >/dev/null 2>&1
 run northstar-scope src/core/a.py;                 expect_rc 3 "签名的命名空间不是 northstar-mission：停下"
 unset ORC_MISSION_CONTROL
+guard "$(write_p Write "$PWD/.northstar/architecture.json")"; expect_rc 2 "签名后的画布 agent 改不了（Write）"
+guard "$(bash_p 'echo {} > .northstar/architecture.json')";  expect_rc 2 "签名后的画布 agent 改不了（Bash）"
+guard "$(write_p Write "$PWD/drafts/architecture.json")";    expect_rc 0 "画布草稿写在 drafts/ 放行"
 run northstar-scope src/ui/b.py package.json;      expect_rc 0 "不带 ORC_MISSION_CONTROL、也没有 ACTIVE 时不设围栏"
 
 summary

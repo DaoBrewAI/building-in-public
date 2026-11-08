@@ -34,16 +34,21 @@ if role == "publish":
         "pages": [p.name for p in pages]}, ensure_ascii=False))
     envelope(json.dumps({"url": f"https://claude.ai/artifact/fake-{pages[0].stem if pages else 'none'}"}))
     sys.exit(0)
-if role in ("final-review", "notes"):
-    # 最终审查：按 script-final 第 n 行（JSON），默认通过。状态页说明：按 script-notes 第 n 行，默认 AUTO（引用提示词里列出的每个提交）
-    name = "final" if role == "final-review" else "notes"
+NAMES = {"final-review": "final", "notes": "notes", "canvas": "canvas", "phase-conclusion": "phase", "cross-review": "cross"}
+DEFAULTS = {"final": '{"verdict": "pass", "issues": []}', "notes": "AUTO",
+            "canvas": '{"components": [{"id": "core", "name": "核心", "paths": ["*"]}]}',
+            "phase": '{"items": [{"criterion": "主线跑通", "status": "met", "evidence": "PR 已合并"}]}',
+            "cross": '{"verdict": "pass", "issues": [], "overrides_applied": []}'}
+if role in NAMES:
+    # 最终审查 / 跨 mission 评审 / 画布 / phase 结论：按 script-<名字> 第 n 行，默认见 DEFAULTS。状态页说明默认 AUTO（引用提示词里列出的每个提交）
+    name = NAMES[role]
     n = len(list(fake.glob(f"{name}-call-*.json"))) + 1
     cwd = pathlib.Path(os.getcwd())
     (fake / f"{name}-call-{n}.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt,
         "files": sorted(str(p.relative_to(cwd)) for p in cwd.rglob("*") if p.is_file())}, ensure_ascii=False))
     script = fake / f"script-{name}"
     lines = [l for l in script.read_text().splitlines() if l.strip()] if script.exists() else []
-    line = lines[n - 1] if n - 1 < len(lines) else ("AUTO" if name == "notes" else '{"verdict": "pass", "issues": []}')
+    line = lines[n - 1] if n - 1 < len(lines) else DEFAULTS[name]
     if line == "AUTO":
         import re
         line = "\n".join(f"- 提交 {h} 的改动 [commit:{h}]" for h in re.findall(r"^- `([0-9a-f]{7,})` ", prompt, re.M))
@@ -58,7 +63,7 @@ if role not in ("implement", "dispute"):
 n = len(list(fake.glob(f"{name}-call-*.json"))) + 1
 (fake / f"{name}-call-{n}.json").write_text(json.dumps({
     "args": args, "cwd": os.getcwd(), "prompt": prompt, "session": session,
-    "env": {k: os.environ.get(k) for k in ("ORC_ROLE", "ORC_NODE", "PYTHONDONTWRITEBYTECODE", "PYTEST_ADDOPTS")}},
+    "env": {k: os.environ.get(k) for k in ("ORC_ROLE", "ORC_NODE", "PYTHONDONTWRITEBYTECODE", "PYTEST_ADDOPTS", "ORC_MISSION_CONTROL")}},
     ensure_ascii=False))
 script = fake / f"script-{name[5:] if role == 'implement' else 'dispute'}"
 lines = [l for l in script.read_text().splitlines() if l.strip()] if script.exists() else []

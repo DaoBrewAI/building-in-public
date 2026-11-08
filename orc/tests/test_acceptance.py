@@ -33,6 +33,10 @@ elif args[:2] == ["pr", "create"]:
     prs.append({"url": url, "number": len(prs) + 7, "head": args[args.index("--head") + 1], "base": args[args.index("--base") + 1]})
     prs_file.write_text(json.dumps(prs))
     print(url)
+elif args[:2] == ["pr", "view"] and "state,mergeCommit" in args:
+    # 合并了没有：$ORC_FAKE/gh-merged 里每行一个已合并的 PR 链接
+    merged = (fake / "gh-merged").read_text().split() if (fake / "gh-merged").exists() else []
+    print(f"MERGED {'f' * 40}" if args[2] in merged else "OPEN ")
 elif args[:2] == ["pr", "view"]:
     head = fake / "gh-head"
     if head.exists():

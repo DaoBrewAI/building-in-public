@@ -313,6 +313,59 @@ pending → running → submitted → integrated
 
 `check` 和 `review` 事件在最终审查时 `node` 为空、`stage` 是 `final`。
 
+## 产品层（阶段 6）
+
+开工前定下的事见 `proposals/2026-11-08-phase6-open-points.md`。前面的阶段只认识单个 mission；这一层让 orc 认识产品设计和 phase。NORTHSTAR 不加任何内容。
+
+### 产品
+
+- `orc product <产品> --design <产品设计文档> --phases <phase 文档目录> --missions <mission 文档目录> --repo <名字>=<本机路径> …` 在 orc 的数据目录下写 `products/<产品>/product.toml`。产品的事件记在同一目录的 `events.jsonl`（`configured`、`canvas-draft`、`mission-start`、`merged`、`manual-done`、`phase-conclusion`）。
+- phase 启动的 mission 名是 `<产品>-<mission id 小写>`，mission 目录里多三个文件：`product`、`phase`、`mission-id`。
+
+### 画布
+
+- `orc canvas --product <产品> --repo <名字>`：`plan` 角色的模型（没有工具，在空目录里）读产品设计文档和仓库的文件列表，起草 `{"components": [{"id", "name", "paths", "depends_on"}]}`。orc 校验：id 合法不重复、paths 非空、依赖的组件存在、仓库现有文件（`.northstar/`、`.github/`、`drafts/`、`proposals/`、`status/` 以外）都落在某个组件里；不过就把问题发回去重写，最多 3 次。
+- 通过后写进产品仓库的 `drafts/architecture.json`，发布一页画布给用户看，输出 `next: canvas <链接>`。用户运行 `northstar seal` 把它签进 `.northstar/architecture.json`，之后 agent 改不了（guard 拦 `.northstar/`）。格式就是 `northstar-scope` 和 `northstar-status` 读的那个，`depends_on` 也是 `northstar-status` 画图用的字段。
+
+### 规划校验（加在阶段 3 的校验后面）
+
+- 仓库有签名的画布时，DAG 节点的 `component` 只能是画布里的组件 id。
+- mission 文件头有 `scope:` 时，节点的组件必须在 scope 里，`files` 必须落在这些组件的 paths 里；有 `forbid:` 时，`files` 不能碰到。
+- `design.md` 有「推翻的已有决定」一节时，每一条都要带 `[answer:<编号>]`，引用用户对规划会话提问的回答。规划会话不能自己决定推翻（`planner-brief.md` 也这样写）。发给规划会话的回答带着编号。
+- 不过的都按阶段 3 的规则发回规划会话修，2 次不行就 `mediate`。
+
+### scope 和 forbid 接成硬规则
+
+- `orc go` 把 mission 文件头的 `scope` 和 `forbid` 写进 `brief-exec.md`，和设计一起冻结、由用户 `approve-mission` 签名。不改复用的 `verify-approved-authority.py`（它只认 4 个冻结文件）。
+- 执行会话的环境变量带 `ORC_MISSION_CONTROL=<control 目录>`。信任层的 `northstar-scope` 看到它时，先 `northstar verify-mission` 验签名、再验 `brief-exec.md` 的哈希，然后从里面读 scope 和 forbid；任何一项不对就返回 3（停下）。`guard.sh` 对这样的会话也跑范围围栏：碰到 forbid 停下，越出 scope 拦住。
+- 不用 `.northstar/missions/ACTIVE`，同一个仓库里的多个 mission 可以并行，也不用每个 mission 多签两次（`northstar start` / `finish`）。要用户重新 sudo 安装信任层才生效。
+
+### phase
+
+- phase 文档要有标题含「依赖」的一节，每个 mission 一行：`- P1-1：无`、`- P1-4：依赖 P1-2`、`- P1-5a：依赖 P1-1、P1-2`。mission 文件在 mission 目录里，文件名是 `<id>.md` 或 `<id>-<说明>.md`；文件头 `仓库: <名字>`（产品配置里的仓库），orc 做不完的写 `执行: 人工`。依赖表缺失、mission 文件找不到或多于一个、依赖不存在、有环、仓库没写或不认识，都 `next: error` 说明。
+- `orc phase --product <产品> --phase <P>` 走一步：
+  1. 已清理、等合并的 mission：`gh pr view` 查 PR 合并了没有，合并了记 `merged`。
+  2. 依赖都完成的 mission：从产品仓库默认分支的最新提交开始（工作区必须干净、在默认分支上，先 fast-forward），请求就是 mission 文件全文。没有依赖关系的同时启动。
+  3. 进行中的 mission 各走一步（`orc step`）；有要人处理的（go-gate、sign、ask-user、mediate、error），交出第一个，前面带 `[mission 名]`。
+  4. 人工 mission 依赖都完成时列成待办：用户做完运行 `orc done --product <产品> --phase <P> <mission>`。orc 跑的 mission 不能手动标完成：它的 PR 合并了才算。
+  5. 全部完成后，`review` 模型（没有工具）对照 phase 文档的「完成标准」逐条给结论：`met`、`not-met`、`needs-human`（要人亲手验收的，写清楚人要做什么，orc 不代做）。记 `phase-conclusion`，输出 `next: report <汇总页链接>`。
+- 等合并时 `orc wait --product <产品> --phase <P>` 每 120 秒（`ORC_MERGE_POLL_SECONDS`）返回一次，让 `orc phase` 再去查。
+
+### 跨 mission 评审（mission 的 `reviewing` 里，最终审查之后、开 PR 之前）
+
+- 只对属于某个产品的 mission。后台任务 `cross`：`review` 模型（只放行 Read，在仓库外的临时目录里看合并后的代码副本，不带 `.northstar/`、`.github/`）。材料：NORTHSTAR、产品设计文档、画布、此前已合并的同一产品 mission 签名的设计、这个 mission 签名的设计、它的「推翻的已有决定」、DAG 和完整 diff（超过 60000 字节只给文件列表）。模板 `orc/templates/cross-review-brief.md`。
+- 输出 `{"verdict": "pass" | "conflict", "issues": [{"node", "problem", "evidence"}], "overrides_applied": [...]}`。冲突就和最终审查一样重新打开问题所属的节点（`node-reopen` 的 `stage` 是「跨 mission 评审」），不开 PR；最多打回 2 轮，第 3 次熔断 `mediate`。格式不对、节点不存在、模型出错：不放行、不降级，`ask-user`。
+- 冲突规则写在评审的提示词里：默认以已经合并的为准；只放行「推翻的已有决定」里逐条写明的；推翻 NORTHSTAR 条款的，NORTHSTAR 原文必须已经改过。
+- 事件：`job-exit`（`type` 是 `cross`）、`review`（`stage` 是 `cross`，`verdict` 是 PASS / CONFLICT）。
+
+### 汇总页
+
+全产品一个，`publish.json` 的 `summary`，链接不变；每次 `orc phase` 结束时重新生成，内容变了才重新发布。全部来自事件记录：
+
+- **画布着色图**：每个仓库一张（底图是签名的画布）。组件的颜色看改过它的 mission：都已合并是绿色，有进行中的是黄色，没有是灰色。点开看是哪个 mission 的哪个节点、哪次提交，带日志行号。
+- **NORTHSTAR 条款表**：每条 N# 一行（读各仓库的 NORTHSTAR），列出由哪些 mission 的哪些节点实现（DAG 的 `clauses`）、提交、被 DRIFT 打回的次数、状态。没有任何 mission 实现的条款标红。
+- **phase 和 mission**：每个 phase 的完成数；每个 mission 一行：状态、仓库、状态页链接、跨 mission 评审结论、PR。phase 有结论时逐条列出，`needs-human` 的就是交给你的验收清单。
+
 ## `orc step` 的约定
 
 - 每次运行：拿锁 → 对齐 `state` 与日志 → 执行当前状态的一段机械流程 → 写日志和状态 → 放锁 → 最后一行打印 `next: …`。
