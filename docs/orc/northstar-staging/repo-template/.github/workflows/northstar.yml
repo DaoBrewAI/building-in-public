@@ -4,6 +4,8 @@ name: northstar
 on:
   pull_request:
     branches: [main]
+    # 默认只有 opened / synchronize / reopened；加上 ready_for_review：草稿 PR 转正时隐藏考题要跑
+    types: [opened, synchronize, reopened, ready_for_review]
 concurrency:
   group: northstar-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -40,3 +42,36 @@ jobs:
           bad=$(git log --format=%s origin/${{ github.base_ref }}..HEAD \
             | grep -vE '^\[(N[0-9]+(,N[0-9]+)*|NS)\]' || true)
           [ -z "$bad" ] || { echo "缺少 [N#] 的 commit："; echo "$bad"; exit 1; }
+  # 隐藏考题（PLAN 阶段 5，proposals/2026-11-08-phase5-open-points.md 第 3 条）
+  # 考题放在 agent 的 token 访问不到的私有仓库（DaoBrewAI/LY_orchestrator-hub，没选进 agent token），
+  # 路径 exams/<本仓库名>/run.sh；用只读这个仓库的 token（secret NORTHSTAR_EXAM_TOKEN）取。
+  # 只报通过或失败：考题的输出一律丢掉（公开仓库的日志谁都能看）；运行时断网，被测代码发不出考题。
+  exam:
+    # 草稿 PR 不跑，省分钟数。跳过的 job 在 GitHub 上算 Success，但 orc 只认 pass，草稿过不了 orc 的验收
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ github.event.pull_request.head.sha }}", path: product, persist-credentials: false }
+      - name: 取考题
+        uses: actions/checkout@v4
+        with:
+          repository: DaoBrewAI/LY_orchestrator-hub
+          token: "${{ secrets.NORTHSTAR_EXAM_TOKEN }}"
+          path: exam-repo
+          persist-credentials: false
+      - name: 只留本仓库的考题
+        run: |
+          src="exam-repo/exams/${{ github.event.repository.name }}"
+          [ -f "$src/run.sh" ] || { echo "考题仓库里没有 exams/${{ github.event.repository.name }}/run.sh"; exit 1; }
+          mv "$src" exam && rm -rf exam-repo
+      # 在这里补上本项目安装依赖的步骤（考题运行时断网，依赖要先装好）
+      - name: 运行考题（断网，只报通过或失败）
+        run: |
+          if sudo unshare --net -- sudo -u "$USER" env EXAM_DIR="$PWD/exam" HOME="$HOME" PATH="$PATH" \
+               bash -c 'cd product && bash ../exam/run.sh' >/dev/null 2>&1; then
+            echo "隐藏考题：通过"
+          else
+            echo "隐藏考题：没通过"; exit 1
+          fi
