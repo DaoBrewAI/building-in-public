@@ -21,7 +21,7 @@ PLAN 阶段 5 要求进入 `accepted` 前「确认 PR 的 CI 通过」，但没�
 
 ## 3. 隐藏考题放在哪
 
-实测：agent 专用的 token 能列出 DaoBrewAI 下的**全部**仓库，包括私有的 `DaoBrewAI/DaobrewAI`。所以把考题放进 DaoBrewAI 下的私有仓库，agent 读得到。
+实测：agent 专用的 token 能读 DaoBrewAI 下的私有仓库 `DaobrewAI` 和 `fintelli`。（最初写成「能读全部仓库」是错的：列仓库的 API 只返回 token 能访问的，见本节末尾的核实。）
 
 - **推荐 A**：考题放在你**个人账号**下的私有仓库（例如 `Jupiter1995/<产品>-exam`），agent 的 token 碰不到。你再建一个只读这个仓库的 fine-grained token，存成产品仓库的 secret（例如 `NORTHSTAR_EXAM_TOKEN`）。CI 用它取考题、运行，只报通过或失败。
 - B：考题打包后存进一个 GitHub secret。不用多建仓库，但单个 secret 上限 48 KB（GitHub 文档），改考题要重新打包。
@@ -33,7 +33,7 @@ PLAN 阶段 5 要求进入 `accepted` 前「确认 PR 的 CI 通过」，但没�
 - 运行考题时断网（`sudo unshare --net`），防止被测代码把考题发出去。这一点要在真实 CI 上实测。
 - 免费组织的私有仓库设不了 required check（2026-11-06 已确认）。不过 orc 自己在进入 `accepted` 前会查 PR 的 CI，考题不过就停下。所以在 orc 的流程里它照样拦得住，只是你手动合并时 GitHub 不会拦。
 
-核实（2026-11-08）：本机 `gh` 用的是 agent 专用的 fine-grained token（`github_pat_…`，2027-02-04 到期），能读 DaoBrewAI 下两个私有仓库 `DaobrewAI` 和 `fintelli` 的内容，读不到你个人账号下的私有仓库。DaoBrewAI 的私有仓库只有这两个，所以从 API 看不出它是设成了「All repositories」，还是两个都被选中了。要在 GitHub → Settings → Developer settings → Fine-grained tokens 里看这个 token 的 Repository access 才能确定。
+核实（2026-11-08）：本机 `gh` 用的是 agent 专用的 fine-grained token（`github_pat_…`，2027-02-04 到期），能读 DaoBrewAI 下两个私有仓库 `DaobrewAI` 和 `fintelli` 的内容，读不到你个人账号下的私有仓库。DaoBrewAI 的私有仓库只有这两个，所以从 API 看不出它是设成了「All repositories」，还是两个都被选中了。林翰指出另有私有仓库 `daobrewstrategyrepo`：这个 token 访问 `DaoBrewAI/daobrewstrategyrepo` 和 `Jupiter1995/daobrewstrategyrepo` 都是 404，也就是看不到。它若在 DaoBrewAI 下，说明 token 设的是「只选中的仓库」，`DaobrewAI` 和 `fintelli` 是被选中的；没选中的私有仓库 agent 读不到。
 
 ## 4. 最终审查发现问题时，怎么打回已集成的节点
 
