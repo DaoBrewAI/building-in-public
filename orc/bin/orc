@@ -3937,7 +3937,9 @@ def withdraw_reopen(m: Mission, node: str) -> bool:
     """最终审查打回、但问题不在它这里的节点：重新打开后没有新提交，就撤回这次打回，回到 integrated。
     没提交的改动（例如执行会话留下的临时脚本）先存成补丁再撤回，不留在 worktree 里。"""
     ctl, work, wt = node_ctl(m, node), node_work(m, node), m.worktree(node)
-    if not (ctl / "unresolved-rework").exists():
+    # 是不是被打回过看 reopen-prev（重新打开时写，集成或撤回时才删）。unresolved-rework 不行：
+    # 执行会话回「已经满足」时提交关口就删了它，之后集成永远走不到撤回
+    if not (ctl / "reopen-prev").exists():
         return False
     base = read1(ctl / "worktrees.txt").split("\t")[2]
     if run_git(wt, "rev-parse", "HEAD") != base:
@@ -3949,7 +3951,7 @@ def withdraw_reopen(m: Mission, node: str) -> bool:
     write_atomic(work / "state", prev["work"] + "\n")
     for name in ("unresolved-rework", "parked", "repair.json", "reopen-prev"):
         (ctl / name).unlink(missing_ok=True)
-    m.append("node-withdrawn", "orc step", node=node, reason="诊断认为问题不在这个节点，它也没有改动")
+    m.append("node-withdrawn", "orc step", node=node, reason="被打回后没有任何改动（问题不在这个节点）")
     print(f"节点 {node}：撤回打回，回到 integrated")
     return True
 
@@ -4112,7 +4114,13 @@ def test_fix_step(m: Mission) -> Optional[str]:
     if q is None:                 # 改 control/ 或提问的中途断掉了：从备份重做一遍，补问
         apply_test_fix(m, fix)
         q = next(e for e in m.events() if e.get("kind") == "repair-question" and e.get("test_fix") == fix["k"])
-    answered = q["id"] in m.replay()["answered"]
+    ctx = m.replay()
+    answered = q["id"] in ctx["answered"]
+    if ctx["state"] == "blocked" and ctx["question"] != q["id"] and ctx["question"] not in ctx["answered"]:
+        return None       # 停在别的问题上（例如签名生效时合并冲突）：照常停在那个问题上，等它的回答
+    if any(e.get("kind") == "test-fix-withdrawing" and e.get("k") == fix["k"] for e in m.events()):
+        withdraw_test_fix(m, fix)     # 撤回做到一半断掉：旧签名可能已经恢复，不能当成同意，接着撤回
+        return None
     if not answered and m.state != "blocked":     # 记下问题后、进入 blocked 前断掉
         m.transition("blocked", "orc step", reason="等用户确认测试的修正", question=q["id"], type="ask-user")
     if signature_ok(m):
@@ -4161,6 +4169,8 @@ def finalize_test_fix(m: Mission, fix: dict, q: dict, answered: bool) -> None:
 
 def withdraw_test_fix(m: Mission, fix: dict) -> None:
     backup, c = Path(fix["backup"]), m.control
+    if not any(e.get("kind") == "test-fix-withdrawing" and e.get("k") == fix["k"] for e in m.events()):
+        m.append("test-fix-withdrawing", "orc step", k=fix["k"])   # 先记下：恢复到一半断掉也知道是在撤回
     shutil.rmtree(c / "approved-tests", ignore_errors=True)
     shutil.copytree(backup / "approved-tests", c / "approved-tests")
     for name in FIX_BACKUP:
@@ -4222,6 +4232,11 @@ def h_reviewing(m: Mission):
         launch_mission_job(m, "final", tip, {})
         return "wait", False
     outcome = final.get("outcome")
+    if outcome == "rework" and any(e.get("kind") == "node-withdrawn" for e in m.events()[event_index(m, final):]):
+        # 打回的节点都说已经满足、没有任何改动，撤回了（tip 没变）：在同一个提交上重新做最终审查，
+        # 不然会拿这次结果反复打回；连续不通过照常熔断
+        launch_mission_job(m, "final", tip, {})
+        return "wait", False
     if outcome == "rework":                  # 最终审查的模型判不通过：它已经把问题落到了节点上
         return reopen_for(m, final, "final", "最终审查")
     if outcome != "passed":

@@ -269,6 +269,20 @@ class FinalReview(AcceptCase):
                   {"id": "cb", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b.sh", "expect_before": "fail"}]
         return self.signed(tasks, checks, tests)
 
+    def test_reopened_node_that_changes_nothing_is_withdrawn_and_reviewed_again(self):
+        # 最终审查打回 a，a 回「已经满足」、没有任何改动：撤回打回（不是集成时每一步都报错），在同一个提交上重新做最终审查
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({}, [1]))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "少了什么", "evidence": "a.txt:1"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["node"] for e in self.ev("node-withdrawn")], ["a"])
+        finals = self.ev("job-exit", type="final")
+        self.assertEqual([e["outcome"] for e in finals], ["rework", "passed"])
+        self.assertEqual(finals[0]["tip"], finals[1]["tip"])
+        self.assertEqual(len(self.ev("job-exit", type="integrate", node="a", outcome="integrated")), 1)
+
     def test_bug_found_after_merge_is_fixed_by_the_node_that_owns_the_file(self):
         # fintelli-p1-1-3：b 的检查在合并后失败，问题却在 a 的文件里。以前按检查所属的节点打回 b，b 改不了
         self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
@@ -512,8 +526,41 @@ class PullRequestAndCI(AcceptCase):
         self.assertNotIn("7265787061", (self.mdir / "events.jsonl").read_text())   # 编号本身也不记
         self.assertNotIn("7265787061", "".join(p.read_text() for p in (self.mdir / "questions").glob("*.md")))
 
-    def test_crashed_diagnosis_asks_and_retry_waits_for_ci_again(self):
-        # 诊断进程崩溃：记成 unavailable 问用户，不会一直重新诊断；CI 引出的问题回答「重试」就重新等 CI（CI 本身出故障时的出路）
+    def verify_fails(self):
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-77.txt").write_text("verify\tinstall\tERROR: Could not reach pypi.org\n")
+
+    def assert_diagnosis_unavailable_and_asked_once(self, r, reason):
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的诊断会话没能完成"), r.stdout + r.stderr)
+        diag, = self.ev("job-exit", type="diagnose")
+        ci, = self.ev("job-exit", type="ci")
+        self.assertEqual((diag["outcome"], diag["trigger"], diag["source"]), ("unavailable", "ci", ci["job"]))
+        self.assertIn(reason, diag["reason"])
+        self.assertEqual(len(self.ev("job-start", type="diagnose")), 1)   # 没有一直重新诊断
+
+    def test_diagnosis_that_raises_is_unavailable_with_its_source(self):
+        # run_diagnose 里抛异常（这里是复现文件名太长、写不出来）：gate 进程照样写出 unavailable，带上来源
+        self.verify_fails()
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "c", "files": ["a.txt"], "change": "x",
+                                            "evidence": [{"file": "a.txt", "line": 1}],
+                                            "repro": {"file": ".orc-repro/" + "x" * 300 + ".sh", "content": "false\n",
+                                                      "command": "sh x.sh"}}))
+        r = self.drive()
+        self.assert_diagnosis_unavailable_and_asked_once(r, "诊断出错：OSError")   # gate 自己接住异常、写出结论
+
+    def test_diagnosis_process_that_vanishes_is_unavailable_with_its_source(self):
+        # gate 进程整个消失、没有写出结果：orc 从开始事件补上来源，不会一直重新诊断
+        self.verify_fails()
+        self.script("diagnose", "kill-parent")
+        r = self.drive()
+        self.assert_diagnosis_unavailable_and_asked_once(r, "异常结束")
+
+    def test_diagnosis_model_error_asks_and_retry_waits_for_ci_again(self):
+        # 诊断模型出错：记成 unavailable 问用户；CI 引出的问题回答「重试」就重新等 CI（CI 本身出故障时的出路）
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]))
         (self.fake / "gh-checks-1.json").write_text(json.dumps([
