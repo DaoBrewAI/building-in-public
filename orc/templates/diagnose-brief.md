@@ -51,7 +51,7 @@
 
 {{REPRO_RULE}}
 
-复现是一个只在检查副本里运行、不进 mission 分支的文件，放在 `.orc-repro/` 下（例如 `.orc-repro/test_status_order.py`），加上运行它的命令（例如 `python3 -m pytest -q .orc-repro/test_status_order.py`）。它测的必须是设计或节点约定要求的行为，不是考题本身；不能联网。orc 会在 `{{TIP}}` 上把它连跑 10 次，**至少失败一次才算复现出来**；修好后它要连跑 10 次全部通过。
+复现是一个只在检查副本里运行、不进 mission 分支的文件，放在 `.orc-repro/` 下（例如 `.orc-repro/test_status_order.py`），加上运行它的命令（例如 `python3 -m pytest -q .orc-repro/test_status_order.py`）。它测的必须是设计或节点约定要求的行为，不是考题本身；不能联网。不能依赖停着的节点还没集成的代码（那些代码不在 `{{TIP}}` 上，修好要改的节点后复现也照样失败），所以不要直接拿停着的节点自己的冻结检查当复现。orc 会在 `{{TIP}}` 上把它连跑 10 次，**至少失败一次才算复现出来**；修好后它要连跑 10 次全部通过。
 
 ## 输出
 

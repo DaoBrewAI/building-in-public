@@ -56,6 +56,10 @@ if role in NAMES:
     line = lines[n - 1] if n - 1 < len(lines) else DEFAULTS[name]
     if line == "crash":                     # 模型进程出错退出
         sys.exit(1)
+    if line == "kill-parent":               # 调用它的 orc 进程整个消失（没有写出结果）
+        import signal
+        os.kill(os.getppid(), signal.SIGKILL)
+        sys.exit(1)
     if line == "AUTO":
         import re
         line = "\n".join(f"- 提交 {h} 的改动 [commit:{h}]" for h in re.findall(r"^- `([0-9a-f]{7,})` ", prompt, re.M))
@@ -768,6 +772,63 @@ class Disputes(ExecCase):
         fixes = [s for s in self.git("log", "--format=%s", f"{base}..orc/m1").splitlines() if "验收测试（第 1 次修正" in s]
         self.assertEqual(len(fixes), 1)                                    # 没有重复提交
         self.assertEqual(len(self.ev("commit", node="a")), 1)
+
+    def parked_test_fix(self):
+        self.simple(("a",))
+        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}),
+                    commit({"a.txt": "a\n"}, [1]))
+        self.script("dispute", json.dumps({"out": {"verdict": "test-wrong", "reason": "测试多要求了换行"}}))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "检查多要求了一个设计里没有的换行",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a' a.txt\n"}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout)
+
+    def test_conflict_while_signing_keeps_asking_instead_of_erroring(self):
+        # 签名生效时节点合并冲突：问题问出去后，下一次 step（phase 里每次都会走）照常停在冲突问题上，不报「orc 的 bug」
+        self.parked_test_fix()
+        (self.mdir / "control" / "approved.sha256.sig").write_text("sig\n")      # 用户签名
+        orc, original = self.orc, self.orc.sync_to_tip
+
+        def conflict(m, node):
+            raise orc.SyncConflict(node, orc.mission_tip(m), m.worktree(node), ["N1"], "CONFLICT (content)")
+        orc.sync_to_tip = conflict
+        try:
+            with mock.patch.dict(os.environ, self.env):
+                first = orc.step(orc.Mission("m1"))
+                second = orc.step(orc.Mission("m1"))
+        finally:
+            orc.sync_to_tip = original
+        self.assertTrue(first.startswith("ask-user 节点 a 合并 mission 分支的最新提交"), first)
+        self.assertEqual(second, first)
+        self.assertEqual(self.ev("test-fix-signed"), [])
+        self.answer("继续")
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.ev("test-fix-signed")), 1)
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)
+
+    def test_crash_while_withdrawing_a_test_fix_is_not_taken_as_signed(self):
+        # 用户不同意测试修正；撤回做到一半（旧签名已经恢复、还没记 test-fix-withdrawn）断掉：再 step 接着撤回，不当成已签名
+        self.parked_test_fix()
+        self.answer("这个修正不对，不同意")
+        orc, original = self.orc, self.orc.Mission.append
+
+        def append(self_, kind, *args, **kwargs):
+            if kind == "test-fix-withdrawn":
+                raise RuntimeError("断电")
+            return original(self_, kind, *args, **kwargs)
+        orc.Mission.append = append
+        try:
+            with mock.patch.dict(os.environ, self.env), self.assertRaises(RuntimeError):
+                orc.step(orc.Mission("m1"))
+        finally:
+            orc.Mission.append = original
+        self.assertTrue((self.mdir / "control" / "approved.sha256.sig").is_file())   # 旧签名已经恢复
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.2）"), r.stdout + r.stderr)
+        self.assertEqual(self.ev("test-fix-signed"), [])
+        self.assertEqual(len(self.ev("test-fix-withdrawn")), 1)
+        self.assertEqual(self.ev("node-unparked", node="a"), [])
+        self.assertIn("这个修正不对，不同意", self.calls("diagnose")[1]["prompt"])
 
 
 class NodeReview(ExecCase):
