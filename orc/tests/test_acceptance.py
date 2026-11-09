@@ -249,26 +249,98 @@ class FinalReview(AcceptCase):
         self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
         self.assertEqual(len(self.calls("final")), 4)
 
-    def test_check_failing_after_merge_is_routed_without_calling_the_model(self):
+    def two_nodes(self, check_a, check_b):
         tasks = [
-            {"id": "a", "depends_on": [], "files": ["a.txt"], "contracts": ["a"], "verification": ["x"], "state": "ready",
-             "acceptance": ["a.txt 是 a"], "clauses": ["N1"], "component": "core"},
-            {"id": "b", "depends_on": [], "files": ["b.txt"], "contracts": ["b"], "verification": ["x"], "state": "ready",
-             "acceptance": ["b.txt 是 b"], "clauses": ["N1"], "component": "core"}]
-        # a 的检查要求 b.txt 不存在：在 a 自己的 worktree 里通过，合并后就不通过了
-        tests = {"tests/orc/check_a.sh": "grep -q '^a$' a.txt && test ! -e b.txt\n", "tests/orc/check_b.sh": "grep -q '^b$' b.txt\n"}
+            {"id": "a", "depends_on": [], "files": ["a.txt"], "contracts": ["a.txt 第一行是 a"], "verification": ["x"],
+             "state": "ready", "acceptance": ["a.txt 是 a"], "clauses": ["N1"], "component": "core"},
+            {"id": "b", "depends_on": [], "files": ["b.txt"], "contracts": ["b.txt 第一行是 b"], "verification": ["x"],
+             "state": "ready", "acceptance": ["b.txt 是 b"], "clauses": ["N1"], "component": "core"}]
+        tests = {"tests/orc/check_a.sh": check_a, "tests/orc/check_b.sh": check_b}
         checks = [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"},
                   {"id": "cb", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b.sh", "expect_before": "fail"}]
-        self.signed(tasks, checks, tests)
-        self.script("a", commit({"a.txt": "a\n"}, [1]), json.dumps({"out": {"status": "question", "question": "b.txt 怎么办"}}))
+        return self.signed(tasks, checks, tests)
+
+    def test_bug_found_after_merge_is_fixed_by_the_node_that_owns_the_file(self):
+        # fintelli-p1-1-3：b 的检查在合并后失败，问题却在 a 的文件里。以前按检查所属的节点打回 b，b 改不了
+        self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]),
+                    commit({"a.txt": "a\n# pytest\n"}, []),            # 修复里出现和测试有关的写法：拒绝
+                    commit({"a.txt": "a\n"}, []))
         self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 多了一行 bad，b 的约定不允许",
+                                            "files": ["a.txt"], "change": "删掉 bad 那一行",
+                                            "evidence": [{"file": "a.txt", "line": 2}]}))
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: ask-user 节点 a 的执行会话问"), r.stdout + r.stderr)
-        final, = self.ev("job-exit", type="final")
-        self.assertEqual((final["outcome"], final["checks"]), ("rework", {"ca": False, "cb": True}))
-        self.assertEqual([i["node"] for i in final["issues"]], ["a"])
-        self.assertEqual(self.calls("final"), [])                          # 检查没过，不调用评审模型
-        self.assertIn("ca", self.calls("exec-a")[1]["prompt"])
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        first = self.ev("job-exit", type="final")[0]
+        self.assertEqual(first["outcome"], "checks-failed")
+        self.assertEqual([(f["id"], f["fails"], f["runs"]) for f in first["failed"]], [("cb", 3, 3)])   # 每个检查跑 3 次
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual(diag["outcome"], "diagnosed")
+        self.assertEqual(diag["facts"], [{"id": "cb", "fails": 13, "runs": 13}])   # 诊断前再连跑 10 次
+        prompt = self.calls("diagnose")[0]["prompt"]
+        self.assertIn("| `a.txt` | a |", prompt)                        # 每个文件归哪个节点
+        self.assertIn("在 13 次里失败 13 次", prompt)
+        reopen, = self.ev("node-reopen")
+        self.assertEqual((reopen["node"], reopen["stage"]), ("a", "修复"))   # 打回文件所属的 a，不是检查所属的 b
+        gates = [e for e in self.ev("job-exit", type="gate", node="a")]
+        self.assertEqual(gates[1]["outcome"], "rejected")
+        self.assertEqual(gates[1]["category"], "cheat")
+        fixed = gates[2]
+        self.assertEqual(fixed["outcome"], "committed")
+        self.assertEqual(fixed["repair"]["after"], {"cb": {"fails": 0, "runs": 10}})
+        self.assertEqual(fixed["repair"]["revert"]["measured"], "诊断时在同一个提交上")
+        self.assertEqual(fixed["repair"]["review"]["verdict"], "ok")
+        review = self.calls("repairreview")[0]["prompt"]
+        self.assertIn("删掉 bad 那一行", review)
+        self.assertIn("b.txt 第一行是 b", review)                       # 评审看得到别的节点的约定
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="final")], ["checks-failed", "passed"])
+        self.assertEqual(self.git("show", "orc/m1:a.txt"), "a")
+
+    def test_test_found_wrong_after_merge_is_fixed_after_the_user_signs(self):
+        # a 的冻结测试要求 b.txt 不存在，和 b 节点冲突：诊断认为测试本身有错，写好修正，用户签名才生效
+        self.two_nodes("grep -q '^a$' a.txt && test ! -e b.txt\n", "grep -q '^b$' b.txt\n")
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "check_a 要求 b.txt 不存在，和节点 b 冲突，设计没有这个要求",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a$' a.txt\n"}]}))
+        r = self.drive()
+        line = self.next_line(r)
+        self.assertTrue(line.startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout + r.stderr)
+        question = sorted((self.mdir / "questions").glob("*.md"))[-1].read_text()
+        self.assertIn("northstar approve-mission", question)                 # 回答方式都能直接执行
+        self.assertIn("+grep -q '^a$' a.txt", question)                      # 修正的 diff
+        control = self.mdir / "control"
+        self.assertFalse((control / "approved.sha256.sig").exists())        # 旧签名作废，等用户重新签
+        self.assertEqual((control / "approved-tests" / "tests/orc/check_a.sh").read_text(), "grep -q '^a$' a.txt\n")
+        self.assertEqual(self.calls("final"), [])                           # 检查没过，不调用评审模型
+        self.assertEqual(self.ev("node-reopen"), [])
+        (control / "approved.sha256.sig").write_text("sig\n")              # 用户签名
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual(self.git("show", "orc/m1:tests/orc/check_a.sh"), "grep -q '^a$' a.txt")
+        self.assertIn("第 1 次修正，用户已签名", self.git("log", "-1", "--format=%s", "orc/m1~0^{/修正}"))
+        self.assertEqual(len(self.ev("test-fix-signed")), 1)
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="final")], ["checks-failed", "passed"])
+
+    def test_user_who_disagrees_with_a_test_fix_gets_it_withdrawn_and_rediagnosed(self):
+        self.two_nodes("grep -q '^a$' a.txt && test ! -e b.txt\n", "grep -q '^b$' b.txt\n")
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "测试有错",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "true\n"}]}),
+                    json.dumps({"kind": "design", "cause": "a 和 b 的约定互相矛盾，要改计划"}))
+        control = self.mdir / "control"
+        r = self.drive()
+        before = (self.mdir / "repair" / "test-fix-1" / "backup" / "approved-checks.json").read_text()
+        self.answer("这个修正把测试放得太宽了，不同意")
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.2）"), r.stdout + r.stderr)
+        self.assertIn("计划或设计本身需要改", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.assertEqual((control / "approved-checks.json").read_text(), before)   # 恢复成签名过的
+        self.assertTrue((control / "approved.sha256.sig").is_file())
+        self.assertEqual(len(self.ev("test-fix-withdrawn")), 1)
+        self.assertIn("这个修正把测试放得太宽了", self.calls("diagnose")[1]["prompt"])   # 用户的意见交给诊断
 
     def test_reviewer_output_that_names_an_unknown_node_blocks(self):
         self.simple(("a",))
@@ -297,6 +369,42 @@ class PullRequestAndCI(AcceptCase):
         self.assertEqual(len(self.calls("final")), 1)                      # 最终审查没有重做
         self.assertEqual(len([a for a in self.gh_calls() if a[:2] == ["pr", "create"]]), 1)
         self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+
+    def test_hint_after_ci_failure_goes_to_the_repair_loop(self):
+        # 隐藏考题只报失败；用户看过输出后给一句提示，orc 诊断并修复，不用用户自己去改
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([{"name": "verify", "bucket": "pass"}, {"name": "exam", "bucket": "fail"}]))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "考题要求 a.txt 末尾有空行", "files": ["a.txt"],
+                                            "change": "在 a.txt 末尾加一个空行", "evidence": [{"file": "a.txt", "line": 1}]}))
+        r = self.drive()
+        self.assertIn("orc 都能直接执行", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.answer("考题说 a.txt 末尾要有一个空行")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual(diag["trigger"], "ci")
+        self.assertIn("考题说 a.txt 末尾要有一个空行", self.calls("diagnose")[0]["prompt"])
+        self.assertEqual([(e["node"], e["stage"]) for e in self.ev("node-reopen")], [("a", "修复")])
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+
+    def test_node_reopened_for_someone_elses_bug_is_withdrawn(self):
+        # fintelli-p1-1-3 的情形：被打回的节点发现问题不在自己的文件里，用 outside 结束；诊断让真正的节点修，它撤回打回
+        self.simple(("a", "b"))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]),
+                    json.dumps({"out": {"status": "outside", "reason": "问题在 a.txt，不在 b.txt"}}))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "b", "problem": "末尾少空行", "evidence": "a.txt"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾少一个空行", "files": ["a.txt"],
+                                            "change": "加空行", "evidence": [{"file": "a.txt", "line": 1}]}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        withdrawn, = self.ev("node-withdrawn")
+        self.assertEqual(withdrawn["node"], "b")
+        self.assertEqual([(e["node"], e["stage"]) for e in self.ev("node-reopen")], [("b", "最终审查"), ("a", "修复")])
+        self.assertEqual(len(self.calls("exec-b")), 2)                # b 没有再被叫回来
+        self.assertEqual(len(self.ev("job-exit", type="integrate", node="b", outcome="integrated")), 1)
 
     def test_pending_checks_are_waited_for(self):
         self.simple(("a",))
