@@ -3472,6 +3472,13 @@ def reopen_for(m: Mission, result: dict, type_: str, label: str):
     by_node: Dict[str, List[dict]] = {}
     for issue in result["issues"]:
         by_node.setdefault(issue["node"], []).append(issue)
+    states = m.node_states()
+    if by_node and all(n in done and states.get(n) == "integrated" for n in by_node):
+        # 打回的节点都已经处理完、回到 integrated，tip 却没变（都说已经满足、没有改动，撤回了）：
+        # 在同一个提交上重做这次评审，不再拿旧结果打回（否则在 reviewing 和 executing 之间来回转）；连续不通过照常熔断。
+        # 中途断掉、还有节点在返工的，照常回到 executing
+        launch_mission_job(m, type_, mission_tip(m), {})
+        return "wait", False
     for node, issues in by_node.items():
         if node not in done:
             reopen_node(m, node, issues, streak, label)
@@ -4232,11 +4239,6 @@ def h_reviewing(m: Mission):
         launch_mission_job(m, "final", tip, {})
         return "wait", False
     outcome = final.get("outcome")
-    if outcome == "rework" and any(e.get("kind") == "node-withdrawn" for e in m.events()[event_index(m, final):]):
-        # 打回的节点都说已经满足、没有任何改动，撤回了（tip 没变）：在同一个提交上重新做最终审查，
-        # 不然会拿这次结果反复打回；连续不通过照常熔断
-        launch_mission_job(m, "final", tip, {})
-        return "wait", False
     if outcome == "rework":                  # 最终审查的模型判不通过：它已经把问题落到了节点上
         return reopen_for(m, final, "final", "最终审查")
     if outcome != "passed":
