@@ -8,10 +8,12 @@ commit-broker.sh、integrate-task.sh、检查的沙箱（sandbox-exec）都是�
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -34,11 +36,14 @@ if role == "publish":
         "pages": [p.name for p in pages]}, ensure_ascii=False))
     envelope(json.dumps({"url": f"https://claude.ai/artifact/fake-{pages[0].stem if pages else 'none'}"}))
     sys.exit(0)
-NAMES = {"final-review": "final", "notes": "notes", "canvas": "canvas", "phase-conclusion": "phase", "cross-review": "cross"}
+NAMES = {"final-review": "final", "notes": "notes", "canvas": "canvas", "phase-conclusion": "phase", "cross-review": "cross",
+         "diagnose": "diagnose", "repair-review": "repairreview"}
 DEFAULTS = {"final": '{"verdict": "pass", "issues": []}', "notes": "AUTO",
             "canvas": '{"components": [{"id": "core", "name": "核心", "paths": ["*"]}]}',
             "phase": '{"items": [{"criterion": "主线跑通", "status": "met", "evidence": "PR 已合并"}]}',
-            "cross": '{"verdict": "pass", "issues": [], "overrides_applied": []}'}
+            "cross": '{"verdict": "pass", "issues": [], "overrides_applied": []}',
+            "diagnose": '{"kind": "design", "cause": "测试没有编排诊断"}',
+            "repairreview": '{"verdict": "ok", "reason": "改动就是诊断说的那件事"}'}
 if role in NAMES:
     # 最终审查 / 跨 mission 评审 / 画布 / phase 结论：按 script-<名字> 第 n 行，默认见 DEFAULTS。状态页说明默认 AUTO（引用提示词里列出的每个提交）
     name = NAMES[role]
@@ -49,6 +54,12 @@ if role in NAMES:
     script = fake / f"script-{name}"
     lines = [l for l in script.read_text().splitlines() if l.strip()] if script.exists() else []
     line = lines[n - 1] if n - 1 < len(lines) else DEFAULTS[name]
+    if line == "crash":                     # 模型进程出错退出
+        sys.exit(1)
+    if line == "kill-parent":               # 调用它的 orc 进程整个消失（没有写出结果）
+        import signal
+        os.kill(os.getppid(), signal.SIGKILL)
+        sys.exit(1)
     if line == "AUTO":
         import re
         line = "\n".join(f"- 提交 {h} 的改动 [commit:{h}]" for h in re.findall(r"^- `([0-9a-f]{7,})` ", prompt, re.M))
@@ -524,17 +535,19 @@ class TestCrossesDag(ExecCase):
         self.script("service", commit({"service.py": service_py}, [1]),
                     json.dumps({"out": {"status": "question", "question": "停一下"}}))
 
-    def test_frozen_test_importing_a_sibling_file_stops_with_the_reason(self):
+    def test_frozen_test_importing_a_sibling_file_parks_the_node_for_diagnosis(self):
         self.sibling("import sys\nsys.path.insert(0, '.')\nfrom fake import done\nimport service\n", "run = 1\n")
-        r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        r = self.drive()                                            # 没编排诊断：默认判成设计问题，停下问用户
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）"), r.stdout + r.stderr)
         gate = self.ev("job-exit", type="gate", node="service")
         self.assertEqual(gate[-1]["outcome"], "test-crosses-dag")
         self.assertIn("检查 `service` 失败在导入 fake.py 上", gate[-1]["reason"])
         self.assertIn("节点 fakes 新建", gate[-1]["reason"])
-        blocked = self.ev("node-blocked", node="service")[-1]
-        self.assertEqual(blocked["reason"], "冻结的测试越过了依赖")
-        self.assertIn("orc abandon --mission m1", (self.mdir / "questions" / f"{blocked['question']}.md").read_text())
+        parked, = self.ev("node-parked", node="service")
+        self.assertIn("节点 fakes 新建", parked["reason"])
+        self.assertIn("节点 fakes 新建", self.calls("diagnose")[0]["prompt"])
+        question = sorted((self.mdir / "questions").glob("*.md"))[-1].read_text()
+        self.assertIn("orc abandon --mission m1", question)
         self.assertEqual(len(self.calls("exec-service")), 1)        # 没有把纠偏单退回给执行会话
 
     def test_implementation_importing_a_sibling_file_is_the_executors_fault(self):
@@ -618,15 +631,204 @@ class Disputes(ExecCase):
         self.assertIn("没有错", second["prompt"])
         self.assertIn("设计要求内容就是节点名", second["prompt"])
 
-    def test_test_wrong_confirmed_blocks_for_the_user(self):
+    def test_test_wrong_confirmed_parks_the_node_and_the_fix_takes_effect_after_signing(self):
+        # 以前只能回到验证这一步重新审阅、go、签名；现在诊断写好修正，用户签一次名就接着做，已经做的保留
         self.simple(("a",))
-        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}))
+        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}),
+                    commit({"a.txt": "a\n"}, [1]))
         self.script("dispute", json.dumps({"out": {"verdict": "test-wrong", "reason": "测试多要求了换行"}}))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "检查多要求了一个设计里没有的换行",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a' a.txt\n"}]}))
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout)
-        self.assertIn("重新审阅、go、签名", self.next_line(r))
-        self.assertTrue((self.mdir / "control" / "tasks" / "a" / "blocked").is_file())
-        self.assertEqual(self.ev("commit"), [])
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout)
+        parked, = self.ev("node-parked", node="a")
+        self.assertIn("测试多要求了换行", parked["reason"])
+        self.assertIn("测试多要求了换行", self.calls("diagnose")[0]["prompt"])
+        (self.mdir / "control" / "approved.sha256.sig").write_text("sig\n")      # 用户签名
+        self.reached_reviewing(self.drive())
+        self.assertEqual(self.git("show", "orc/m1:tests/orc/check_a.sh"), "grep -q '^a' a.txt")
+        self.assertIn("冻结的验收测试已按诊断修正", self.calls("exec-a")[1]["prompt"])
+        self.assertEqual(len(self.ev("commit", node="a")), 1)
+
+    def test_node_whose_problem_is_in_another_nodes_file_waits_for_that_fix(self):
+        # b 依赖 a；a 的文件有问题，b 的第 2 条验收标准过不了。b 先交了第 1 条，再说 outside 停下；诊断让 a 修（要先复现），
+        # a 修好集成后 b 合并最新提交继续。合并提交也要带 [N#]：产品 CI 检查 PR 上每个提交
+        tasks = [task("a", ["a.txt"], ["a.txt 是 a"]), task("b", ["b.txt"], ["b.txt 是 b", "a.txt 没有 bad"], ("a",))]
+        tests = {"tests/orc/check_a.sh": "grep -q '^a' a.txt\n", "tests/orc/check_b1.sh": "grep -q '^b$' b.txt\n",
+                 "tests/orc/check_b2.sh": "grep -q '^b$' b.txt && ! grep -q bad a.txt\n"}
+        checks = [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"},
+                  {"id": "cb1", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b1.sh", "expect_before": "fail"},
+                  {"id": "cb2", "node": "b", "acceptance": [2], "command": "sh tests/orc/check_b2.sh", "expect_before": "fail"}]
+        self.signed(tasks, checks, tests)
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]),
+                    commit({}, [1]),                                     # 修复没有改动、说验收标准已满足：拒绝（不能绕过修复关口）
+                    commit({"a.txt": "a\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]),
+                    json.dumps({"write": {"b.tmp": "x"},
+                                "out": {"status": "outside", "reason": "a.txt 第 2 行的 bad 让 cb2 失败，不在我的文件里"}}),
+                    commit({}, [2]))                                     # a 修好后第 2 条已经满足
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
+                                            "evidence": [{"file": "a.txt", "line": 2}]}),
+                    json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
+                                "evidence": [{"file": "a.txt", "line": 2}],
+                                "repro": {"file": ".orc-repro/no_bad.sh", "content": "! grep -q bad a.txt\n",
+                                          "command": "sh .orc-repro/no_bad.sh"}}))
+        self.reached_reviewing(self.drive())
+        self.assertEqual([e["node"] for e in self.ev("node-parked")], ["b"])
+        first, diag = self.ev("job-exit", type="diagnose")
+        self.assertEqual(first["outcome"], "invalid")                   # 没有可重跑的失败检查，必须先写复现
+        self.assertIn("repro", first["problems"][0])
+        self.assertIn("这次必须写复现", self.calls("diagnose")[0]["prompt"])
+        self.assertEqual(diag["trigger"], "node")
+        self.assertEqual(diag["facts"], [{"id": "repro", "fails": 10, "runs": 10}])   # 复现在当前提交上真的失败
+        self.assertIn("不在我的文件里", self.calls("diagnose")[0]["prompt"])
+        repair, = self.ev("repair")
+        self.assertEqual(repair["targets"], {"a": ["a.txt"]})
+        self.assertEqual([e["node"] for e in self.ev("node-reopen")], ["a"])
+        gates = self.ev("job-exit", type="gate", node="a")
+        self.assertEqual((gates[1]["outcome"], gates[1]["category"]), ("rejected", "scope"))
+        self.assertIn("没有任何改动", gates[1]["reason"])
+        fixed = gates[2]
+        self.assertEqual(fixed["repair"]["after"], {"repro": {"fails": 0, "runs": 10}})   # 修好后复现连跑 10 次全过
+        self.assertEqual(fixed["repair"]["revert"]["fails"], 10)
+        unparked, = self.ev("node-unparked", node="b")
+        self.assertIn("已经由节点 a 修好并集成", unparked["message"])
+        self.assertTrue(list((self.mdir / "nodes" / "b").glob("discarded-*.patch")))   # 没提交的改动存成补丁
+        self.assertEqual(self.git("show", "orc/m1:a.txt"), "a")
+        base = self.ev("exec-setup")[0]["base"]
+        subjects = self.git("log", "--format=%s", f"{base}..orc/m1").splitlines()
+        self.assertTrue(any("合并 mission 分支的最新提交" in s for s in subjects), subjects)   # b 先提交过，继续时不是快进
+        self.assertEqual([s for s in subjects if not re.match(r"^\[(N[0-9]+(,N[0-9]+)*|NS|orc)\]", s)], [])
+
+    def test_conflict_when_a_waiting_node_merges_the_fix_asks_the_user(self):
+        # s.txt 归 a 和 b（b 依赖 a）。b 改过 s.txt 后停下等 a 修；a 修好集成后 b 合并最新提交时冲突：
+        # orc 不替用户挑哪边，撤销合并、停下问；用户自己合并提交后回答「继续」，b 接着做
+        tasks = [task("a", ["a.txt", "s.txt"], ["a.txt 是 a"]), task("b", ["b.txt", "s.txt"], ["b.txt 是 b", "s.txt 第一行是 2"], ("a",))]
+        tests = {"tests/orc/check_a.sh": "grep -q '^a$' a.txt\n", "tests/orc/check_b1.sh": "grep -q '^b$' b.txt\n",
+                 "tests/orc/check_b2.sh": "grep -q '^b$' b.txt && head -1 s.txt | grep -q '^2$'\n"}
+        checks = [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"},
+                  {"id": "cb1", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b1.sh", "expect_before": "fail"},
+                  {"id": "cb2", "node": "b", "acceptance": [2], "command": "sh tests/orc/check_b2.sh", "expect_before": "fail"}]
+        self.signed(tasks, checks, tests)
+        self.script("a", commit({"a.txt": "a\n", "s.txt": "1\n"}, [1]), commit({"s.txt": "2\n"}, []))
+        self.script("b", commit({"b.txt": "b\n", "s.txt": "1\nb\n"}, [1]),
+                    json.dumps({"out": {"status": "outside", "reason": "s.txt 第一行该是 2，那一行是 a 写的"}}),
+                    commit({}, [2]))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "s.txt 第一行写成了 1", "files": ["s.txt"], "change": "改成 2",
+                                            "evidence": [{"file": "s.txt", "line": 1}],
+                                            "repro": {"file": ".orc-repro/two.sh", "content": "head -1 s.txt | grep -q '^2$'\n",
+                                                      "command": "sh .orc-repro/two.sh"}}))
+        r = self.drive()
+        line = self.next_line(r)
+        self.assertTrue(line.startswith("next: ask-user 节点 b 合并 mission 分支的最新提交"), r.stdout + r.stderr)
+        question = sorted((self.mdir / "questions").glob("*.md"))[-1].read_text()
+        self.assertIn("git merge", question)
+        self.assertEqual(self.ev("node-unparked", node="b"), [])
+        wt = Path(re.search(r"在 `([^`]+)` 里运行", question).group(1))
+        tip = self.git("rev-parse", "orc/m1")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")       # 合并已经撤销，节点保持原样
+        # 用户自己解决冲突、提交（首行带 [N1]）
+        subprocess.run(["git", "-C", str(wt), "merge", "-q", tip], capture_output=True)
+        (wt / "s.txt").write_text("2\nb\n")
+        subprocess.run(["git", "-C", str(wt), "add", "s.txt"], check=True)
+        subprocess.run(["git", "-C", str(wt), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm",
+                        "[N1] 合并 mission 分支，解决 s.txt 的冲突"], check=True)
+        self.answer("继续")
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.ev("node-unparked", node="b")), 1)
+        self.assertEqual(self.git("show", "orc/m1:s.txt"), "2\nb")
+        base = self.ev("exec-setup")[0]["base"]
+        subjects = self.git("log", "--format=%s", f"{base}..orc/m1").splitlines()
+        self.assertEqual([s for s in subjects if not re.match(r"^\[(N[0-9]+(,N[0-9]+)*|NS|orc)\]", s)], [])
+
+    def test_signed_test_fix_resumes_after_a_crash_midway(self):
+        # 签名生效时，继续停着的节点之后、记 test-fix-signed 之前断掉：再 step 不重复提交、不重复继续，补记 test-fix-signed
+        self.simple(("a",))
+        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}),
+                    commit({"a.txt": "a\n"}, [1]))
+        self.script("dispute", json.dumps({"out": {"verdict": "test-wrong", "reason": "测试多要求了换行"}}))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "检查多要求了一个设计里没有的换行",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a' a.txt\n"}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout)
+        (self.mdir / "control" / "approved.sha256.sig").write_text("sig\n")      # 用户签名
+        orc, original = self.orc, self.orc.unpark_node
+
+        def unpark_then_crash(*args, **kwargs):
+            original(*args, **kwargs)
+            raise RuntimeError("断电")
+        orc.unpark_node = unpark_then_crash
+        try:
+            with mock.patch.dict(os.environ, self.env), self.assertRaises(RuntimeError):
+                orc.step(orc.Mission("m1"))
+        finally:
+            orc.unpark_node = original
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)
+        self.assertEqual(self.ev("test-fix-signed"), [])                  # 还没记：再 step 会接着做
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.ev("test-fix-signed")), 1)
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)      # 没有重复继续
+        base = self.ev("exec-setup")[0]["base"]
+        fixes = [s for s in self.git("log", "--format=%s", f"{base}..orc/m1").splitlines() if "验收测试（第 1 次修正" in s]
+        self.assertEqual(len(fixes), 1)                                    # 没有重复提交
+        self.assertEqual(len(self.ev("commit", node="a")), 1)
+
+    def parked_test_fix(self):
+        self.simple(("a",))
+        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}),
+                    commit({"a.txt": "a\n"}, [1]))
+        self.script("dispute", json.dumps({"out": {"verdict": "test-wrong", "reason": "测试多要求了换行"}}))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "检查多要求了一个设计里没有的换行",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a' a.txt\n"}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout)
+
+    def test_conflict_while_signing_keeps_asking_instead_of_erroring(self):
+        # 签名生效时节点合并冲突：问题问出去后，下一次 step（phase 里每次都会走）照常停在冲突问题上，不报「orc 的 bug」
+        self.parked_test_fix()
+        (self.mdir / "control" / "approved.sha256.sig").write_text("sig\n")      # 用户签名
+        orc, original = self.orc, self.orc.sync_to_tip
+
+        def conflict(m, node):
+            raise orc.SyncConflict(node, orc.mission_tip(m), m.worktree(node), ["N1"], "CONFLICT (content)")
+        orc.sync_to_tip = conflict
+        try:
+            with mock.patch.dict(os.environ, self.env):
+                first = orc.step(orc.Mission("m1"))
+                second = orc.step(orc.Mission("m1"))
+        finally:
+            orc.sync_to_tip = original
+        self.assertTrue(first.startswith("ask-user 节点 a 合并 mission 分支的最新提交"), first)
+        self.assertEqual(second, first)
+        self.assertEqual(self.ev("test-fix-signed"), [])
+        self.answer("继续")
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.ev("test-fix-signed")), 1)
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)
+
+    def test_crash_while_withdrawing_a_test_fix_is_not_taken_as_signed(self):
+        # 用户不同意测试修正；撤回做到一半（旧签名已经恢复、还没记 test-fix-withdrawn）断掉：再 step 接着撤回，不当成已签名
+        self.parked_test_fix()
+        self.answer("这个修正不对，不同意")
+        orc, original = self.orc, self.orc.Mission.append
+
+        def append(self_, kind, *args, **kwargs):
+            if kind == "test-fix-withdrawn":
+                raise RuntimeError("断电")
+            return original(self_, kind, *args, **kwargs)
+        orc.Mission.append = append
+        try:
+            with mock.patch.dict(os.environ, self.env), self.assertRaises(RuntimeError):
+                orc.step(orc.Mission("m1"))
+        finally:
+            orc.Mission.append = original
+        self.assertTrue((self.mdir / "control" / "approved.sha256.sig").is_file())   # 旧签名已经恢复
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.2）"), r.stdout + r.stderr)
+        self.assertEqual(self.ev("test-fix-signed"), [])
+        self.assertEqual(len(self.ev("test-fix-withdrawn")), 1)
+        self.assertEqual(self.ev("node-unparked", node="a"), [])
+        self.assertIn("这个修正不对，不同意", self.calls("diagnose")[1]["prompt"])
 
 
 class NodeReview(ExecCase):

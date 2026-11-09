@@ -327,6 +327,24 @@ class CrossMission(ProductCase):
         self.assertIn("--allowedTools=Read", self.calls("cross")[0]["args"])
         self.assertIn("绕开了 P1-1", self.calls("exec-a")[1]["prompt"])
 
+    def test_node_sent_back_that_changes_nothing_is_withdrawn_and_reviewed_again(self):
+        # 跨 mission 评审打回 a，a 回「已经满足」、没有改动：撤回打回，在同一个提交上重做跨 mission 评审，
+        # 不会在 reviewing 和 executing 之间来回转
+        self.done_mission("P1-1", design="# 设计\n\n决定：所有导出都走 export_api。\n", recorded=True)
+        self.product_mission()
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({}, [1]))
+        self.script("cross", json.dumps({"verdict": "conflict", "issues": [
+            {"node": "a", "problem": "绕开了 P1-1 的「都走 export_api」", "evidence": "a.txt:1"}], "overrides_applied": []}),
+            json.dumps({"verdict": "pass", "issues": [], "overrides_applied": []}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["node"] for e in self.ev("node-withdrawn")], ["a"])
+        crosses = self.ev("job-exit", type="cross")
+        self.assertEqual([e["outcome"] for e in crosses], ["rework", "passed"])
+        self.assertEqual(crosses[0]["tip"], crosses[1]["tip"])
+        self.assertEqual(len(self.ev("node-reopen", node="a")), 1)
+        self.assertEqual(len(self.ev("job-exit", type="final")), 1)        # 最终审查没有重做
+
     def test_signed_overrides_are_given_to_the_reviewer(self):
         self.done_mission("P1-1")
         m = self.product_mission()

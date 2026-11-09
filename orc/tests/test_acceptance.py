@@ -50,9 +50,18 @@ elif args[:2] == ["pr", "checks"]:
     f = fake / f"gh-checks-{n}.json"
     f = f if f.exists() else fake / "gh-checks.json"
     print(f.read_text() if f.exists() else json.dumps([{"name": "verify", "bucket": "pass"}, {"name": "exam", "bucket": "pass"}]))
+elif args[:2] == ["run", "view"]:
+    # 失败步骤的日志：$ORC_FAKE/gh-log-<job>.txt
+    f = fake / f"gh-log-{args[args.index('--job') + 1]}.txt"
+    print(f.read_text() if f.exists() else "")
 else:
     sys.exit(3)
 '''
+
+
+# a.txt 末尾要有空行：几个测试的诊断用它当复现
+BLANK_LINE_REPRO = {"file": ".orc-repro/blank.py", "command": "python3 .orc-repro/blank.py",
+                    "content": "import sys\nsys.exit(0 if open('a.txt').read().endswith('\\n\\n') else 1)\n"}
 
 
 class AcceptCase(ExecCase):
@@ -249,26 +258,153 @@ class FinalReview(AcceptCase):
         self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
         self.assertEqual(len(self.calls("final")), 4)
 
-    def test_check_failing_after_merge_is_routed_without_calling_the_model(self):
+    def two_nodes(self, check_a, check_b):
         tasks = [
-            {"id": "a", "depends_on": [], "files": ["a.txt"], "contracts": ["a"], "verification": ["x"], "state": "ready",
-             "acceptance": ["a.txt 是 a"], "clauses": ["N1"], "component": "core"},
-            {"id": "b", "depends_on": [], "files": ["b.txt"], "contracts": ["b"], "verification": ["x"], "state": "ready",
-             "acceptance": ["b.txt 是 b"], "clauses": ["N1"], "component": "core"}]
-        # a 的检查要求 b.txt 不存在：在 a 自己的 worktree 里通过，合并后就不通过了
-        tests = {"tests/orc/check_a.sh": "grep -q '^a$' a.txt && test ! -e b.txt\n", "tests/orc/check_b.sh": "grep -q '^b$' b.txt\n"}
+            {"id": "a", "depends_on": [], "files": ["a.txt"], "contracts": ["a.txt 第一行是 a"], "verification": ["x"],
+             "state": "ready", "acceptance": ["a.txt 是 a"], "clauses": ["N1"], "component": "core"},
+            {"id": "b", "depends_on": [], "files": ["b.txt"], "contracts": ["b.txt 第一行是 b"], "verification": ["x"],
+             "state": "ready", "acceptance": ["b.txt 是 b"], "clauses": ["N1"], "component": "core"}]
+        tests = {"tests/orc/check_a.sh": check_a, "tests/orc/check_b.sh": check_b}
         checks = [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"},
                   {"id": "cb", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b.sh", "expect_before": "fail"}]
-        self.signed(tasks, checks, tests)
-        self.script("a", commit({"a.txt": "a\n"}, [1]), json.dumps({"out": {"status": "question", "question": "b.txt 怎么办"}}))
-        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        return self.signed(tasks, checks, tests)
+
+    def test_reopened_node_that_changes_nothing_is_withdrawn_and_reviewed_again(self):
+        # 最终审查打回 a，a 回「已经满足」、没有任何改动：撤回打回（不是集成时每一步都报错），在同一个提交上重新做最终审查
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({}, [1]))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "少了什么", "evidence": "a.txt:1"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: ask-user 节点 a 的执行会话问"), r.stdout + r.stderr)
-        final, = self.ev("job-exit", type="final")
-        self.assertEqual((final["outcome"], final["checks"]), ("rework", {"ca": False, "cb": True}))
-        self.assertEqual([i["node"] for i in final["issues"]], ["a"])
-        self.assertEqual(self.calls("final"), [])                          # 检查没过，不调用评审模型
-        self.assertIn("ca", self.calls("exec-a")[1]["prompt"])
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["node"] for e in self.ev("node-withdrawn")], ["a"])
+        finals = self.ev("job-exit", type="final")
+        self.assertEqual([e["outcome"] for e in finals], ["rework", "passed"])
+        self.assertEqual(finals[0]["tip"], finals[1]["tip"])
+        self.assertEqual(len(self.ev("job-exit", type="integrate", node="a", outcome="integrated")), 1)
+
+    def test_bug_found_after_merge_is_fixed_by_the_node_that_owns_the_file(self):
+        # fintelli-p1-1-3：b 的检查在合并后失败，问题却在 a 的文件里。以前按检查所属的节点打回 b，b 改不了
+        self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]),
+                    commit({"a.txt": "a\n# pytest\n"}, []),            # 修复里出现和测试有关的写法：拒绝
+                    commit({"a.txt": "a\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 多了一行 bad，b 的约定不允许",
+                                            "files": ["a.txt"], "change": "删掉 bad 那一行",
+                                            "evidence": [{"file": "a.txt", "line": 2}]}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        first = self.ev("job-exit", type="final")[0]
+        self.assertEqual(first["outcome"], "checks-failed")
+        self.assertEqual([(f["id"], f["fails"], f["runs"]) for f in first["failed"]], [("cb", 3, 3)])   # 每个检查跑 3 次
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual(diag["outcome"], "diagnosed")
+        self.assertEqual(diag["facts"], [{"id": "cb", "fails": 13, "runs": 13}])   # 诊断前再连跑 10 次
+        prompt = self.calls("diagnose")[0]["prompt"]
+        self.assertTrue((self.repo / ".northstar").is_dir())
+        self.assertEqual([f for f in self.calls("diagnose")[0]["files"] if f.startswith(".northstar")], [])   # 副本里没有 .northstar
+        self.assertIn("| `a.txt` | a |", prompt)                        # 每个文件归哪个节点
+        self.assertIn("在 13 次里失败 13 次", prompt)
+        reopen, = self.ev("node-reopen")
+        self.assertEqual((reopen["node"], reopen["stage"]), ("a", "修复"))   # 打回文件所属的 a，不是检查所属的 b
+        gates = [e for e in self.ev("job-exit", type="gate", node="a")]
+        self.assertEqual(gates[1]["outcome"], "rejected")
+        self.assertEqual(gates[1]["category"], "cheat")
+        fixed = gates[2]
+        self.assertEqual(fixed["outcome"], "committed")
+        self.assertEqual(fixed["repair"]["after"], {"cb": {"fails": 0, "runs": 10}})
+        self.assertEqual(fixed["repair"]["revert"]["measured"], "诊断时在同一个提交上")
+        self.assertEqual(fixed["repair"]["review"]["verdict"], "ok")
+        review = self.calls("repairreview")[0]["prompt"]
+        self.assertIn("删掉 bad 那一行", review)
+        self.assertIn("b.txt 第一行是 b", review)                       # 评审看得到别的节点的约定
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="final")], ["checks-failed", "passed"])
+        self.assertEqual(self.git("show", "orc/m1:a.txt"), "a")
+
+    def test_test_found_wrong_after_merge_is_fixed_after_the_user_signs(self):
+        # a 的冻结测试要求 b.txt 不存在，和 b 节点冲突：诊断认为测试本身有错，写好修正，用户签名才生效
+        self.two_nodes("grep -q '^a$' a.txt && test ! -e b.txt\n", "grep -q '^b$' b.txt\n")
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "check_a 要求 b.txt 不存在，和节点 b 冲突，设计没有这个要求",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a$' a.txt\n"}]}))
+        r = self.drive()
+        line = self.next_line(r)
+        self.assertTrue(line.startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout + r.stderr)
+        question = sorted((self.mdir / "questions").glob("*.md"))[-1].read_text()
+        self.assertIn("northstar approve-mission", question)                 # 回答方式都能直接执行
+        self.assertIn("+grep -q '^a$' a.txt", question)                      # 修正的 diff
+        control = self.mdir / "control"
+        self.assertFalse((control / "approved.sha256.sig").exists())        # 旧签名作废，等用户重新签
+        self.assertEqual((control / "approved-tests" / "tests/orc/check_a.sh").read_text(), "grep -q '^a$' a.txt\n")
+        self.assertEqual(self.calls("final"), [])                           # 检查没过，不调用评审模型
+        self.assertEqual(self.ev("node-reopen"), [])
+        (control / "approved.sha256.sig").write_text("sig\n")              # 用户签名
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual(self.git("show", "orc/m1:tests/orc/check_a.sh"), "grep -q '^a$' a.txt")
+        self.assertIn("第 1 次修正，用户已签名", self.git("log", "-1", "--format=%s", "orc/m1~0^{/修正}"))
+        self.assertEqual(len(self.ev("test-fix-signed")), 1)
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="final")], ["checks-failed", "passed"])
+
+    def test_answer_after_checks_failed_rediagnoses_instead_of_rerunning_the_final_review(self):
+        # 诊断判成设计问题，用户回答提示：交给诊断重新判断，不是把最终审查再跑一遍（偶发失败可能碰巧全过）
+        self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]), commit({"a.txt": "a\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "design", "cause": "说不清"}),
+                    json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
+                                "evidence": [{"file": "a.txt", "line": 2}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）"), r.stdout + r.stderr)
+        self.answer("看 a.txt 第 2 行")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertIn("看 a.txt 第 2 行", self.calls("diagnose")[1]["prompt"])
+        finals = self.ev("job-exit", type="final")
+        self.assertEqual([e["outcome"] for e in finals], ["checks-failed", "passed"])
+        self.assertNotEqual(finals[0]["tip"], finals[1]["tip"])        # 第二次最终审查是在修好之后
+
+    def test_retry_after_checks_failed_reruns_the_final_review(self):
+        # 回答「重试」：作废这次 checks-failed，重做最终审查（临时失败要有出路）；还失败就是新的一次，重新诊断
+        self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]), commit({"a.txt": "a\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "design", "cause": "说不清"}),
+                    json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
+                                "evidence": [{"file": "a.txt", "line": 2}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）"), r.stdout + r.stderr)
+        self.assertIn("重新做一遍最终审查", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.answer("重试")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        finals = self.ev("job-exit", type="final")
+        self.assertEqual([e["outcome"] for e in finals], ["checks-failed", "checks-failed", "passed"])
+        self.assertEqual(finals[0]["tip"], finals[1]["tip"])           # 同一个提交上重做了最终审查
+        diags = self.ev("job-exit", type="diagnose")
+        self.assertEqual([d["source"] for d in diags], [finals[0]["job"], finals[1]["job"]])   # 第二次失败重新诊断
+        self.assertNotIn("重试", self.calls("diagnose")[1]["prompt"])
+
+    def test_user_who_disagrees_with_a_test_fix_gets_it_withdrawn_and_rediagnosed(self):
+        self.two_nodes("grep -q '^a$' a.txt && test ! -e b.txt\n", "grep -q '^b$' b.txt\n")
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "测试有错",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "true\n"}]}),
+                    json.dumps({"kind": "design", "cause": "a 和 b 的约定互相矛盾，要改计划"}))
+        control = self.mdir / "control"
+        r = self.drive()
+        before = (self.mdir / "repair" / "test-fix-1" / "backup" / "approved-checks.json").read_text()
+        self.answer("这个修正把测试放得太宽了，不同意")
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.2）"), r.stdout + r.stderr)
+        self.assertIn("计划或设计本身需要改", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.assertEqual((control / "approved-checks.json").read_text(), before)   # 恢复成签名过的
+        self.assertTrue((control / "approved.sha256.sig").is_file())
+        self.assertEqual(len(self.ev("test-fix-withdrawn")), 1)
+        self.assertIn("这个修正把测试放得太宽了", self.calls("diagnose")[1]["prompt"])   # 用户的意见交给诊断
 
     def test_reviewer_output_that_names_an_unknown_node_blocks(self):
         self.simple(("a",))
@@ -297,6 +433,152 @@ class PullRequestAndCI(AcceptCase):
         self.assertEqual(len(self.calls("final")), 1)                      # 最终审查没有重做
         self.assertEqual(len([a for a in self.gh_calls() if a[:2] == ["pr", "create"]]), 1)
         self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+
+    def test_hint_after_ci_failure_goes_to_the_repair_loop(self):
+        # 隐藏考题只报失败；用户看过输出后给一句提示，orc 诊断并修复，不用用户自己去改
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([{"name": "verify", "bucket": "pass"}, {"name": "exam", "bucket": "fail"}]))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "考题要求 a.txt 末尾有空行", "files": ["a.txt"],
+                                            "change": "在 a.txt 末尾加一个空行", "evidence": [{"file": "a.txt", "line": 1}],
+                                            "repro": BLANK_LINE_REPRO}))
+        r = self.drive()
+        self.assertIn("orc 都能直接执行", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.answer("考题说 a.txt 末尾要有一个空行")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual(diag["trigger"], "ci")
+        self.assertIn("考题说 a.txt 末尾要有一个空行", self.calls("diagnose")[0]["prompt"])
+        self.assertEqual([(e["node"], e["stage"]) for e in self.ev("node-reopen")], [("a", "修复")])
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+
+    def test_node_reopened_for_someone_elses_bug_is_withdrawn(self):
+        # fintelli-p1-1-3 的情形：被打回的节点发现问题不在自己的文件里，用 outside 结束；诊断让真正的节点修，它撤回打回
+        self.simple(("a", "b"))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]),                # outside 时留下了临时文件：存成补丁再撤回
+                    json.dumps({"write": {"b.tmp": "x"}, "out": {"status": "outside", "reason": "问题在 a.txt，不在 b.txt"}}))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "b", "problem": "末尾少空行", "evidence": "a.txt"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾少一个空行", "files": ["a.txt"],
+                                            "change": "加空行", "evidence": [{"file": "a.txt", "line": 1}],
+                                            "repro": BLANK_LINE_REPRO}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        withdrawn, = self.ev("node-withdrawn")
+        self.assertEqual(withdrawn["node"], "b")
+        self.assertEqual([(e["node"], e["stage"]) for e in self.ev("node-reopen")], [("b", "最终审查"), ("a", "修复")])
+        self.assertEqual(len(self.calls("exec-b")), 2)                # b 没有再被叫回来
+        self.assertEqual(len(self.ev("job-exit", type="integrate", node="b", outcome="integrated")), 1)
+        self.assertTrue(list((self.mdir / "nodes" / "b").glob("discarded-*.patch")))
+
+    def test_verify_failure_log_goes_straight_to_diagnosis(self):
+        # verify 的日志是公开的：orc 取下失败步骤的日志交给诊断，不问用户
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-77.txt").write_text("verify\tcheck\tAssertionError: a.txt 末尾缺空行\n")
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾缺空行", "files": ["a.txt"], "change": "加空行",
+                                            "evidence": [{"file": "a.txt", "line": 1}], "repro": BLANK_LINE_REPRO}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertFalse(list((self.mdir / "questions").glob("*.md")))   # 一次都没问用户
+        prompt = self.calls("diagnose")[0]["prompt"]
+        self.assertIn("a.txt 末尾缺空行", prompt)
+        self.assertIn("这次必须写复现", prompt)
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual((diag["trigger"], diag["facts"]), ("ci", [{"id": "repro", "fails": 10, "runs": 10}]))
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+
+    def test_exam_failure_reports_only_the_clause_and_goes_to_diagnosis(self):
+        # 隐藏考题的输出全部丢掉，workflow 只留下「NORTHSTAR-EXAM N# fail」行：诊断按条款原文找问题，日志里别的内容一行都不拿
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-78.txt").write_text("exam\trun\tNORTHSTAR-EXAM N1 fail\nexam\trun\t考题原文不该出现\n")
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "N1 要求末尾有空行", "files": ["a.txt"], "change": "加空行",
+                                            "evidence": [{"file": "a.txt", "line": 1}], "repro": BLANK_LINE_REPRO}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertFalse(list((self.mdir / "questions").glob("*.md")))
+        prompt = self.calls("diagnose")[0]["prompt"]
+        self.assertIn("条款 N1 的考题没过", prompt)
+        self.assertNotIn("考题原文不该出现", prompt)
+        self.assertNotIn("考题原文不该出现", (self.mdir / "events.jsonl").read_text())
+
+    def test_exam_clause_outside_the_dag_is_not_used(self):
+        # 被测的代码也能往日志里写「NORTHSTAR-EXAM N# fail」：任意数字能把考题内容带出去，只认 DAG 里有的编号
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-78.txt").write_text("exam\trun\tNORTHSTAR-EXAM N1 fail\nexam\trun\tNORTHSTAR-EXAM N7265787061 fail\n")
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的 PR"), r.stdout + r.stderr)
+        self.assertIn("1 个不属于这个 mission 的条款编号", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.assertEqual(self.calls("diagnose"), [])                   # 不交给诊断
+        self.assertNotIn("7265787061", (self.mdir / "events.jsonl").read_text())   # 编号本身也不记
+        self.assertNotIn("7265787061", "".join(p.read_text() for p in (self.mdir / "questions").glob("*.md")))
+
+    def verify_fails(self):
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-77.txt").write_text("verify\tinstall\tERROR: Could not reach pypi.org\n")
+
+    def assert_diagnosis_unavailable_and_asked_once(self, r, reason):
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的诊断会话没能完成"), r.stdout + r.stderr)
+        diag, = self.ev("job-exit", type="diagnose")
+        ci, = self.ev("job-exit", type="ci")
+        self.assertEqual((diag["outcome"], diag["trigger"], diag["source"]), ("unavailable", "ci", ci["job"]))
+        self.assertIn(reason, diag["reason"])
+        self.assertEqual(len(self.ev("job-start", type="diagnose")), 1)   # 没有一直重新诊断
+
+    def test_diagnosis_that_raises_is_unavailable_with_its_source(self):
+        # run_diagnose 里抛异常（这里是复现文件名太长、写不出来）：gate 进程照样写出 unavailable，带上来源
+        self.verify_fails()
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "c", "files": ["a.txt"], "change": "x",
+                                            "evidence": [{"file": "a.txt", "line": 1}],
+                                            "repro": {"file": ".orc-repro/" + "x" * 300 + ".sh", "content": "false\n",
+                                                      "command": "sh x.sh"}}))
+        r = self.drive()
+        self.assert_diagnosis_unavailable_and_asked_once(r, "诊断出错：OSError")   # gate 自己接住异常、写出结论
+
+    def test_diagnosis_process_that_vanishes_is_unavailable_with_its_source(self):
+        # gate 进程整个消失、没有写出结果：orc 从开始事件补上来源，不会一直重新诊断
+        self.verify_fails()
+        self.script("diagnose", "kill-parent")
+        r = self.drive()
+        self.assert_diagnosis_unavailable_and_asked_once(r, "异常结束")
+
+    def test_diagnosis_model_error_asks_and_retry_waits_for_ci_again(self):
+        # 诊断模型出错：记成 unavailable 问用户；CI 引出的问题回答「重试」就重新等 CI（CI 本身出故障时的出路）
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-77.txt").write_text("verify\tinstall\tERROR: Could not reach pypi.org\n")
+        self.script("diagnose", "crash")
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的诊断会话没能完成"), r.stdout + r.stderr)
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual((diag["outcome"], diag["trigger"]), ("unavailable", "ci"))
+        self.assertIn("重新等一遍 CI", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.answer("重试")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+        self.assertEqual(len(self.calls("diagnose")), 1)                # 没有再诊断
+        self.assertEqual(len(self.calls("final")), 1)
 
     def test_pending_checks_are_waited_for(self):
         self.simple(("a",))
