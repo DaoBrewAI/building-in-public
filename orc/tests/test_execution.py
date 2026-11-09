@@ -13,6 +13,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -53,6 +54,8 @@ if role in NAMES:
     script = fake / f"script-{name}"
     lines = [l for l in script.read_text().splitlines() if l.strip()] if script.exists() else []
     line = lines[n - 1] if n - 1 < len(lines) else DEFAULTS[name]
+    if line == "crash":                     # 模型进程出错退出
+        sys.exit(1)
     if line == "AUTO":
         import re
         line = "\n".join(f"- 提交 {h} 的改动 [commit:{h}]" for h in re.findall(r"^- `([0-9a-f]{7,})` ", prompt, re.M))
@@ -692,6 +695,79 @@ class Disputes(ExecCase):
         subjects = self.git("log", "--format=%s", f"{base}..orc/m1").splitlines()
         self.assertTrue(any("合并 mission 分支的最新提交" in s for s in subjects), subjects)   # b 先提交过，继续时不是快进
         self.assertEqual([s for s in subjects if not re.match(r"^\[(N[0-9]+(,N[0-9]+)*|NS|orc)\]", s)], [])
+
+    def test_conflict_when_a_waiting_node_merges_the_fix_asks_the_user(self):
+        # s.txt 归 a 和 b（b 依赖 a）。b 改过 s.txt 后停下等 a 修；a 修好集成后 b 合并最新提交时冲突：
+        # orc 不替用户挑哪边，撤销合并、停下问；用户自己合并提交后回答「继续」，b 接着做
+        tasks = [task("a", ["a.txt", "s.txt"], ["a.txt 是 a"]), task("b", ["b.txt", "s.txt"], ["b.txt 是 b", "s.txt 第一行是 2"], ("a",))]
+        tests = {"tests/orc/check_a.sh": "grep -q '^a$' a.txt\n", "tests/orc/check_b1.sh": "grep -q '^b$' b.txt\n",
+                 "tests/orc/check_b2.sh": "grep -q '^b$' b.txt && head -1 s.txt | grep -q '^2$'\n"}
+        checks = [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"},
+                  {"id": "cb1", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b1.sh", "expect_before": "fail"},
+                  {"id": "cb2", "node": "b", "acceptance": [2], "command": "sh tests/orc/check_b2.sh", "expect_before": "fail"}]
+        self.signed(tasks, checks, tests)
+        self.script("a", commit({"a.txt": "a\n", "s.txt": "1\n"}, [1]), commit({"s.txt": "2\n"}, []))
+        self.script("b", commit({"b.txt": "b\n", "s.txt": "1\nb\n"}, [1]),
+                    json.dumps({"out": {"status": "outside", "reason": "s.txt 第一行该是 2，那一行是 a 写的"}}),
+                    commit({}, [2]))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "s.txt 第一行写成了 1", "files": ["s.txt"], "change": "改成 2",
+                                            "evidence": [{"file": "s.txt", "line": 1}],
+                                            "repro": {"file": ".orc-repro/two.sh", "content": "head -1 s.txt | grep -q '^2$'\n",
+                                                      "command": "sh .orc-repro/two.sh"}}))
+        r = self.drive()
+        line = self.next_line(r)
+        self.assertTrue(line.startswith("next: ask-user 节点 b 合并 mission 分支的最新提交"), r.stdout + r.stderr)
+        question = sorted((self.mdir / "questions").glob("*.md"))[-1].read_text()
+        self.assertIn("git merge", question)
+        self.assertEqual(self.ev("node-unparked", node="b"), [])
+        wt = Path(re.search(r"在 `([^`]+)` 里运行", question).group(1))
+        tip = self.git("rev-parse", "orc/m1")
+        self.assertEqual(self.git("status", "--porcelain", cwd=wt), "")       # 合并已经撤销，节点保持原样
+        # 用户自己解决冲突、提交（首行带 [N1]）
+        subprocess.run(["git", "-C", str(wt), "merge", "-q", tip], capture_output=True)
+        (wt / "s.txt").write_text("2\nb\n")
+        subprocess.run(["git", "-C", str(wt), "add", "s.txt"], check=True)
+        subprocess.run(["git", "-C", str(wt), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm",
+                        "[N1] 合并 mission 分支，解决 s.txt 的冲突"], check=True)
+        self.answer("继续")
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.ev("node-unparked", node="b")), 1)
+        self.assertEqual(self.git("show", "orc/m1:s.txt"), "2\nb")
+        base = self.ev("exec-setup")[0]["base"]
+        subjects = self.git("log", "--format=%s", f"{base}..orc/m1").splitlines()
+        self.assertEqual([s for s in subjects if not re.match(r"^\[(N[0-9]+(,N[0-9]+)*|NS|orc)\]", s)], [])
+
+    def test_signed_test_fix_resumes_after_a_crash_midway(self):
+        # 签名生效时，继续停着的节点之后、记 test-fix-signed 之前断掉：再 step 不重复提交、不重复继续，补记 test-fix-signed
+        self.simple(("a",))
+        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}),
+                    commit({"a.txt": "a\n"}, [1]))
+        self.script("dispute", json.dumps({"out": {"verdict": "test-wrong", "reason": "测试多要求了换行"}}))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "检查多要求了一个设计里没有的换行",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a' a.txt\n"}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout)
+        (self.mdir / "control" / "approved.sha256.sig").write_text("sig\n")      # 用户签名
+        orc, original = self.orc, self.orc.unpark_node
+
+        def unpark_then_crash(*args, **kwargs):
+            original(*args, **kwargs)
+            raise RuntimeError("断电")
+        orc.unpark_node = unpark_then_crash
+        try:
+            with mock.patch.dict(os.environ, self.env), self.assertRaises(RuntimeError):
+                orc.step(orc.Mission("m1"))
+        finally:
+            orc.unpark_node = original
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)
+        self.assertEqual(self.ev("test-fix-signed"), [])                  # 还没记：再 step 会接着做
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.ev("test-fix-signed")), 1)
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)      # 没有重复继续
+        base = self.ev("exec-setup")[0]["base"]
+        fixes = [s for s in self.git("log", "--format=%s", f"{base}..orc/m1").splitlines() if "验收测试（第 1 次修正" in s]
+        self.assertEqual(len(fixes), 1)                                    # 没有重复提交
+        self.assertEqual(len(self.ev("commit", node="a")), 1)
 
 
 class NodeReview(ExecCase):

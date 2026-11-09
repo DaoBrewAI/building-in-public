@@ -288,6 +288,8 @@ class FinalReview(AcceptCase):
         self.assertEqual(diag["outcome"], "diagnosed")
         self.assertEqual(diag["facts"], [{"id": "cb", "fails": 13, "runs": 13}])   # 诊断前再连跑 10 次
         prompt = self.calls("diagnose")[0]["prompt"]
+        self.assertTrue((self.repo / ".northstar").is_dir())
+        self.assertEqual([f for f in self.calls("diagnose")[0]["files"] if f.startswith(".northstar")], [])   # 副本里没有 .northstar
         self.assertIn("| `a.txt` | a |", prompt)                        # 每个文件归哪个节点
         self.assertIn("在 13 次里失败 13 次", prompt)
         reopen, = self.ev("node-reopen")
@@ -349,6 +351,27 @@ class FinalReview(AcceptCase):
         finals = self.ev("job-exit", type="final")
         self.assertEqual([e["outcome"] for e in finals], ["checks-failed", "passed"])
         self.assertNotEqual(finals[0]["tip"], finals[1]["tip"])        # 第二次最终审查是在修好之后
+
+    def test_retry_after_checks_failed_reruns_the_final_review(self):
+        # 回答「重试」：作废这次 checks-failed，重做最终审查（临时失败要有出路）；还失败就是新的一次，重新诊断
+        self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]), commit({"a.txt": "a\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "design", "cause": "说不清"}),
+                    json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
+                                "evidence": [{"file": "a.txt", "line": 2}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）"), r.stdout + r.stderr)
+        self.assertIn("重新做一遍最终审查", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.answer("重试")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        finals = self.ev("job-exit", type="final")
+        self.assertEqual([e["outcome"] for e in finals], ["checks-failed", "checks-failed", "passed"])
+        self.assertEqual(finals[0]["tip"], finals[1]["tip"])           # 同一个提交上重做了最终审查
+        diags = self.ev("job-exit", type="diagnose")
+        self.assertEqual([d["source"] for d in diags], [finals[0]["job"], finals[1]["job"]])   # 第二次失败重新诊断
+        self.assertNotIn("重试", self.calls("diagnose")[1]["prompt"])
 
     def test_user_who_disagrees_with_a_test_fix_gets_it_withdrawn_and_rediagnosed(self):
         self.two_nodes("grep -q '^a$' a.txt && test ! -e b.txt\n", "grep -q '^b$' b.txt\n")
@@ -473,6 +496,42 @@ class PullRequestAndCI(AcceptCase):
         self.assertIn("条款 N1 的考题没过", prompt)
         self.assertNotIn("考题原文不该出现", prompt)
         self.assertNotIn("考题原文不该出现", (self.mdir / "events.jsonl").read_text())
+
+    def test_exam_clause_outside_the_dag_is_not_used(self):
+        # 被测的代码也能往日志里写「NORTHSTAR-EXAM N# fail」：任意数字能把考题内容带出去，只认 DAG 里有的编号
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-78.txt").write_text("exam\trun\tNORTHSTAR-EXAM N1 fail\nexam\trun\tNORTHSTAR-EXAM N7265787061 fail\n")
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的 PR"), r.stdout + r.stderr)
+        self.assertIn("1 个不属于这个 mission 的条款编号", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.assertEqual(self.calls("diagnose"), [])                   # 不交给诊断
+        self.assertNotIn("7265787061", (self.mdir / "events.jsonl").read_text())   # 编号本身也不记
+        self.assertNotIn("7265787061", "".join(p.read_text() for p in (self.mdir / "questions").glob("*.md")))
+
+    def test_crashed_diagnosis_asks_and_retry_waits_for_ci_again(self):
+        # 诊断进程崩溃：记成 unavailable 问用户，不会一直重新诊断；CI 引出的问题回答「重试」就重新等 CI（CI 本身出故障时的出路）
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-77.txt").write_text("verify\tinstall\tERROR: Could not reach pypi.org\n")
+        self.script("diagnose", "crash")
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的诊断会话没能完成"), r.stdout + r.stderr)
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual((diag["outcome"], diag["trigger"]), ("unavailable", "ci"))
+        self.assertIn("重新等一遍 CI", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
+        self.answer("重试")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+        self.assertEqual(len(self.calls("diagnose")), 1)                # 没有再诊断
+        self.assertEqual(len(self.calls("final")), 1)
 
     def test_pending_checks_are_waited_for(self):
         self.simple(("a",))

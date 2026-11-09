@@ -50,6 +50,14 @@ class OrcError(Exception):
     """可以直接告诉 coordinator 的错误：消息里写明错在哪、该怎么做。"""
 
 
+class SyncConflict(OrcError):
+    """节点合并 mission 分支的最新提交时冲突（修复闭环）：step 停下问用户，不是每一步都报同一个错。"""
+
+    def __init__(self, node: str, tip: str, worktree: Path, clauses: List[str], detail: str):
+        super().__init__(f"节点 {node} 合并 mission 分支的最新提交 {tip[:12]} 时冲突（{detail}）")
+        self.node, self.tip, self.worktree, self.clauses = node, tip, worktree, clauses
+
+
 APPROVED_STATES = {"approved", "executing", "reviewing", "accepted"}   # 每次 step 都重新校验签名和哈希
 
 
@@ -3053,7 +3061,9 @@ def accept_config(path: Path = EXEC_CONFIG) -> dict:
         raise OrcError("orc.toml 的 [acceptance] required_checks 不能为空：至少要有 northstar 的 verify。")
     if not timeout.isdigit() or int(timeout) < 1:
         raise OrcError(f"orc.toml 的 [acceptance] ci_timeout_seconds 必须是正整数（带引号的字符串），现在是「{timeout}」。")
-    hidden = [n.strip() for n in str(section.get("hidden_checks", "exam")).split(",") if n.strip()]
+    # 公开的检查要写明；没写明的一律当隐藏考题（输出全部丢掉）：改名或新加检查时忘了配置，也不会把日志交出去
+    public = [n.strip() for n in str(section.get("public_checks", "verify")).split(",") if n.strip()]
+    hidden = [n for n in names if n not in public]
     return {"required_checks": names, "ci_timeout_seconds": int(timeout), "hidden_checks": hidden}
 
 
@@ -3271,13 +3281,19 @@ CI_LOG_LINES = 150
 
 def ci_failure_details(m: Mission, bad: Dict[str, str], links: Dict[str, str], hidden: List[str]) -> Dict[str, dict]:
     """没通过的 CI 检查交给诊断的材料。公开的检查（verify）：失败步骤日志的最后 CI_LOG_LINES 行。
-    隐藏考题：输出全部丢掉，只取 workflow 过滤后的「NORTHSTAR-EXAM N# fail」行（哪条条款的考题没过），别的一行都不拿。"""
+    隐藏考题：输出全部丢掉，只取 workflow 过滤后的「NORTHSTAR-EXAM N# fail」行（哪条条款的考题没过），别的一行都不拿。
+    条款编号只认签名的 DAG 里有的：被测的产品代码也能往日志里写这种行，任意数字就成了把考题内容带出去的通道。
+    有不认识的编号就整个不采用（不记下来），当作缺材料问用户。"""
+    known = {c for t in approved_tasks(m).values() for c in t.get("clauses", [])}
     details: Dict[str, dict] = {}
     for name in bad:
         job = re.search(r"/job/([0-9]+)", links.get(name, ""))
         log = gh(m, "run", "view", "--job", job.group(1), "--log-failed", check=False) if job else ""
         if name in hidden:
-            details[name] = {"hidden": True, "clauses": sorted(set(EXAM_CLAUSE_RE.findall(log)), key=lambda c: int(c[1:]))}
+            found = set(EXAM_CLAUSE_RE.findall(log))
+            unknown = len(found - known)
+            details[name] = ({"hidden": True, "clauses": [], "unknown": unknown} if unknown else
+                             {"hidden": True, "clauses": sorted(found, key=lambda c: int(c[1:]))})
         else:
             details[name] = {"hidden": False, "log": log.splitlines()[-CI_LOG_LINES:]}
     return details
@@ -3498,6 +3514,23 @@ def repair_question_answers(m: Mission, since: int = 0) -> List[str]:
             if text and text != "重试":
                 out.append(text)
     return out
+
+
+def retry_requested(m: Mission, exit_event: dict) -> bool:
+    """这次结果之后，用户对修复问题回答了「重试」：重新跑出错的那一步（重做最终审查、重新等 CI），
+    不再拿这次结果去诊断。不然 CI 本身出故障这类临时失败永远出不去，只能放弃。测试修正的问题不算（那里回答别的都是不同意）。"""
+    evs = m.events()
+    after = evs[evs.index(exit_event) + 1:]
+    asked = {e["id"] for e in after if e.get("kind") == "repair-question" and "test_fix" not in e}
+    for e in after:
+        if e.get("kind") == "answer" and e.get("id") in asked and Path(e["file"]).is_file() \
+                and Path(e["file"]).read_text(encoding="utf-8").strip() == "重试":
+            return True
+    return False
+
+
+RERUN_HINTS = {"final": "重新做一遍最终审查（例如失败是偶发的、环境已经修好）；还失败就重新诊断。",
+               "ci": "重新等一遍 CI（例如 CI 本身出了故障、你已经在 GitHub 上重跑）；还失败就重新诊断。"}
 
 
 def last_repair_index(m: Mission) -> int:
@@ -3755,14 +3788,14 @@ def repair_step(m: Mission, tip: str, trigger: str, source: str, failed: List[di
             launch_diagnose(m, tip, trigger, source, failed, parked)
             return "wait", False
         ask_repair(m, "诊断连续不合格", f"mission {m.name} 的诊断连续 {n} 次没通过 orc 的核对：\n"
-                   + "\n".join(f"- {p}" for p in last["problems"]), last["job"], "重新诊断一次。")
+                   + "\n".join(f"- {p}" for p in last["problems"]), last["job"], RERUN_HINTS.get(trigger, "重新诊断一次。"))
         return None, True
     if outcome == "unavailable":
         if answered_after(m, last):
             launch_diagnose(m, tip, trigger, source, failed, parked)
             return "wait", False
         ask_repair(m, "诊断没能完成", f"mission {m.name} 的诊断会话没能完成（{last.get('reason')}）。"
-                   "评审出错时不放行。", last["job"], "检查登录、代理和额度后重新诊断。")
+                   "评审出错时不放行。", last["job"], RERUN_HINTS.get(trigger, "检查登录、代理和额度后重新诊断。"))
         return None, True
     if consumed(m, last) and m.state == "reviewing" and any(
             e.get("kind") == "repair" and e.get("job") == last["job"] for e in m.events()):
@@ -3776,11 +3809,12 @@ def repair_step(m: Mission, tip: str, trigger: str, source: str, failed: List[di
     summary = f"诊断（{last['job']}）：{d['cause']}"
     if d["kind"] == "design":
         ask_repair(m, "诊断认为是设计问题", f"{summary}\n\n诊断会话认为这不是实现的 bug，计划或设计本身需要改，修复闭环不能自己决定。"
-                   + (f"\n\n它的说明：{d.get('change', '')}" if d.get("change") else ""), last["job"])
+                   + (f"\n\n它的说明：{d.get('change', '')}" if d.get("change") else ""), last["job"], RERUN_HINTS.get(trigger, ""))
         return None, True
     if repair_rounds(m) >= REPAIR_ROUNDS:
         ask_repair(m, f"修复闭环 {REPAIR_ROUNDS} 轮还没修好",
-                   f"mission {m.name} 已经按诊断修了 {REPAIR_ROUNDS} 轮，问题还在。最新的{summary}", last["job"])
+                   f"mission {m.name} 已经按诊断修了 {REPAIR_ROUNDS} 轮，问题还在。最新的{summary}", last["job"],
+                   RERUN_HINTS.get(trigger, ""))
         return None, True
     if d["kind"] == "test":
         stage_test_fix(m, last)
@@ -3801,7 +3835,8 @@ def repair_code(m: Mission, diag: dict):
     bad = {n: states[n] for n in targets if n not in acted and states[n] not in ("integrated", "parked")}
     if bad:
         ask_repair(m, "要修的节点还没做完", f"诊断（{diag['job']}）：{d['cause']}\n\n要改的文件属于还没做完的节点："
-                   + "、".join(f"{n}（{s}）" for n, s in bad.items()) + "。修复闭环只能重新打开已经集成或停着的节点。", diag["job"])
+                   + "、".join(f"{n}（{s}）" for n, s in bad.items()) + "。修复闭环只能重新打开已经集成或停着的节点。", diag["job"],
+                   RERUN_HINTS.get(diag.get("trigger", ""), ""))
         return None, True
     facts = {x["id"]: x for x in diag.get("facts", [])}
     checks = [f["id"] for f in diag.get("failed", []) if check_command(m, f["id"])]
@@ -3860,7 +3895,7 @@ def sync_to_tip(m: Mission, node: str) -> Optional[Path]:
         run_git(wt, *ORC_GIT, "merge", "-q", "--no-edit", "-m", message, tip)
     except OrcError as error:
         run_git(wt, "merge", "--abort", check=False)
-        raise OrcError(f"节点 {node} 合并 mission 分支的最新提交时冲突，已撤销这次合并（{error}）。把这条消息告诉用户。") from error
+        raise SyncConflict(node, tip, wt, clauses, str(error)) from error
     # 基线是合进来的 mission tip，不是合并提交：集成脚本要求基线在 mission 分支上；整体评审的 diff（基线..HEAD）
     # 也因此仍然包含节点自己还没集成的提交
     row = read1(ctl / "worktrees.txt").split("\t")
@@ -3868,6 +3903,25 @@ def sync_to_tip(m: Mission, node: str) -> Optional[Path]:
     for d in (ctl, work):
         write_atomic(d / "worktrees.txt", "\t".join(row) + "\n")
     return patch
+
+
+def sync_conflict_block(m: Mission, c: SyncConflict) -> str:
+    """合并冲突只会出在一个文件归多个节点的时候，orc 不替你挑哪边：停下问用户。回答后 orc 再合并一次，已经合并过就直接继续。"""
+    ctx = m.replay()
+    if ctx["state"] == "blocked":
+        # 签名测试修正时冲突：那个问题 orc 已经记了回答，先离开它，再问这个
+        if ctx["question"] not in ctx["answered"]:
+            return f"error {c}。mission 停在一个没回答的问题上，这里不该合并。这是 orc 的 bug；把 events.jsonl 给用户看。"
+        m.transition(ctx["blocked_from"], "orc step", reason=f"问题 {ctx['question']} 已回答")
+    prefix = f"[{','.join(c.clauses)}]" if c.clauses else "[orc]"
+    path = m.block("节点合并 mission 分支冲突",
+                   f"{c}。只有一个文件归多个节点时才会这样，orc 不替你挑哪边。这次合并已经撤销，节点保持原样。\n\n"
+                   "可以这样回答（orc 都能直接执行）：\n"
+                   f"- 你来解决：在 `{c.worktree}` 里运行 `git merge {c.tip}`，解决冲突后提交，提交说明首行以 `{prefix}` 开头"
+                   "（产品 CI 要求每个提交都带条款编号），然后回答「继续」。orc 会再合并一次，已经合并过就直接往下走。\n"
+                   f"- 放弃这一轮：运行 `orc abandon --mission {m.name} \"<原因>\"`（是 phase 里的 mission 就再运行 orc phase 重跑）。",
+                   "ask-user", "orc step")
+    return f"ask-user {path.read_text(encoding='utf-8').strip()}"
 
 
 def unpark_node(m: Mission, node: str, message: str) -> None:
@@ -4089,8 +4143,9 @@ def finalize_test_fix(m: Mission, fix: dict, q: dict, answered: bool) -> None:
         answer = m.dir / "answers" / f"{q['id']}.md"
         write_atomic(answer, "已签名同意测试的修正。\n")
         m.append("answer", "orc step", id=q["id"], file=str(answer))
-    m.append("test-fix-signed", "orc step", k=fix["k"], tip=tip)
-    for node, state in m.node_states().items():   # 已开工、没集成的节点要拿到新测试；停着的节点继续
+    # 已开工、没集成的节点要拿到新测试；停着的节点继续。可以重入：中途断掉（或合并冲突问了用户）后再来，
+    # 已经合并到这个 tip 的节点跳过；test-fix-signed 最后才记，记了就不会再进来
+    for node, state in m.node_states().items():
         if state in ("pending", "integrated"):
             continue
         if state == "parked" and withdraw_reopen(m, node):
@@ -4098,8 +4153,9 @@ def finalize_test_fix(m: Mission, fix: dict, q: dict, answered: bool) -> None:
         if state == "parked":
             unpark_node(m, node, f"冻结的验收测试已按诊断修正，用户签了名（{fix['diff']}）。worktree 已合并最新提交。"
                                  "继续当前这条验收标准；做完按格式结束这一轮。")
-        else:
+        elif read1(node_ctl(m, node) / "worktrees.txt").split("\t")[2] != tip:
             sync_to_tip(m, node)
+    m.append("test-fix-signed", "orc step", k=fix["k"], tip=tip)
     print(f"mission {m.name}：测试修正已签名并提交（{tip[:12]}）")
 
 
@@ -4156,9 +4212,9 @@ def h_reviewing(m: Mission):
     tip = mission_tip(m)
     # 1. 最终审查
     finals = [e for e in job_exits(m, MISSION_JOBS, "final") if e.get("tip") == tip]
-    if finals and finals[-1].get("outcome") == "checks-failed":
-        # 检查没通过只能靠修复闭环出去（修好后 tip 会变）：回答修复问题不作废这次结果、不重跑最终审查，
-        # 回答交给 repair_step（提示 → 重新诊断，「重试」→ 重做出错的那一步）
+    if finals and finals[-1].get("outcome") == "checks-failed" and not retry_requested(m, finals[-1]):
+        # 检查没通过靠修复闭环出去（修好后 tip 会变）：回答提示不作废这次结果、不重跑最终审查，交给 repair_step 重新诊断。
+        # 回答「重试」才作废它、重做最终审查（偶发失败、环境已经修好）；还失败就是新的一次，重新诊断
         last = finals[-1]
         return repair_step(m, tip, "final", last["job"], last["failed"], [])
     final = mission_exit(m, "final", tip)
@@ -4193,7 +4249,9 @@ def h_reviewing(m: Mission):
     except OrcError as error:
         return f"error {error}", False
     ci_all = [e for e in job_exits(m, MISSION_JOBS, "ci") if e.get("tip") == tip]
-    if ci_all and ci_all[-1].get("outcome") == "failed" and ci_all[-1].get("details"):
+    if ci_all and retry_requested(m, ci_all[-1]):
+        pass                                 # 回答了「重试」：下面 mission_exit 作废这次结果，重新等 CI
+    elif ci_all and ci_all[-1].get("outcome") == "failed" and ci_all[-1].get("details"):
         # CI 的检查没通过：公开检查的日志、考题报的条款都有，就直接交给修复闭环；缺材料的才要用户给提示
         last = ci_all[-1]
         failed, missing = ci_failed_payload(last)
@@ -4217,7 +4275,11 @@ def h_reviewing(m: Mission):
         if failed and not missing:
             return repair_step(m, tip, "ci", ci["job"], failed, [])
         hidden = [n for n in missing if n in accept_config()["hidden_checks"]]
-        why = ("隐藏考题的输出全部丢掉，CI 日志里也没有它报的条款（workflow 要输出「NORTHSTAR-EXAM N# fail」行，"
+        unknown = sum(ci.get("details", {}).get(n, {}).get("unknown", 0) for n in hidden)
+        why = (f"隐藏考题的日志里有 {unknown} 个不属于这个 mission 的条款编号。被测的代码也能往日志里写这种行，orc 不采用这次报告"
+               "（编号本身也不记下来）。你在本地跑一遍考题，把哪条条款、什么行为不对告诉 orc（不用贴考题原文）"
+               if unknown else
+               "隐藏考题的输出全部丢掉，CI 日志里也没有它报的条款（workflow 要输出「NORTHSTAR-EXAM N# fail」行，"
                "见 STATE.md「修复闭环」），orc 不知道是哪条没过。你在本地跑一遍考题，把哪条条款、什么行为不对告诉 orc（不用贴考题原文）"
                if hidden else "orc 取不到失败的日志" if missing and ci.get("details") else "")
         ask_repair(m, "PR 的 CI 没通过", f"mission {m.name} 的 PR {pr['url']} 的 CI 没通过：{ci.get('reason')}"
@@ -4463,14 +4525,17 @@ def step(mission: Mission) -> Next:
         for _ in range(len(MISSION_STATES) + 1):   # 一次 step 可以连过几个不需要等待的状态
             ctx = mission.replay()
             effective = ctx["blocked_from"] if ctx["state"] == "blocked" else ctx["state"]
-            if effective in APPROVED_STATES:
-                waiting = test_fix_step(mission)      # 测试修正等签名：签了才生效，回答意见就撤回
-                if waiting:
-                    return waiting
-                problem = verify_approval(mission)
-                if problem:
-                    return problem
-            nxt, cont = HANDLERS[ctx["state"]](mission)
+            try:
+                if effective in APPROVED_STATES:
+                    waiting = test_fix_step(mission)      # 测试修正等签名：签了才生效，回答意见就撤回
+                    if waiting:
+                        return waiting
+                    problem = verify_approval(mission)
+                    if problem:
+                        return problem
+                nxt, cont = HANDLERS[ctx["state"]](mission)
+            except SyncConflict as conflict:              # 节点合并 mission 分支冲突：停下问用户
+                return sync_conflict_block(mission, conflict)
             if not cont:
                 return nxt or "wait"
         return "error orc step 在一次运行里转了太多次状态。这是 orc 的 bug，把 events.jsonl 给用户看。"
