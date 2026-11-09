@@ -45,6 +45,14 @@
 
 不要为了让测试通过去建议「判断是不是在跑测试」之类的改法。
 
+**来自 CI 的失败**：`CI 上的检查 verify` 给的是 CI 失败步骤日志的最后几行。`CI 上的隐藏考题` 只告诉你哪条条款（N#）的考题没过，考题内容谁都看不到：按签名的设计和 DAG 里这条条款的原文，找出实现哪里没做到。
+
+## 复现（kind 为 code 时）
+
+{{REPRO_RULE}}
+
+复现是一个只在检查副本里运行、不进 mission 分支的文件，放在 `.orc-repro/` 下（例如 `.orc-repro/test_status_order.py`），加上运行它的命令（例如 `python3 -m pytest -q .orc-repro/test_status_order.py`）。它测的必须是设计或节点约定要求的行为，不是考题本身；不能联网。orc 会在 `{{TIP}}` 上把它连跑 10 次，**至少失败一次才算复现出来**；修好后它要连跑 10 次全部通过。
+
 ## 输出
 
 最后只输出一个 JSON 对象：
@@ -55,6 +63,7 @@
  "files": ["kind 为 code 时：要改的文件（必须在某个节点声明的 files 里，不能是冻结的测试）"],
  "change": "要怎么改（意图，不是代码）",
  "evidence": [{"file": "支持你判断的文件", "line": 行号}],
+ "repro": {"file": ".orc-repro/…", "content": "复现文件的全文", "command": "运行它的命令"},
  "test_fix": [{"file": "kind 为 test 时：要改的冻结测试", "content": "这个测试文件改好后的全文"}]}
 ```
 

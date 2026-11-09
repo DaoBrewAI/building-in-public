@@ -8,6 +8,7 @@ commit-broker.sh、integrate-task.sh、检查的沙箱（sandbox-exec）都是�
 """
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -643,30 +644,54 @@ class Disputes(ExecCase):
         self.assertEqual(len(self.ev("commit", node="a")), 1)
 
     def test_node_whose_problem_is_in_another_nodes_file_waits_for_that_fix(self):
-        # b 依赖 a；a 的文件有问题，b 的检查过不了。b 说 outside 停下；诊断让 a 修，a 修好集成后 b 合并最新提交继续
-        tasks = [task("a", ["a.txt"], ["a.txt 是 a"]), task("b", ["b.txt"], ["b.txt 是 b"], ("a",))]
-        tests = {"tests/orc/check_a.sh": "grep -q '^a' a.txt\n", "tests/orc/check_b.sh": "grep -q '^b$' b.txt && ! grep -q bad a.txt\n"}
-        checks = [{"id": f"c{n}", "node": n, "acceptance": [1], "command": f"sh tests/orc/check_{n}.sh", "expect_before": "fail"}
-                  for n in ("a", "b")]
+        # b 依赖 a；a 的文件有问题，b 的第 2 条验收标准过不了。b 先交了第 1 条，再说 outside 停下；诊断让 a 修（要先复现），
+        # a 修好集成后 b 合并最新提交继续。合并提交也要带 [N#]：产品 CI 检查 PR 上每个提交
+        tasks = [task("a", ["a.txt"], ["a.txt 是 a"]), task("b", ["b.txt"], ["b.txt 是 b", "a.txt 没有 bad"], ("a",))]
+        tests = {"tests/orc/check_a.sh": "grep -q '^a' a.txt\n", "tests/orc/check_b1.sh": "grep -q '^b$' b.txt\n",
+                 "tests/orc/check_b2.sh": "grep -q '^b$' b.txt && ! grep -q bad a.txt\n"}
+        checks = [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"},
+                  {"id": "cb1", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b1.sh", "expect_before": "fail"},
+                  {"id": "cb2", "node": "b", "acceptance": [2], "command": "sh tests/orc/check_b2.sh", "expect_before": "fail"}]
         self.signed(tasks, checks, tests)
-        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]), commit({"a.txt": "a\n"}, []))
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]),
+                    commit({}, [1]),                                     # 修复没有改动、说验收标准已满足：拒绝（不能绕过修复关口）
+                    commit({"a.txt": "a\n"}, []))
         self.script("b", commit({"b.txt": "b\n"}, [1]),
-                    json.dumps({"out": {"status": "outside", "reason": "a.txt 第 2 行的 bad 让 cb 失败，不在我的文件里"}}),
-                    commit({"b.txt": "b\n"}, [1]))
+                    json.dumps({"write": {"b.tmp": "x"},
+                                "out": {"status": "outside", "reason": "a.txt 第 2 行的 bad 让 cb2 失败，不在我的文件里"}}),
+                    commit({}, [2]))                                     # a 修好后第 2 条已经满足
         self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
-                                            "evidence": [{"file": "a.txt", "line": 2}]}))
+                                            "evidence": [{"file": "a.txt", "line": 2}]}),
+                    json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
+                                "evidence": [{"file": "a.txt", "line": 2}],
+                                "repro": {"file": ".orc-repro/no_bad.sh", "content": "! grep -q bad a.txt\n",
+                                          "command": "sh .orc-repro/no_bad.sh"}}))
         self.reached_reviewing(self.drive())
         self.assertEqual([e["node"] for e in self.ev("node-parked")], ["b"])
-        diag, = self.ev("job-exit", type="diagnose")
+        first, diag = self.ev("job-exit", type="diagnose")
+        self.assertEqual(first["outcome"], "invalid")                   # 没有可重跑的失败检查，必须先写复现
+        self.assertIn("repro", first["problems"][0])
+        self.assertIn("这次必须写复现", self.calls("diagnose")[0]["prompt"])
         self.assertEqual(diag["trigger"], "node")
+        self.assertEqual(diag["facts"], [{"id": "repro", "fails": 10, "runs": 10}])   # 复现在当前提交上真的失败
         self.assertIn("不在我的文件里", self.calls("diagnose")[0]["prompt"])
         repair, = self.ev("repair")
         self.assertEqual(repair["targets"], {"a": ["a.txt"]})
         self.assertEqual([e["node"] for e in self.ev("node-reopen")], ["a"])
+        gates = self.ev("job-exit", type="gate", node="a")
+        self.assertEqual((gates[1]["outcome"], gates[1]["category"]), ("rejected", "scope"))
+        self.assertIn("没有任何改动", gates[1]["reason"])
+        fixed = gates[2]
+        self.assertEqual(fixed["repair"]["after"], {"repro": {"fails": 0, "runs": 10}})   # 修好后复现连跑 10 次全过
+        self.assertEqual(fixed["repair"]["revert"]["fails"], 10)
         unparked, = self.ev("node-unparked", node="b")
         self.assertIn("已经由节点 a 修好并集成", unparked["message"])
         self.assertTrue(list((self.mdir / "nodes" / "b").glob("discarded-*.patch")))   # 没提交的改动存成补丁
         self.assertEqual(self.git("show", "orc/m1:a.txt"), "a")
+        base = self.ev("exec-setup")[0]["base"]
+        subjects = self.git("log", "--format=%s", f"{base}..orc/m1").splitlines()
+        self.assertTrue(any("合并 mission 分支的最新提交" in s for s in subjects), subjects)   # b 先提交过，继续时不是快进
+        self.assertEqual([s for s in subjects if not re.match(r"^\[(N[0-9]+(,N[0-9]+)*|NS|orc)\]", s)], [])
 
 
 class NodeReview(ExecCase):

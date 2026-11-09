@@ -50,9 +50,18 @@ elif args[:2] == ["pr", "checks"]:
     f = fake / f"gh-checks-{n}.json"
     f = f if f.exists() else fake / "gh-checks.json"
     print(f.read_text() if f.exists() else json.dumps([{"name": "verify", "bucket": "pass"}, {"name": "exam", "bucket": "pass"}]))
+elif args[:2] == ["run", "view"]:
+    # 失败步骤的日志：$ORC_FAKE/gh-log-<job>.txt
+    f = fake / f"gh-log-{args[args.index('--job') + 1]}.txt"
+    print(f.read_text() if f.exists() else "")
 else:
     sys.exit(3)
 '''
+
+
+# a.txt 末尾要有空行：几个测试的诊断用它当复现
+BLANK_LINE_REPRO = {"file": ".orc-repro/blank.py", "command": "python3 .orc-repro/blank.py",
+                    "content": "import sys\nsys.exit(0 if open('a.txt').read().endswith('\\n\\n') else 1)\n"}
 
 
 class AcceptCase(ExecCase):
@@ -323,6 +332,24 @@ class FinalReview(AcceptCase):
         self.assertEqual(len(self.ev("test-fix-signed")), 1)
         self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="final")], ["checks-failed", "passed"])
 
+    def test_answer_after_checks_failed_rediagnoses_instead_of_rerunning_the_final_review(self):
+        # 诊断判成设计问题，用户回答提示：交给诊断重新判断，不是把最终审查再跑一遍（偶发失败可能碰巧全过）
+        self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
+        self.script("a", commit({"a.txt": "a\nbad\n"}, [1]), commit({"a.txt": "a\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "design", "cause": "说不清"}),
+                    json.dumps({"kind": "code", "cause": "a.txt 多了 bad", "files": ["a.txt"], "change": "删掉 bad",
+                                "evidence": [{"file": "a.txt", "line": 2}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）"), r.stdout + r.stderr)
+        self.answer("看 a.txt 第 2 行")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertIn("看 a.txt 第 2 行", self.calls("diagnose")[1]["prompt"])
+        finals = self.ev("job-exit", type="final")
+        self.assertEqual([e["outcome"] for e in finals], ["checks-failed", "passed"])
+        self.assertNotEqual(finals[0]["tip"], finals[1]["tip"])        # 第二次最终审查是在修好之后
+
     def test_user_who_disagrees_with_a_test_fix_gets_it_withdrawn_and_rediagnosed(self):
         self.two_nodes("grep -q '^a$' a.txt && test ! -e b.txt\n", "grep -q '^b$' b.txt\n")
         self.script("a", commit({"a.txt": "a\n"}, [1]))
@@ -376,7 +403,8 @@ class PullRequestAndCI(AcceptCase):
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
         (self.fake / "gh-checks-1.json").write_text(json.dumps([{"name": "verify", "bucket": "pass"}, {"name": "exam", "bucket": "fail"}]))
         self.script("diagnose", json.dumps({"kind": "code", "cause": "考题要求 a.txt 末尾有空行", "files": ["a.txt"],
-                                            "change": "在 a.txt 末尾加一个空行", "evidence": [{"file": "a.txt", "line": 1}]}))
+                                            "change": "在 a.txt 末尾加一个空行", "evidence": [{"file": "a.txt", "line": 1}],
+                                            "repro": BLANK_LINE_REPRO}))
         r = self.drive()
         self.assertIn("orc 都能直接执行", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
         self.answer("考题说 a.txt 末尾要有一个空行")
@@ -392,12 +420,13 @@ class PullRequestAndCI(AcceptCase):
         # fintelli-p1-1-3 的情形：被打回的节点发现问题不在自己的文件里，用 outside 结束；诊断让真正的节点修，它撤回打回
         self.simple(("a", "b"))
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
-        self.script("b", commit({"b.txt": "b\n"}, [1]),
-                    json.dumps({"out": {"status": "outside", "reason": "问题在 a.txt，不在 b.txt"}}))
+        self.script("b", commit({"b.txt": "b\n"}, [1]),                # outside 时留下了临时文件：存成补丁再撤回
+                    json.dumps({"write": {"b.tmp": "x"}, "out": {"status": "outside", "reason": "问题在 a.txt，不在 b.txt"}}))
         self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "b", "problem": "末尾少空行", "evidence": "a.txt"}]}),
                     json.dumps({"verdict": "pass", "issues": []}))
         self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾少一个空行", "files": ["a.txt"],
-                                            "change": "加空行", "evidence": [{"file": "a.txt", "line": 1}]}))
+                                            "change": "加空行", "evidence": [{"file": "a.txt", "line": 1}],
+                                            "repro": BLANK_LINE_REPRO}))
         r = self.drive()
         self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
         withdrawn, = self.ev("node-withdrawn")
@@ -405,6 +434,45 @@ class PullRequestAndCI(AcceptCase):
         self.assertEqual([(e["node"], e["stage"]) for e in self.ev("node-reopen")], [("b", "最终审查"), ("a", "修复")])
         self.assertEqual(len(self.calls("exec-b")), 2)                # b 没有再被叫回来
         self.assertEqual(len(self.ev("job-exit", type="integrate", node="b", outcome="integrated")), 1)
+        self.assertTrue(list((self.mdir / "nodes" / "b").glob("discarded-*.patch")))
+
+    def test_verify_failure_log_goes_straight_to_diagnosis(self):
+        # verify 的日志是公开的：orc 取下失败步骤的日志交给诊断，不问用户
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-77.txt").write_text("verify\tcheck\tAssertionError: a.txt 末尾缺空行\n")
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾缺空行", "files": ["a.txt"], "change": "加空行",
+                                            "evidence": [{"file": "a.txt", "line": 1}], "repro": BLANK_LINE_REPRO}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertFalse(list((self.mdir / "questions").glob("*.md")))   # 一次都没问用户
+        prompt = self.calls("diagnose")[0]["prompt"]
+        self.assertIn("a.txt 末尾缺空行", prompt)
+        self.assertIn("这次必须写复现", prompt)
+        diag, = self.ev("job-exit", type="diagnose")
+        self.assertEqual((diag["trigger"], diag["facts"]), ("ci", [{"id": "repro", "fails": 10, "runs": 10}]))
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="ci")], ["failed", "passed"])
+
+    def test_exam_failure_reports_only_the_clause_and_goes_to_diagnosis(self):
+        # 隐藏考题的输出全部丢掉，workflow 只留下「NORTHSTAR-EXAM N# fail」行：诊断按条款原文找问题，日志里别的内容一行都不拿
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        (self.fake / "gh-checks-1.json").write_text(json.dumps([
+            {"name": "verify", "bucket": "pass", "link": "https://github.com/o/r/actions/runs/5/job/77"},
+            {"name": "exam", "bucket": "fail", "link": "https://github.com/o/r/actions/runs/5/job/78"}]))
+        (self.fake / "gh-log-78.txt").write_text("exam\trun\tNORTHSTAR-EXAM N1 fail\nexam\trun\t考题原文不该出现\n")
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "N1 要求末尾有空行", "files": ["a.txt"], "change": "加空行",
+                                            "evidence": [{"file": "a.txt", "line": 1}], "repro": BLANK_LINE_REPRO}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertFalse(list((self.mdir / "questions").glob("*.md")))
+        prompt = self.calls("diagnose")[0]["prompt"]
+        self.assertIn("条款 N1 的考题没过", prompt)
+        self.assertNotIn("考题原文不该出现", prompt)
+        self.assertNotIn("考题原文不该出现", (self.mdir / "events.jsonl").read_text())
 
     def test_pending_checks_are_waited_for(self):
         self.simple(("a",))
