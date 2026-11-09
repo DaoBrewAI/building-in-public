@@ -613,6 +613,18 @@ class Doctor(OrcCase):
 
 
 
+class AcceptanceConfig(OrcCase):
+    def config(self, extra=""):
+        path = self.tmp / "orc.toml"
+        path.write_text('[acceptance]\nrequired_checks = "verify,exam2"\nci_timeout_seconds = "5"\n' + extra)
+        return self.orc.accept_config(path)
+
+    def test_check_not_listed_as_public_is_hidden(self):
+        # 考题改了名（exam2）而配置没跟着改：它的日志也不能交给诊断
+        self.assertEqual(self.config()["hidden_checks"], ["exam2"])
+        self.assertEqual(self.config('public_checks = "verify,exam2"\n')["hidden_checks"], [])
+
+
 class CheckExpectations(unittest.TestCase):
     """实现之前的检查结果：pytest 的 fail 检查必须失败在断言上。"""
 
