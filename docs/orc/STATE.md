@@ -287,12 +287,13 @@ pending → running → submitted → integrated
 
 **底线写死，修 bug 时由模型判断。** 底线：签名和哈希、冻结的测试只读（改测试要用户签名）、scope / forbid、NORTHSTAR 和 `run_all.sh`、每个提交先过检查再过评审（出错不放行）、broker 的 `diff_sha256`、沙箱、不改写历史、CI 必须通过。默认做法（节点只改自己的文件、打回失败检查所属的节点等）在修 bug 时由诊断会话判断怎么变通，orc 再核对结果有没有守住底线。
 
-**什么时候进入**：最终审查的检查没通过（`checks-failed`）；CI 没通过且用户给了提示；执行中的节点停下（`parked`）且没有别的事可做。节点停下的情形：执行会话输出 `outside`、判断测试对错的评审认为测试有错（`test-wrong`）、提交关口判定冻结的测试越过了依赖（`test-crosses-dag`）。停下的节点不挡其他节点；等到没有在跑的任务、也没有能启动的节点时，统一交给诊断。
+**什么时候进入**：最终审查的检查没通过（`checks-failed`）；CI 没通过、且 orc 拿到了失败的材料（`verify` 的日志、考题报的条款）或用户给了提示；执行中的节点停下（`parked`）且没有别的事可做。节点停下的情形：执行会话输出 `outside`、判断测试对错的评审认为测试有错（`test-wrong`）、提交关口判定冻结的测试越过了依赖（`test-crosses-dag`）。停下的节点不挡其他节点；等到没有在跑的任务、也没有能启动的节点时，统一交给诊断。
 
 **1. 诊断**（mission 级后台任务 `diagnose`，`review` 角色，只放行 Read，在 tip 的代码副本里，模板 `templates/diagnose-brief.md`）
 - orc 先查事实：失败的检查在 tip 上再连跑 10 次（`facts`：`fails` / `runs`，含最终审查那 3 次）；mission 改动的每个文件属于哪个节点、最后一次由哪个提交改。
 - 交给诊断会话：失败的输出和事实、停下的节点说的原因和最近一张纠偏单、用户的提示（修复问题的回答，「重试」不算）、签名的设计、DAG、失败的检查跑的冻结测试全文、mission 的全部改动。
-- 它输出 `{"kind": "code" | "test" | "design", "cause", "files", "change", "evidence": [{"file", "line"}], "test_fix": [{"file", "content"}]}`。
+- 它输出 `{"kind": "code" | "test" | "design", "cause", "files", "change", "evidence": [{"file", "line"}], "repro": {"file", "content", "command"}, "test_fix": [{"file", "content"}]}`。
+- **复现**：没有能在本地重跑的失败检查时（问题来自 CI、隐藏考题、停下的节点），`code` 的诊断必须带 `repro`：一个放在 `.orc-repro/` 下、只在检查副本里运行、不进 mission 分支的文件和运行它的命令。orc 在 tip 的副本上把它连跑 10 次，**至少失败一次**才算复现出来（次数记进 `facts`，id 是 `repro`），一次都没失败就发回重写。之后它和失败的检查一样用在修复关口里。
 - orc 确定性核对：`code` 的文件必须是某个节点声明的文件、不能是冻结的测试，证据里的文件和行号在 tip 上存在；`test` 的文件必须是冻结的测试，内容非空、和现在不同、Python 能解析。核对不过就带着问题发回重写，2 次还不对才问用户。诊断出错不放行：问用户，回答「重试」重新诊断。
 
 **2. 按诊断动手**
@@ -300,10 +301,13 @@ pending → running → submitted → integrated
 - `test`：把修正放进 control/（`approved-tests/`、`approved-checks.json`、`brief-exec.md` 里的哈希、`approved.sha256`），旧文件备份到 `repair/test-fix-<k>/backup/`，删掉旧签名，停下问用户（问题里有修正的 diff）。用户运行 `northstar approve-mission` 签名就是同意：orc 把修正提交到 mission 分支（提交说明含「orc：冻结 mission … 的验收测试（第 k 次修正，用户已签名）」和「根因:」），已开工没集成的节点合并最新提交，停着的节点继续。用户回答意见就是不同意：恢复备份，意见交给诊断会话重新诊断。等签名期间每次 step 先做这一步，不报签名错误。
 - `design`：问用户。
 - 修复闭环最多 3 轮（修代码或改测试各算一轮），用户回答修复问题后清零。
+- 最终审查的结果是 `checks-failed` 时，回答修复问题不作废这次结果、不重跑最终审查：只能靠修复闭环出去（修好后 tip 变了才重新审查）。回答的提示交给诊断，「重试」重做出错的那一步。
+- 每一步都可以重入：中途断掉后再 step，已经重新打开或继续过的节点跳过（`repair` 事件在动作做完后才写）；测试修正先写 `test-fix` 事件、再从备份算出 control/ 的内容，提问前断掉就补问；签名后已经提交过就不再提交。诊断进程崩溃也记成 `unavailable`（带来源），问用户，不会一直重新诊断。
+- 继续停着的节点时，把 mission 分支的最新提交合进它的 worktree。不是快进时，合并提交的首行带节点的 `[N#]`（「orc：<节点> 合并 mission 分支的最新提交（修复闭环）」），因为产品 CI 要求 PR 上每个提交都带；基线改成合进来的 mission tip（集成脚本要求基线在 mission 分支上，整体评审的 diff 也因此包含节点自己还没集成的提交）。被打回、没有新提交的节点，worktree 里有没提交的东西也先存成补丁再撤回；签名生效后、等的节点修好后，这样的节点同样是撤回，不继续。集成前节点的 HEAD 就是 mission tip（没有新提交）时不集成：被打回的撤回，其他情况停下报错。
 
 **3. 修复关口**（节点有 `repair.json` 时，在普通提交关口之外）
-- 文件：改的文件只能是诊断指定的。
-- 证明修好了（诊断只涉及这一个节点、有失败的检查时）：失败的检查在修复后的副本上连跑 10 次，必须全部通过。
+- 文件：改的文件只能是诊断指定的；必须有改动（没有改动、只说验收标准已满足，会绕过修复关口，拒绝）。
+- 证明修好了（诊断只涉及这一个节点、有失败的检查或复现时）：失败的检查和复现在修复后的副本上连跑 10 次，必须全部通过。
 - 撤掉修复失败要重现：节点的基线就是诊断时的 tip、诊断时测到过失败，就是撤掉修复后的状态，直接引用；否则在基线上重跑，最多 20 次，第一次失败就停；一次都没失败就不放行（`unavailable`，问用户）。
 - 修复改动的非测试代码里，新增的行不能出现 `pytest`、`PYTEST_`、`unittest`、`conftest` 或冻结测试的文件名（`cheat`）。
 - 修复评审（`review` 角色，没有工具，模板 `templates/repair-review-brief.md`）：给它诊断、改动、设计和整个 DAG，回答「改动是不是诊断说的那件事、有没有别的改动」「有没有改变某个节点承诺过的行为」，`{"verdict": "ok" | "reject"}`。不放行就是纠偏单；出错不放行。
@@ -323,7 +327,25 @@ pending → running → submitted → integrated
 - 产品仓库没有 `origin` 时停下（`next: error`），说明要先建远程仓库。不跳过。
 - 把 `orc/<mission>` 推到 `origin`，用 `gh` 开一个指向默认分支的 PR；已经有这个分支的 open PR 就用它。记 `pr` 事件。**合并由你来做。**
 - 等 CI：每隔 20 秒查一次 `gh pr checks`，直到 `orc/config/orc.toml` 的 `[acceptance] required_checks`（默认 `verify,exam`）每一个都出现并结束，最多 `ci_timeout_seconds`。只有 `pass` 算通过；`skipping`（草稿 PR 上跳过的考题）不算。PR 的 head 不是审查过的 tip 时直接判失败。
-- CI 没通过、超时：停下 `ask-user`。隐藏考题只报通过或失败，orc 不知道是哪一题。回答「重试」只重等 CI；回答别的内容（用户看过考题输出后的提示）就进入修复闭环，提示交给诊断会话。
+- CI 没通过：orc 从 `gh pr checks` 的链接找到失败的 job，用 `gh run view --job <id> --log-failed` 取日志。
+  - 公开的检查（`verify` 等）：失败步骤日志的最后 150 行交给修复闭环，不问用户。
+  - 隐藏考题（`[acceptance] hidden_checks`，默认 `exam`）：输出全部丢掉，orc 只取 workflow 过滤后的 `NORTHSTAR-EXAM N# fail` 行，别的一行都不拿、不记。有条款就交给修复闭环（诊断按设计和 DAG 里这条条款的原文找问题，必须先写复现），只告诉诊断「条款 N# 的考题没过」。
+  - 材料不全（取不到日志、考题没报条款）或超时、PR 的 head 不对：停下 `ask-user`。回答「重试」只重等 CI；回答别的内容（例如你本地跑考题后说的哪条条款、什么行为不对，不用贴考题原文）就进入修复闭环，提示交给诊断会话。
+- 隐藏考题要报条款，产品仓库的 workflow 和考题都要配合（`.github/workflows/` 由用户推送）：考题的 `run.sh` 把每条条款的结果写进 `$EXAM_REPORT`，一行一条，`N13 fail` 或 `N13 pass`；workflow 运行考题时传 `EXAM_REPORT`，没通过时只输出格式正确的 fail 行：
+
+  ```yaml
+      - name: 运行考题（断网，只报通过或失败，以及没过的条款编号）
+        run: |
+          report="$RUNNER_TEMP/exam-report"; : > "$report"
+          if sudo unshare --net -- sudo -u "$USER" env EXAM_DIR="$PWD/exam" EXAM_REPORT="$report" HOME="$HOME" PATH="$PATH" \
+               bash -c 'cd product && bash ../exam/run.sh' >/dev/null 2>&1; then
+            echo "隐藏考题：通过"
+          else
+            # 条款编号本来就在签名的设计里；考题内容一行都不进公开日志
+            grep -E '^N[0-9]+ fail$' "$report" | sort -u | sed 's/^/NORTHSTAR-EXAM /' || true
+            echo "隐藏考题：没通过"; exit 1
+          fi
+  ```
 
 ### 4. 进入 `accepted` 前重新核对
 

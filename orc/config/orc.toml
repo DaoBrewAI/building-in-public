@@ -11,3 +11,4 @@ crash_retries            = "1"    # 执行会话崩溃（退出码非 0、进程
 [acceptance]
 required_checks          = "verify,exam" # 进入 accepted 前 PR 上必须通过的 CI 检查（GitHub 上显示的 job 名，逗号分隔）：northstar 的签名和验收检查、隐藏考题
 ci_timeout_seconds       = "3600" # 等 PR 的 CI 最多多少秒；超时停下问用户
+hidden_checks            = "exam" # required_checks 里哪些是隐藏考题：输出全部丢掉，orc 只取 workflow 过滤后的「NORTHSTAR-EXAM N# fail」行（STATE.md「PR 和 CI」）
