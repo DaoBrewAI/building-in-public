@@ -369,6 +369,8 @@ class Mission:
         if not ctl.is_dir():
             return "pending"
         read = lambda p: p.read_text().strip() if p.is_file() else ""
+        if (ctl / "parked").exists():
+            return "parked"          # 问题在本节点以外，等诊断和修复（STATE.md「修复闭环」）
         if (ctl / "blocked").exists():
             return "blocked"
         if (ctl / "unresolved-rework").exists():
@@ -1757,7 +1759,8 @@ EXEC_KEYS = ("max_parallel", "session_timeout_seconds", "crash_retries")
 RESULT_REPAIRS = 2              # 执行会话的结果格式不对时，发回同一个会话修的次数
 STREAK_FRESH, STREAK_BLOCK = 2, 3   # 连续被拒第 2 次：撤回改动、新开会话；第 3 次：节点 blocked
 REVIEW_TIMEOUT = 1800           # 一次对齐评审最多等多久（秒）；超时按「评审服务出错」处理，不放行
-NODE_EVENTS = {"node-start", "job-start", "job-exit", "node-blocked", "node-unblocked", "node-reopen"}
+NODE_EVENTS = {"node-start", "job-start", "job-exit", "node-blocked", "node-unblocked", "node-reopen",
+               "node-parked", "node-unparked", "node-withdrawn"}
 ORC_GIT = ["-c", "core.hooksPath=/dev/null", "-c", "user.name=orc", "-c", "user.email=orc@localhost"]
 
 
@@ -2215,7 +2218,11 @@ def validate_executor_result(m: Mission, node: str, obj: Optional[dict]) -> List
         if not isinstance(obj.get("reason"), str) or not obj["reason"].strip():
             problems.append("reason 必须写明为什么认为测试本身有错")
         return problems
-    return [f"status 只能是 commit、question 或 test-wrong，不是「{status}」"]
+    if status == "outside":
+        if not isinstance(obj.get("reason"), str) or not obj["reason"].strip():
+            return ["reason 必须写明问题在哪、为什么不在你的文件里"]
+        return []
+    return [f"status 只能是 commit、question、test-wrong 或 outside，不是「{status}」"]
 
 
 # -- 提交关口和整体评审：后台任务，不拿生命周期锁（broker 和 integrate-task 自己拿）
@@ -2224,7 +2231,8 @@ def write_card(m: Mission, node: str, category: str, detail: str, which: Optiona
     work = node_work(m, node)
     k = len(list(work.glob("correction-*.md"))) + 1
     labels = {"scope": "文件范围", "tests": "冻结的验收测试被改动", "checks": "冻结的检查没有通过", "drift": "对齐评审判定偏离（DRIFT）",
-              "too-large": "改动超过评审上限", "broker": "commit broker 拒绝", "worktree": "worktree 不干净"}
+              "too-large": "改动超过评审上限", "broker": "commit broker 拒绝", "worktree": "worktree 不干净",
+              "cheat": "修复里有判断「是不是在跑测试」的写法", "repair-review": "修复评审没通过"}
     text = (f"# 纠偏单：节点 {node}，第 {k} 张\n\n## 被拒的原因：{labels.get(category, category)}\n\n{detail.strip()}\n\n"
             f"## 相关验收标准（原文）\n\n{acceptance_lines(m, node, which or None) or '（无）'}\n\n"
             "按这张纠偏单改。不要改测试或检查来让它通过；认为冻结的测试本身有错时，用 test-wrong 结束这一轮。\n")
@@ -2337,6 +2345,98 @@ def gate_dag_crossing(m: Mission, node: str, wt: Path, results: List[dict]) -> O
                      f"那个节点不是 {node} 的前置节点（{node} 的前置节点：{before}）。" for cid, path, who, line in found)
 
 
+def repair_gate(m: Mission, node: str, wt: Path, job: str, repair: dict,
+                actual: List[str]) -> Tuple[Optional[Tuple[str, str]], dict]:
+    """修复关口（修复闭环）：在普通提交关口之外，证明修好了、证明是这处修复修好的、不许判断是否在跑测试、评审核对改动和诊断一致。
+    返回 (问题, 记录)：问题是 (纠偏类别, 说明)，或 ("unavailable", 原因)；没问题是 None。"""
+    record: dict = {"job": repair.get("job")}
+    checks = [c for c in (check_command(m, cid) for cid in repair.get("checks", [])) if c]
+    copy = jobs_dir(m) / f"{job}.repair"
+    if not checks:
+        record["runs"] = "没有可重跑的失败检查（问题来自停下的节点或 CI），最终审查会把全部检查各跑 3 次"
+    elif not repair.get("solo"):
+        record["runs"] = "这次修复涉及几个节点，单个节点上证明不了；最终审查会把全部检查各跑 3 次"
+    else:
+        copy_worktree(wt, copy)
+        try:
+            after, tails = {c["id"]: 0 for c in checks}, {}
+            for _ in range(DIAG_RUNS):
+                for r in run_check_commands(copy, checks):
+                    if r["rc"] != 0:
+                        after[r["id"]] += 1
+                        tails[r["id"]] = r["tail"]
+        finally:
+            shutil.rmtree(copy, ignore_errors=True)
+        record["after"] = {cid: {"fails": n, "runs": DIAG_RUNS} for cid, n in after.items()}
+        bad = {cid: n for cid, n in after.items() if n}
+        if bad:
+            return ("checks", "修复之后，诊断时失败的检查连跑 " + str(DIAG_RUNS) + " 次还会失败："
+                    + "；".join(f"`{cid}` 失败 {n} 次，最后一次输出：\n```\n" + "\n".join(tails[cid]) + "\n```"
+                               for cid, n in bad.items())), record
+        base = read1(node_ctl(m, node) / "worktrees.txt").split("\t")[2]
+        if base == repair["tip"] and repair.get("fails", 0) > 0:
+            # 节点的基线就是诊断时的提交：撤掉这处修复就是那个提交，诊断时已经在上面测到过失败
+            record["revert"] = {"base": base, "fails": repair["fails"], "runs": repair["runs"], "measured": "诊断时在同一个提交上"}
+        else:
+            git_copy(m.repo(), base, copy)
+            try:
+                fails = runs = 0
+                while runs < REVERT_MAX_RUNS and not fails:
+                    runs += 1
+                    fails += any(r["rc"] != 0 for r in run_check_commands(copy, checks))
+            finally:
+                shutil.rmtree(copy, ignore_errors=True)
+            record["revert"] = {"base": base, "fails": fails, "runs": runs, "measured": "撤掉修复后重跑"}
+            if not fails:
+                return ("unavailable", f"撤掉修复（回到 {base[:12]}）后，诊断时失败的检查连跑 {runs} 次都通过了，证明不了是这处修复修好的。"
+                        "可能是环境变了或者失败极少出现；排除后回答「重试」。"), record
+    tests = set(approved_checks(m)["test_files"])
+    stems = {Path(t).stem for t in tests}
+    test_like = lambda f: f in tests or Path(f).name == "conftest.py" or any(p.startswith("test") for p in Path(f).parts)
+    code = [f for f in actual if not test_like(f)]
+    added = [line[1:] for line in pending_diff(wt, code).splitlines() if line.startswith("+") and not line.startswith("+++")]
+    hits = [line.strip() for line in added if TEST_DETECT_RE.search(line) or any(st in line for st in stems)]
+    if hits:
+        return ("cheat", "修复改动的非测试代码里出现了和测试有关的写法（判断是不是在跑测试、引用测试文件），修复不能针对测试：\n"
+                + "\n".join(f"- `{h[:200]}`" for h in hits[:10])), record
+    verdict, reason = repair_review(m, repair, pending_diff(wt, actual))
+    record["review"] = {"verdict": verdict, "reason": reason[:1500]}
+    if verdict == "reject":
+        return ("repair-review", reason), record
+    if verdict == "unavailable":
+        return ("unavailable", f"修复评审没能完成（{reason}）。评审出错时不放行；排除问题后回答「重试」。"), record
+    return None, record
+
+
+def repair_review(m: Mission, repair: dict, diff: str) -> Tuple[str, str]:
+    """review 模型核对修复：改动是不是诊断说的那件事、有没有别的改动、有没有改变别的节点承诺过的行为。返回 (ok | reject | unavailable, 理由)。"""
+    import tempfile
+    values = {"{{MISSION}}": m.name, "{{CAUSE}}": repair.get("cause", ""), "{{CHANGE}}": repair.get("change", ""),
+              "{{FILES}}": "、".join(repair.get("files", [])),
+              "{{DESIGN}}": (m.control / "approved-design.md").read_text(encoding="utf-8").strip(),
+              "{{DAG}}": json.dumps(list(approved_tasks(m).values()), ensure_ascii=False, indent=2),
+              "{{DIFF}}": f"```diff\n{diff}\n```"}
+    prompt = (ORC_ROOT / "templates" / "repair-review-brief.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        prompt = prompt.replace(key, value)
+    cfg = m.roles()["review"]
+    cwd = Path(tempfile.mkdtemp(prefix="orc-repair-review."))
+    try:
+        run = subprocess.run(["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
+                              "--tools", ""], input=prompt, cwd=str(cwd), capture_output=True, text=True,
+                             timeout=REVIEW_TIMEOUT, env=dict(os.environ, ORC_ROLE="repair-review"))
+        write_atomic(cwd / "out.json", run.stdout)
+        text, error = claude_result(cwd / "out.json") if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+    except subprocess.TimeoutExpired:
+        text, error = None, f"超过 {REVIEW_TIMEOUT} 秒没有结束"
+    finally:
+        shutil.rmtree(cwd, ignore_errors=True)
+    obj = last_json_object(text) if text is not None else None
+    if error or not obj or obj.get("verdict") not in ("ok", "reject"):
+        return "unavailable", error or "没有按格式给出 verdict"
+    return obj["verdict"], str(obj.get("reason", ""))
+
+
 def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     """提交关口（STATE.md）：文件范围 → 测试哈希 → 检查 → 对齐评审 → 写提交请求、运行 broker。"""
     task, approved = approved_tasks(m)[node], approved_checks(m)
@@ -2358,6 +2458,12 @@ def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     outside = sorted(set(actual) - set(task.get("files", [])))
     if outside:
         return reject("scope", "改动了声明文件以外的文件：" + "、".join(outside) + "。只能改：" + "、".join(task.get("files", [])))
+    repair = json.loads(read1(ctl / "repair.json") or "null")
+    if repair:                   # 修复闭环：只放行诊断指定的文件
+        extra = sorted(set(actual) - set(repair["files"]))
+        if extra:
+            return reject("scope", f"这是按诊断做的修复，只能改诊断指定的文件：{'、'.join(repair['files'])}。多改了："
+                          + "、".join(extra) + "。认为要改别的文件，用 outside 结束这一轮并说明。")
     for rel, digest in approved["test_files"].items():
         p = wt / rel
         if p.is_symlink() or not p.is_file() or sha256_file(p) != digest:
@@ -2376,6 +2482,12 @@ def run_gate(m: Mission, node: str, job: str, result: dict) -> dict:
     if not actual:
         # 这条验收标准已经被之前的提交满足：冻结的检查确认过，没有 diff 可评审，也没有东西可提交
         return {**out, "outcome": "satisfied"}
+    if repair:
+        problem, out["repair"] = repair_gate(m, node, wt, job, repair, actual)
+        if problem and problem[0] == "unavailable":
+            return {**out, "outcome": "unavailable", "reason": problem[1][:500]}
+        if problem:
+            return reject(*problem)
     diff = pending_diff(wt, actual)
     prev = prior_drift(m, node)
     verdict, text = call_review(m, node, wt, diff, "auto", checks_text, prev)
@@ -2465,6 +2577,8 @@ def cmd_gate(args) -> int:
         outcome = run_final(m, args.job, data["tip"])
     elif args.kind == "cross":
         outcome = run_cross(m, args.job, data["tip"])
+    elif args.kind == "diagnose":
+        outcome = run_diagnose(m, args.job, data)
     else:
         outcome = run_ci(m, args.job, data["pr"], data["tip"])
     write_atomic(job_file(m, args.job, "result.json"), json.dumps(outcome, ensure_ascii=False) + "\n")
@@ -2568,6 +2682,8 @@ def finish_job(m: Mission, start: dict, status: str, rc: Optional[int], timed_ou
     elif type_ == "integrate":
         if rc == 0 and read1(node_ctl(m, node) / "state") in INTEGRATED_SCRIPT_STATES:
             fields.update(outcome="integrated", sha=read1(node_ctl(m, node) / "integrated_sha"))
+            for name in ("repair.json", "reopen-prev"):
+                (node_ctl(m, node) / name).unlink(missing_ok=True)
         else:
             fields.update(outcome="failed", reason=read1(job_file(m, job, "err"))[-800:] or f"退出码 {rc}")
     m.append("job-exit", "orc step", **fields)
@@ -2643,8 +2759,14 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
         launch_executor(m, node, None)
         return
     if kind == "node-reopen":
-        launch_executor(m, node, f"mission 的{last.get('stage', '最终审查')}没通过，节点 {node} 被重新打开。纠偏单：\n\n{card_text(last.get('card'))}\n\n"
-                                 "修好后按 commit 格式结束这一轮；acceptance 写这次修的验收标准编号，没有对应的就写 []。")
+        why = ("诊断认为问题在你这个节点的文件里" if last.get("stage") == "修复"
+               else f"mission 的{last.get('stage', '最终审查')}没通过")
+        launch_executor(m, node, f"{why}，节点 {node} 被重新打开。纠偏单：\n\n{card_text(last.get('card'))}\n\n"
+                                 "修好后按 commit 格式结束这一轮；acceptance 写这次修的验收标准编号，没有对应的就写 []。"
+                                 "问题其实不在你的文件里时，用 outside 结束这一轮。")
+        return
+    if kind == "node-unparked":
+        launch_executor(m, node, last["message"])
         return
     if kind == "node-unblocked":
         answer = Path(last["answer"]).read_text(encoding="utf-8").strip()
@@ -2673,6 +2795,8 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
             block_node(m, node, "执行会话提问", f"节点 {node} 的执行会话问：{last['result']['question']}", "ask-user", "executor")
         elif outcome == "test-wrong":
             launch_dispute(m, node, last["result"]["check"], last["result"]["reason"])
+        elif outcome == "outside":
+            park_node(m, node, last["result"]["reason"], last["job"])
         elif outcome == "invalid":
             n = consecutive(job_exits(m, node, "executor"), {"invalid"})
             if n <= RESULT_REPAIRS:
@@ -2719,13 +2843,8 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
                                          f"从上一次通过的提交重新开始。最近一张纠偏单：\n\n{card}", fresh=True)
             else:
                 launch_executor(m, node, f"这次提交被拒了。纠偏单：\n\n{card}\n\n按纠偏单改，改完按格式结束这一轮。")
-        elif outcome == "test-crosses-dag":
-            block_node(m, node, "冻结的测试越过了依赖",
-                       f"节点 {node} 的冻结验收测试用到了不是它前置节点的节点新建的文件，节点工作区里没有这个文件，"
-                       f"执行会话怎么改都过不了，测试冻结后也改不了。\n\n{last.get('reason')}\n\n"
-                       f"要由用户决定：放弃这一轮（`orc abandon --mission {m.name} \"<原因>\"`），重跑时验证会话会重写测试"
-                       "（是 phase 里的 mission 就再运行 `orc phase`）。回答会原样发给执行会话，但它改不了测试。",
-                       "ask-user", "executor")
+        elif outcome == "test-crosses-dag":       # 冻结的测试越过了依赖：执行会话改不了，停下等诊断
+            park_node(m, node, f"冻结的验收测试用到了不是本节点前置节点的节点新建的文件：\n{last.get('reason')}", last["job"])
         else:
             block_node(m, node, "提交关口没能完成评审",
                        f"节点 {node} 的提交关口没能完成，评审不降级、出错时不放行；排除问题后回答「重试」。\n\n"
@@ -2750,11 +2869,9 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
         if outcome == "test-ok":
             launch_executor(m, node, f"独立评审认为冻结的检查 `{last.get('check')}` 没有错：{last.get('reason')}\n\n"
                                      "继续修实现；做完按格式结束这一轮。")
-        elif outcome == "test-wrong":
-            block_node(m, node, "冻结的测试可能有错",
-                       f"节点 {node} 的冻结检查 `{last.get('check')}` 可能有错（执行会话和 review 模型都这样认为），"
-                       "改测试要回到写验证这一步，重新审阅、go、签名，由用户决定。\n\n"
-                       f"review 模型的理由：{last.get('reason')}\n\n回答会原样发给执行会话。", "ask-user", "executor")
+        elif outcome == "test-wrong":            # 修复闭环：停下这个节点，等诊断写好测试的修正、用户签名
+            park_node(m, node, f"执行会话认为冻结的检查 `{last.get('check')}` 有错，review 模型也这样认为：{last.get('reason')}",
+                      last["job"])
         else:
             block_node(m, node, "判断测试对错的评审没能完成",
                        f"节点 {node} 的执行会话认为检查 `{last.get('check')}` 有错，但 review 模型没能给出判断："
@@ -2826,7 +2943,11 @@ def h_executing(m: Mission):
                 continue
             kill_job(start)
             timed_out = True
-        finish_job(m, start, status, rc, timed_out)
+        if start["node"] == MISSION_JOBS:          # 诊断（修复闭环）
+            finish_mission_job(m, start, status, rc, timed_out)
+        else:
+            finish_job(m, start, status, rc, timed_out)
+    unpark_ready(m)
     # 2. 已回答的 blocked 节点解除 blocked
     answered = {e["id"]: e for e in m.events() if e.get("kind") == "answer"}
     for node in tasks:
@@ -2839,7 +2960,8 @@ def h_executing(m: Mission):
     busy = {s["node"] for s in running_jobs(m)}
     for node in tasks:
         evs = node_events(m, node)
-        if evs and node not in busy and evs[-1]["kind"] in ("node-start", "node-unblocked", "job-exit", "node-reopen"):
+        if evs and node not in busy and evs[-1]["kind"] in ("node-start", "node-unblocked", "job-exit", "node-reopen",
+                                                              "node-unparked"):
             decide(m, node, evs[-1], cfg)
     record_node_states(m)
     # 4. 有没回答的问题：mission 进入 blocked（一次一个）
@@ -2874,6 +2996,10 @@ def h_executing(m: Mission):
         return None, True
     if running_jobs(m):
         return "wait", False
+    # 8. 没有别的事可做、有停着的节点：交给诊断（修复闭环）
+    if any(s == "parked" for s in states.values()):
+        source, failed, parked = parked_payload(m)
+        return repair_step(m, mission_tip(m), "node", source, failed, parked)
     stuck = {n: s for n, s in states.items() if s != "integrated"}
     return (f"error mission {m.name} 没有在运行的后台任务，也没有可以启动的节点（{stuck}）。"
             "这是 orc 的 bug；把 events.jsonl 给用户看。"), False
@@ -2882,7 +3008,12 @@ def h_executing(m: Mission):
 # ---------------------------------------------------------------- 验收（阶段 5，STATE.md「验收」）
 
 MISSION_JOBS = "_mission"        # mission 级后台任务（最终审查、等 CI、状态页说明）用的节点名；DAG 节点 id 不以 _ 开头
-FINAL_ROUNDS = 2                 # 最终审查最多打回几轮；连续第 3 次不通过就 mediate
+FINAL_ROUNDS = 2                 # 最终审查的模型判不通过时最多打回几轮；连续第 3 次就 mediate
+FINAL_RUNS = 3                   # 最终审查时每个检查跑几次，任何一次失败都算失败
+DIAG_RUNS = 10                   # 诊断前、修复后，失败的检查各连跑几次
+REVERT_MAX_RUNS = 20             # 撤掉修复后最多跑几次来重现失败（第一次失败就停）
+REPAIR_ROUNDS = 3                # 修复闭环最多几轮（诊断后修代码或改测试各算一轮）；用户回答后清零
+DIAG_REPAIRS = 2                 # 诊断不合格时发回重写的次数
 NOTES_REPAIRS = 2                # 状态页说明不合格时发回修的次数
 MAX_INLINE_DIFF = 60000          # 和 northstar-review 的上限一致：更大的 diff 不放进提示词，让评审用 Read 看代码
 ACCEPT_KEYS = ("required_checks", "ci_timeout_seconds")
@@ -2954,15 +3085,28 @@ def mission_commits(m: Mission, tip: str) -> List[Tuple[str, str]]:
     return [tuple(line.split(" ", 1)) for line in out.splitlines() if line.strip()]  # type: ignore[misc]
 
 
-def final_checks(m: Mission, where: Path) -> Tuple[Dict[str, bool], List[dict], List[dict]]:
-    """合并后的代码上跑全部冻结检查，以及产品仓库自己的 .northstar/checks/run_all.sh（有的话）。"""
+RUN_ALL = {"id": "run-all", "node": None, "command": "bash .northstar/checks/run_all.sh"}
+
+
+def final_checks(m: Mission, where: Path, runs: int = FINAL_RUNS) -> Tuple[Dict[str, bool], List[dict], List[dict]]:
+    """合并后的代码上跑全部冻结检查，以及产品仓库自己的 .northstar/checks/run_all.sh（有的话）。
+    每个检查跑 runs 次，任何一次失败都算失败（偶发失败不再靠运气通过；结果里记 fails / runs，输出取第一次失败的）。"""
     checks = list(approved_checks(m)["checks"])
-    suite = [{"id": "run-all", "node": None, "command": "bash .northstar/checks/run_all.sh"}] \
-        if (where / ".northstar" / "checks" / "run_all.sh").is_file() else []
-    results = run_check_commands(where, checks + suite)
-    for r, c in zip(results, checks + suite):
+    suite = [dict(RUN_ALL)] if (where / ".northstar" / "checks" / "run_all.sh").is_file() else []
+    merged: List[dict] = []
+    for i in range(runs):
+        results = run_check_commands(where, checks + suite)
+        if not merged:
+            merged = [dict(r, fails=0, runs=0) for r in results]
+        for acc, r in zip(merged, results):
+            acc["runs"] += 1
+            if r["rc"] != 0:
+                if acc["fails"] == 0:
+                    acc["rc"], acc["tail"] = r["rc"], r["tail"]
+                acc["fails"] += 1
+    for r, c in zip(merged, checks + suite):
         r["node"] = c.get("node")
-    return {r["id"]: r["rc"] == 0 for r in results}, results, checks + suite
+    return {r["id"]: r["fails"] == 0 for r in merged}, merged, checks + suite
 
 
 def run_final(m: Mission, job: str, tip: str) -> dict:
@@ -2975,16 +3119,11 @@ def run_final(m: Mission, job: str, tip: str) -> dict:
         out["checks"], results, _ = final_checks(m, copy)
     finally:
         shutil.rmtree(copy, ignore_errors=True)
-    failed = [r for r in results if r["rc"] != 0]
+    failed = [r for r in results if r["fails"]]
     if failed:
-        unroutable = [r for r in failed if not r["node"]]
-        issues = [{"node": r["node"], "problem": f"合并后的代码上，检查 `{r['id']}`（`{r['command']}`）没通过，退出码 {r['rc']}",
-                   "evidence": "\n".join(r["tail"])} for r in failed if r["node"]]
-        if unroutable:
-            return {**out, "outcome": "unroutable", "issues": issues,
-                    "reason": "产品仓库自己的检查 .northstar/checks/run_all.sh 在合并后的代码上没通过，落不到某个节点：\n\n"
-                              + "\n".join(unroutable[0]["tail"])}
-        return {**out, "outcome": "rework", "issues": issues}
+        # 不再按检查所属的节点打回：交给诊断会话判断该谁修（修复闭环）
+        return {**out, "outcome": "checks-failed",
+                "failed": [{k: r[k] for k in ("id", "node", "command", "rc", "tail", "fails", "runs")} for r in failed]}
     tasks = approved_tasks(m)
     base = exec_setup(m)["base"]
     diff = run_git(m.repo(), "diff", "--no-color", "--no-renames", f"{base}..{tip}")
@@ -3169,14 +3308,14 @@ def launch_mission_job(m: Mission, kind: str, tip: str, payload: dict) -> None:
     job = f"{MISSION_JOBS}.{kind}.{len(job_starts(m, MISSION_JOBS, kind)) + 1}"
     launch_job(m, kind, MISSION_JOBS, orc_self("gate", "--kind", kind, "--mission", m.name, "--job", job),
                exec_dir(m), json.dumps({"tip": tip, **payload}), tip=tip)
-    label = {"final": "最终审查", "ci": "等 PR 的 CI", "cross": "跨 mission 评审"}[kind]
+    label = {"final": "最终审查", "ci": "等 PR 的 CI", "cross": "跨 mission 评审", "diagnose": "诊断"}[kind]
     print(f"mission {m.name}：{label}开始")
 
 
 def finish_mission_job(m: Mission, start: dict, status: str, rc: Optional[int], timed_out: bool) -> None:
     type_, job = start["type"], start["job"]
     fields: dict = {"job": job, "type": type_, "node": MISSION_JOBS, "rc": rc, "tip": start.get("tip")}
-    if type_ in ("final", "ci", "cross"):
+    if type_ in ("final", "ci", "cross", "diagnose"):
         path = job_file(m, job, "result.json")
         if path.is_file():
             fields.update(json.loads(path.read_text(encoding="utf-8")))
@@ -3208,13 +3347,15 @@ def finish_mission_job(m: Mission, start: dict, status: str, rc: Optional[int], 
     print(f"mission {m.name}：{type_} 结束（{fields.get('outcome')}）")
 
 
-def reopen_node(m: Mission, node: str, issues: List[dict], round_: int, label: str = "最终审查") -> None:
+def reopen_node(m: Mission, node: str, issues: List[dict], round_: int, label: str = "最终审查", note: str = "") -> None:
     """最终审查打回：节点从 integrated 回到 rework。节点分支快进到 mission 分支的 tip（它已经包含全部节点），
     基线也改成这个 tip，之后的提交关口和集成只看这次的修复。复用的 integrate-task.sh 对同一分支再合并一次，不用改。"""
     wt, ctl, work, tip = m.worktree(node), node_ctl(m, node), node_work(m, node), mission_tip(m)
     if changed_paths(wt):
         raise OrcError(f"节点 {node} 的 worktree 有没提交的改动，重新打开前不能覆盖。把这条消息告诉用户。")
     run_git(wt, "merge", "-q", "--ff-only", tip)
+    write_atomic(ctl / "reopen-prev", json.dumps({"ctl": read1(ctl / "state") or "integrated",
+                                                   "work": read1(work / "state") or "integrated"}) + "\n")
     row = read1(ctl / "worktrees.txt").split("\t")
     row[2] = tip
     for d in (ctl, work):
@@ -3223,10 +3364,11 @@ def reopen_node(m: Mission, node: str, issues: List[dict], round_: int, label: s
     k = len(list(work.glob("correction-*.md"))) + 1
     detail = "\n\n".join(f"- **问题**：{i.get('problem', '')}\n  **证据**：{i.get('evidence', '')}" for i in issues)
     card = work / f"correction-{k}.md"
-    write_atomic(card, f"# 纠偏单：节点 {node}，第 {k} 张\n\n## 被打回的原因：mission 的{label}（第 {round_} 轮）没有通过\n\n"
+    why = "诊断认为问题在这个节点的文件里" if label == "修复" else f"mission 的{label}（第 {round_} 轮）没有通过"
+    write_atomic(card, f"# 纠偏单：节点 {node}，第 {k} 张\n\n## 被打回的原因：{why}\n\n"
                        f"{detail}\n\n## 相关验收标准（原文）\n\n{acceptance_lines(m, node)}\n\n"
                        "worktree 已经移到 mission 分支的最新提交上（含其他节点的改动）。只改本节点的声明文件；"
-                       "不要改测试或检查来让它通过。\n")
+                       "不要改测试或检查来让它通过。" + (f"\n\n{note}" if note else "") + "\n")
     write_atomic(ctl / "unresolved-rework", str(card) + "\n")
     m.append("node-reopen", "orc step", node=node, base=tip, card=str(card), round=round_, stage=label)
     print(f"节点 {node}：{label}打回，重新打开（基线 {tip[:12]}）")
@@ -3261,6 +3403,551 @@ def reopen_for(m: Mission, result: dict, type_: str, label: str):
     m.transition("executing", "orc step", reason=f"{label}第 {streak} 轮没通过，打回节点：{'、'.join(by_node)}")
     print(f"mission {m.name}：reviewing → executing（{label}打回 {'、'.join(by_node)}）")
     return None, True
+
+
+# ---------------------------------------------------------------- 修复闭环（proposals/2026-11-08-repair-loop.md）
+#
+# 底线（签名、冻结的测试、scope / forbid、检查和评审、broker、沙箱）写死；出了问题由诊断会话（review 模型）判断该改什么，
+# orc 核对诊断，再按文件归属重新打开节点去修（broker 按签名的 DAG 核对文件，修复也只能由文件所属的节点来改），
+# 修复提交另外过「修复关口」。测试本身有错时由诊断写好修正，用户签名才生效。问用户时，回答会作为提示交给诊断会话。
+
+TEST_DETECT_RE = re.compile(r"\bpytest\b|PYTEST_|\bunittest\b|_pytest|\bconftest\b")
+
+
+def check_command(m: Mission, cid: str) -> Optional[dict]:
+    if cid == RUN_ALL["id"]:
+        return dict(RUN_ALL)
+    return next((dict(c) for c in approved_checks(m)["checks"] if c["id"] == cid), None)
+
+
+def file_owners(m: Mission) -> Dict[str, List[str]]:
+    owners: Dict[str, List[str]] = {}
+    for tid, t in approved_tasks(m).items():
+        for f in t.get("files", []):
+            owners.setdefault(f, []).append(tid)
+    return owners
+
+
+def repair_question_answers(m: Mission, since: int = 0) -> List[str]:
+    """修复问题（repair-question）的回答，按时间顺序：交给诊断会话当提示（「重试」不算提示）。"""
+    evs = m.events()
+    asked = {e["id"] for e in evs[since:] if e.get("kind") == "repair-question"}
+    out = []
+    for e in evs[since:]:
+        if e.get("kind") == "answer" and e.get("id") in asked:
+            text = Path(e["file"]).read_text(encoding="utf-8").strip() if Path(e["file"]).is_file() else ""
+            if text and text != "重试":
+                out.append(text)
+    return out
+
+
+def last_repair_index(m: Mission) -> int:
+    """最近一次「按诊断动手」（repair / test-fix）之后的位置；之后的回答才算新的提示。"""
+    evs = m.events()
+    for i in range(len(evs) - 1, -1, -1):
+        if evs[i].get("kind") in ("repair", "test-fix"):
+            return i + 1
+    return 0
+
+
+def repair_rounds(m: Mission) -> int:
+    """修复闭环已经动手几轮：用户回答过修复问题之后清零。"""
+    count = 0
+    asked = set()
+    for e in m.events():
+        if e.get("kind") == "repair-question":
+            asked.add(e["id"])
+        elif e.get("kind") == "answer" and e.get("id") in asked:
+            count = 0
+        elif e.get("kind") in ("repair", "test-fix"):
+            count += 1
+    return count
+
+
+def ask_repair(m: Mission, reason: str, detail: str, job: Optional[str], retry_hint: str = "") -> None:
+    """停下问用户。回答的内容会作为提示交给诊断会话重新诊断；回答「重试」只重做出错的那一步；放弃用 orc abandon。"""
+    text = (f"{detail.strip()}\n\n可以这样回答（orc 都能直接执行）：\n"
+            f"- 回答你对问题的判断或提示（例如「问题在 xxx，应该……」）：orc 把它交给诊断会话重新诊断，然后接着修。\n"
+            + (f"- 回答「重试」：{retry_hint}\n" if retry_hint else "")
+            + f"- 放弃这一轮：运行 `orc abandon --mission {m.name} \"<原因>\"`（是 phase 里的 mission 就再运行 orc phase 重跑）。")
+    path = m.block(reason, text, "ask-user", "orc step")
+    m.append("repair-question", "orc step", id=path.stem, job=job, reason=reason)
+
+
+def launch_diagnose(m: Mission, tip: str, trigger: str, source: str, failed: List[dict], parked: List[dict],
+                    feedback: str = "") -> None:
+    hints = repair_question_answers(m, last_repair_index(m))
+    payload = {"tip": tip, "trigger": trigger, "source": source, "failed": failed, "parked": parked,
+               "hints": hints, "feedback": feedback}
+    job = f"{MISSION_JOBS}.diagnose.{len(job_starts(m, MISSION_JOBS, 'diagnose')) + 1}"
+    launch_job(m, "diagnose", MISSION_JOBS, orc_self("gate", "--kind", "diagnose", "--mission", m.name, "--job", job),
+               exec_dir(m), json.dumps(payload, ensure_ascii=False), tip=tip, trigger=trigger, source=source)
+    print(f"mission {m.name}：诊断开始（{trigger}）")
+
+
+def diagnosis_problems(m: Mission, tip: str, obj: Optional[dict]) -> List[str]:
+    """orc 对诊断做的确定性核对。"""
+    if not isinstance(obj, dict):
+        return ["最后没有输出 JSON 对象"]
+    kind, problems = obj.get("kind"), []
+    if kind not in ("code", "test", "design"):
+        return [f"kind 只能是 code、test 或 design，不是「{kind}」"]
+    if not isinstance(obj.get("cause"), str) or not obj["cause"].strip():
+        problems.append("cause（根因）不能为空")
+    tests = set(approved_checks(m)["test_files"])
+    owners = file_owners(m)
+    if kind == "code":
+        files = obj.get("files")
+        if not isinstance(files, list) or not files or not all(isinstance(f, str) for f in files):
+            return problems + ["files 必须是非空的文件路径列表"]
+        for f in files:
+            if not safe_rel(f):
+                problems.append(f"文件路径 {f} 不合法：用仓库相对路径")
+            elif f in tests:
+                problems.append(f"{f} 是冻结的验收测试：认为测试有错就用 kind test，并写 test_fix")
+            elif f not in owners:
+                problems.append(f"{f} 不在任何节点声明的 files 里：修复只能改节点的文件。需要改动计划外的文件，说明是设计问题，用 kind design")
+        if not isinstance(obj.get("change"), str) or not obj["change"].strip():
+            problems.append("change（要怎么改）不能为空")
+        evidence = obj.get("evidence")
+        if not isinstance(evidence, list) or not evidence:
+            problems.append("evidence 必须列出至少一处证据 {file, line}（mission 分支最新提交上的文件和行号）")
+        else:
+            for ev in evidence:
+                f, line = (ev.get("file"), ev.get("line")) if isinstance(ev, dict) else (None, None)
+                text = run_git(m.repo(), "show", f"{tip}:{f}", check=False) if isinstance(f, str) and safe_rel(f) else ""
+                if not text:
+                    problems.append(f"证据里的文件 {f} 在 {tip[:12]} 上不存在")
+                elif not isinstance(line, int) or isinstance(line, bool) or not 1 <= line <= len(text.splitlines()):
+                    problems.append(f"证据 {f} 的行号 {line} 不存在（文件有 {len(text.splitlines())} 行）")
+    elif kind == "test":
+        fixes = obj.get("test_fix")
+        if not isinstance(fixes, list) or not fixes:
+            return problems + ["kind 为 test 时 test_fix 必须列出要改的测试 [{file, content}]"]
+        for fx in fixes:
+            f, content = (fx.get("file"), fx.get("content")) if isinstance(fx, dict) else (None, None)
+            if f not in tests:
+                problems.append(f"test_fix 里的 {f} 不是冻结的验收测试")
+                continue
+            if not isinstance(content, str) or not content.strip():
+                problems.append(f"test_fix 里 {f} 的 content 不能为空")
+                continue
+            if content == (m.control / "approved-tests" / f).read_text(encoding="utf-8"):
+                problems.append(f"test_fix 里 {f} 的内容和现在一样")
+            if f.endswith(".py"):
+                try:
+                    import ast
+                    ast.parse(content)
+                except SyntaxError as error:
+                    problems.append(f"test_fix 里 {f} 不是合法的 Python：{error}")
+    return problems
+
+
+def run_diagnose(m: Mission, job: str, data: dict) -> dict:
+    """诊断会话：先由 orc 在 tip 上把失败的检查各连跑 DIAG_RUNS 次（事实），再交给 review 模型判断根因和该改什么。"""
+    import tempfile
+    tip, failed = data["tip"], data.get("failed", [])
+    out: dict = {"tip": tip, "trigger": data.get("trigger"), "source": data.get("source"), "failed": failed, "facts": []}
+    copy = jobs_dir(m) / f"{job}.copy"
+    if failed:
+        git_copy(m.repo(), tip, copy)
+        try:
+            for f in failed:
+                check = check_command(m, f["id"]) or {"id": f["id"], "command": f["command"]}
+                fails = sum(run_check_commands(copy, [check])[0]["rc"] != 0 for _ in range(DIAG_RUNS))
+                out["facts"].append({"id": f["id"], "fails": fails + f.get("fails", 1),
+                                     "runs": DIAG_RUNS + f.get("runs", 1)})
+        finally:
+            shutil.rmtree(copy, ignore_errors=True)
+    base = exec_setup(m)["base"]
+    owners = file_owners(m)
+    rows = []
+    for path in run_git(m.repo(), "diff", "--name-only", f"{base}..{tip}").splitlines():
+        last = run_git(m.repo(), "log", "-1", "--format=%h %s", f"{base}..{tip}", "--", path, check=False)
+        rows.append(f"| `{path}` | {'、'.join(owners.get(path, [])) or '（冻结的测试或不属于节点）'} | {last[:100]} |")
+    test_files = list(approved_checks(m)["test_files"])
+    used = []
+    for f in failed:
+        used += [t for t in check_test_files(f.get("command", ""), test_files) if t not in used]
+    tests = "\n\n".join(f"### {t}\n\n````\n{(m.control / 'approved-tests' / t).read_text(encoding='utf-8')}\n````"
+                        for t in used) or "（失败的检查没有直接跑冻结的测试文件；需要时用 Read 看）"
+    diff = run_git(m.repo(), "diff", "--no-color", "--no-renames", f"{base}..{tip}")
+    diff = (f"```diff\n{diff}\n```" if len(diff.encode()) <= MAX_INLINE_DIFF
+            else "（diff 太大，不放在这里。用 Read 看当前目录里的文件。）\n\n" + run_git(m.repo(), "diff", "--stat", f"{base}..{tip}"))
+    failures = "\n\n".join(
+        f"- 检查 `{f['id']}`（节点 {f.get('node') or '—'}，`{f.get('command', '')}`）："
+        + next((f"在 {x['runs']} 次里失败 {x['fails']} 次" for x in out["facts"] if x["id"] == f["id"]), "")
+        + "\n\n```\n" + "\n".join(f.get("tail", [])) + "\n```" for f in failed) or "（没有失败的检查输出）"
+    parked = "\n\n".join(f"- 节点 `{p['node']}` 停下来，它说：{p['reason']}" + (f"\n\n{p['card']}" if p.get("card") else "")
+                         for p in data.get("parked", [])) or "（无）"
+    hints = "\n".join(f"- {h}" for h in data.get("hints", [])) or "（无）"
+    values = {"{{MISSION}}": m.name, "{{TRIGGER}}": data.get("trigger", ""), "{{FAILURES}}": failures,
+              "{{PARKED}}": parked, "{{HINTS}}": hints, "{{OWNERS}}": "\n".join(rows) or "（没有改动）",
+              "{{DESIGN}}": (m.control / "approved-design.md").read_text(encoding="utf-8").strip(),
+              "{{DAG}}": json.dumps(list(approved_tasks(m).values()), ensure_ascii=False, indent=2),
+              "{{TESTS}}": tests, "{{DIFF}}": diff, "{{TIP}}": tip[:12],
+              "{{FEEDBACK}}": f"## 上一次的诊断没通过 orc 的核对\n\n{data['feedback']}\n" if data.get("feedback") else ""}
+    prompt = (ORC_ROOT / "templates" / "diagnose-brief.md").read_text(encoding="utf-8")
+    for key, value in values.items():
+        prompt = prompt.replace(key, value)
+    cfg = m.roles()["review"]
+    review_dir = Path(tempfile.mkdtemp(prefix="orc-diagnose."))
+    try:
+        export_tree(m, tip, review_dir, drop=(".github",))
+        run = subprocess.run(["claude", "-p", "--model", cfg["model"], "--effort", cfg["effort"], "--output-format", "json",
+                              "--permission-mode", "default", "--allowedTools=Read",
+                              "--session-id", str(__import__("uuid").uuid4())],
+                             input=prompt, cwd=str(review_dir), capture_output=True, text=True, timeout=REVIEW_TIMEOUT,
+                             env=dict(os.environ, ORC_ROLE="diagnose"))
+        write_atomic(job_file(m, job, "review.json"), run.stdout)
+        text, error = claude_result(job_file(m, job, "review.json")) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+    except subprocess.TimeoutExpired:
+        text, error = None, f"超过 {REVIEW_TIMEOUT} 秒没有结束"
+    finally:
+        shutil.rmtree(review_dir, ignore_errors=True)
+    if error:
+        return {**out, "outcome": "unavailable", "reason": error}
+    obj = last_json_object(text or "")
+    problems = diagnosis_problems(m, tip, obj)
+    if problems:
+        return {**out, "outcome": "invalid", "problems": problems}
+    if obj["kind"] == "test":                 # 测试的新内容放在文件里，事件里只记路径
+        fixdir = jobs_dir(m) / f"{job}.test-fix"
+        for fx in obj["test_fix"]:
+            dst = fixdir / fx["file"]
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            write_atomic(dst, fx["content"])
+            fx.pop("content")
+            fx["path"] = str(dst)
+    return {**out, "outcome": "diagnosed", "diagnosis": obj}
+
+
+def diagnose_exits(m: Mission, source: str) -> List[dict]:
+    return [e for e in job_exits(m, MISSION_JOBS, "diagnose") if e.get("source") == source]
+
+
+def consumed(m: Mission, diag: dict) -> bool:
+    return any(e.get("kind") in ("repair", "test-fix", "repair-question") and e.get("job") == diag["job"] for e in m.events())
+
+
+def repair_step(m: Mission, tip: str, trigger: str, source: str, failed: List[dict], parked: List[dict]):
+    """有问题要修：没诊断就诊断；诊断不合格发回；诊断好了就按它动手。调用前已确认没有在跑的 mission 级任务。"""
+    exits = diagnose_exits(m, source)
+    last = exits[-1] if exits else None
+    if last is None or (consumed(m, last) and answered_after(m, last)):
+        launch_diagnose(m, tip, trigger, source, failed, parked)
+        return "wait", False
+    outcome = last.get("outcome")
+    if outcome == "invalid":
+        n = consecutive(exits, {"invalid"}, {"diagnosed"})
+        if n <= DIAG_REPAIRS:
+            launch_diagnose(m, tip, trigger, source, failed, parked, "\n".join(f"- {p}" for p in last["problems"]))
+            return "wait", False
+        if answered_after(m, last):
+            launch_diagnose(m, tip, trigger, source, failed, parked)
+            return "wait", False
+        ask_repair(m, "诊断连续不合格", f"mission {m.name} 的诊断连续 {n} 次没通过 orc 的核对：\n"
+                   + "\n".join(f"- {p}" for p in last["problems"]), last["job"], "重新诊断一次。")
+        return None, True
+    if outcome == "unavailable":
+        if answered_after(m, last):
+            launch_diagnose(m, tip, trigger, source, failed, parked)
+            return "wait", False
+        ask_repair(m, "诊断没能完成", f"mission {m.name} 的诊断会话没能完成（{last.get('reason')}）。"
+                   "评审出错时不放行。", last["job"], "检查登录、代理和额度后重新诊断。")
+        return None, True
+    if consumed(m, last):
+        return (f"error mission {m.name} 的诊断 {last['job']} 已经处理过，但问题还在原地。这是 orc 的 bug；"
+                "把 events.jsonl 给用户看。"), False
+    d = last["diagnosis"]
+    summary = f"诊断（{last['job']}）：{d['cause']}"
+    if d["kind"] == "design":
+        ask_repair(m, "诊断认为是设计问题", f"{summary}\n\n诊断会话认为这不是实现的 bug，计划或设计本身需要改，修复闭环不能自己决定。"
+                   + (f"\n\n它的说明：{d.get('change', '')}" if d.get("change") else ""), last["job"])
+        return None, True
+    if repair_rounds(m) >= REPAIR_ROUNDS:
+        ask_repair(m, f"修复闭环 {REPAIR_ROUNDS} 轮还没修好",
+                   f"mission {m.name} 已经按诊断修了 {REPAIR_ROUNDS} 轮，问题还在。最新的{summary}", last["job"])
+        return None, True
+    if d["kind"] == "test":
+        stage_test_fix(m, last)
+        return None, True
+    return repair_code(m, last)
+
+
+def repair_code(m: Mission, diag: dict):
+    """诊断认为是实现的 bug：按文件归属重新打开节点去修；停着的节点要么撤回打回、要么等修好后继续。"""
+    d, owners_of = diag["diagnosis"], file_owners(m)
+    targets: Dict[str, List[str]] = {}
+    for f in d["files"]:
+        targets.setdefault(owners_of[f][0], []).append(f)
+    states = m.node_states()
+    bad = {n: states[n] for n in targets if states[n] not in ("integrated", "parked")}
+    if bad:
+        ask_repair(m, "要修的节点还没做完", f"诊断（{diag['job']}）：{d['cause']}\n\n要改的文件属于还没做完的节点："
+                   + "、".join(f"{n}（{s}）" for n, s in bad.items()) + "。修复闭环只能重新打开已经集成或停着的节点。", diag["job"])
+        return None, True
+    facts = {x["id"]: x for x in diag.get("facts", [])}
+    checks = [f["id"] for f in diag.get("failed", [])]
+    issue = {"problem": f"诊断：{d['cause']}", "evidence": f"要怎么改：{d['change']}\n\n证据："
+             + "、".join(f"{e['file']}:{e['line']}" for e in d.get("evidence", []))}
+    m.append("repair", "orc step", job=diag["job"], targets=targets, cause=d["cause"], change=d["change"])
+    round_ = repair_rounds(m)
+    for node, files in targets.items():
+        repair = {"job": diag["job"], "files": files, "checks": checks, "tip": diag["tip"],
+                  "fails": sum(facts.get(c, {}).get("fails", 0) for c in checks),
+                  "runs": sum(facts.get(c, {}).get("runs", 0) for c in checks), "solo": len(targets) == 1,
+                  "cause": d["cause"], "change": d["change"]}
+        if states[node] == "integrated" or (node_ctl(m, node) / "unresolved-rework").exists():
+            # 被打回修复的节点：修复关口只放行诊断指定的文件（正常执行中停下的节点还有自己的验收标准要做，不限制）
+            write_atomic(node_ctl(m, node) / "repair.json", json.dumps(repair, ensure_ascii=False, indent=2) + "\n")
+        note = (f"这是修复闭环：只改诊断指定的文件 {'、'.join(f'`{f}`' for f in files)}。修好后 orc 会把失败的检查连跑 "
+                f"{DIAG_RUNS} 次、撤掉修复确认失败能重现，再请评审核对改动就是诊断说的那件事、没有改变别的节点承诺过的行为。")
+        if states[node] == "integrated":
+            reopen_node(m, node, [issue], round_, "修复", note)
+        else:                                   # 停着的节点自己就是要修的
+            unpark_node(m, node, f"诊断认为问题就在你这个节点的文件里。\n\n{issue['problem']}\n\n{issue['evidence']}\n\n{note}\n\n"
+                                  "修好后按 commit 格式结束这一轮；acceptance 写这次修的验收标准编号，没有对应的就写 []。")
+    for node, state in states.items():
+        if state == "parked" and node not in targets:
+            if not withdraw_reopen(m, node):
+                info = json.loads(read1(node_ctl(m, node) / "parked") or "{}")
+                info["waiting"], info["repair"] = sorted(targets), diag["job"]
+                write_atomic(node_ctl(m, node) / "parked", json.dumps(info, ensure_ascii=False) + "\n")
+    if m.state == "reviewing":
+        m.transition("executing", "orc step", reason=f"按诊断重新打开节点修复：{'、'.join(targets)}")
+    return None, True
+
+
+def park_node(m: Mission, node: str, reason: str, source: str) -> None:
+    write_atomic(node_ctl(m, node) / "parked", json.dumps({"reason": reason, "source": source}, ensure_ascii=False) + "\n")
+    m.append("node-parked", "orc step", node=node, reason=reason, source=source)
+    print(f"节点 {node}：停下，等诊断（{reason[:80]}）")
+
+
+def sync_to_tip(m: Mission, node: str) -> Optional[Path]:
+    """把 mission 分支的最新提交合进节点的 worktree（修复或改测试之后），基线改成合并后的提交。没提交的改动先存成补丁撤回。"""
+    wt, ctl, work = m.worktree(node), node_ctl(m, node), node_work(m, node)
+    patch = discard_changes(m, node) if changed_paths(wt) else None
+    run_git(wt, *ORC_GIT, "merge", "-q", "--no-edit", mission_tip(m))
+    row = read1(ctl / "worktrees.txt").split("\t")
+    row[2] = run_git(wt, "rev-parse", "HEAD")
+    for d in (ctl, work):
+        write_atomic(d / "worktrees.txt", "\t".join(row) + "\n")
+    return patch
+
+
+def unpark_node(m: Mission, node: str, message: str) -> None:
+    patch = sync_to_tip(m, node)
+    (node_ctl(m, node) / "parked").unlink(missing_ok=True)
+    if patch:
+        message += f"\n\n（你没提交的改动已存成补丁 {patch} 并撤回；worktree 已合并 mission 分支的最新提交。需要的话从补丁里取回。）"
+    m.append("node-unparked", "orc step", node=node, message=message)
+    print(f"节点 {node}：继续")
+
+
+def withdraw_reopen(m: Mission, node: str) -> bool:
+    """最终审查打回、但问题不在它这里的节点：重新打开后没有任何改动，就撤回这次打回，回到 integrated。"""
+    ctl, work, wt = node_ctl(m, node), node_work(m, node), m.worktree(node)
+    if not (ctl / "unresolved-rework").exists() or changed_paths(wt):
+        return False
+    base = read1(ctl / "worktrees.txt").split("\t")[2]
+    if run_git(wt, "rev-parse", "HEAD") != base:
+        return False
+    prev = json.loads(read1(ctl / "reopen-prev") or '{"ctl": "integrated", "work": "integrated"}')
+    write_atomic(ctl / "state", prev["ctl"] + "\n")
+    write_atomic(work / "state", prev["work"] + "\n")
+    for name in ("unresolved-rework", "parked", "repair.json", "reopen-prev"):
+        (ctl / name).unlink(missing_ok=True)
+    m.append("node-withdrawn", "orc step", node=node, reason="诊断认为问题不在这个节点，它也没有改动")
+    print(f"节点 {node}：撤回打回，回到 integrated")
+    return True
+
+
+def unpark_ready(m: Mission) -> None:
+    """等别的节点修好的停着的节点：那些节点修好、重新集成之后，合并最新提交继续。"""
+    states = m.node_states()
+    for node, state in states.items():
+        if state != "parked":
+            continue
+        info = json.loads(read1(node_ctl(m, node) / "parked") or "{}")
+        waiting = info.get("waiting")
+        if not waiting or any(states.get(w) != "integrated" for w in waiting):
+            continue
+        repair = next((i for i, e in enumerate(m.events()) if e.get("kind") == "repair" and e.get("job") == info.get("repair")), None)
+        if repair is None or any(not [e for e in m.events()[repair:] if e.get("kind") == "job-exit" and e.get("type") == "integrate"
+                                      and e.get("node") == w and e.get("outcome") == "integrated"] for w in waiting):
+            continue
+        unpark_node(m, node, f"你停下来等的问题已经由节点 {'、'.join(waiting)} 修好并集成（诊断 {info.get('repair')}）。"
+                             "worktree 已合并 mission 分支的最新提交。继续当前这条验收标准；做完按格式结束这一轮。")
+
+
+def parked_payload(m: Mission) -> Tuple[str, List[dict], List[dict]]:
+    """停着的节点交给诊断的材料：它说的原因、最近一张纠偏单；被最终审查打回的，带上那次失败的检查。"""
+    parked, failed = [], []
+    finals = [e for e in job_exits(m, MISSION_JOBS, "final")]
+    for node, state in m.node_states().items():
+        if state != "parked":
+            continue
+        info = json.loads(read1(node_ctl(m, node) / "parked") or "{}")
+        cards = sorted(node_work(m, node).glob("correction-*.md"), key=lambda p: int(p.stem.split("-")[1]))
+        parked.append({"node": node, "reason": info.get("reason", ""),
+                       "card": cards[-1].read_text(encoding="utf-8")[-3000:] if cards else ""})
+        if (node_ctl(m, node) / "unresolved-rework").exists() and finals:
+            last = finals[-1]
+            if last.get("failed"):
+                failed += [f for f in last["failed"] if f["id"] not in [x["id"] for x in failed]]
+            else:                                # 旧格式（打回节点的最终审查）：从检查结果和问题里还原
+                evidence = {i.get("node"): i.get("evidence", "") for i in last.get("issues", [])}
+                for cid, ok in last.get("checks", {}).items():
+                    c = check_command(m, cid)
+                    if not ok and c and cid not in [x["id"] for x in failed]:
+                        failed.append({"id": cid, "node": c.get("node"), "command": c["command"],
+                                       "tail": str(evidence.get(c.get("node"), "")).splitlines()[-8:], "fails": 1, "runs": 1})
+    latest = max((i for i, e in enumerate(m.events()) if e.get("kind") == "node-parked"), default=0)
+    return f"parked:{latest}", failed, parked
+
+
+# -- 测试本身有错：诊断写好修正 → 放进 control/（旧的留备份）→ 用户签名才生效；用户回答意见就撤回、重新诊断
+
+def pending_test_fix(m: Mission) -> Optional[dict]:
+    evs = m.events()
+    fixes = [e for e in evs if e.get("kind") == "test-fix"]
+    if not fixes:
+        return None
+    last = fixes[-1]
+    done = any(e.get("kind") in ("test-fix-signed", "test-fix-withdrawn") and e.get("k") == last["k"] for e in evs)
+    return None if done else last
+
+
+def frozen_section(base: str, digest: str, tests: Dict[str, str]) -> str:
+    rows = "".join(f"| `{rel}` | `{h}` |\n" for rel, h in sorted(tests.items()))
+    return (f"\n## 冻结的验收测试\n\n"
+            "下面的测试由独立的验证会话在实现之前写好，和这份文件一起签名。你可以读、可以运行，**不能改、不能删、不能移动**；"
+            "改动它们的提交会被拒绝。你的节点只有在属于它的检查全部通过时才算完成。你可以另外写自己的单元测试"
+            "（放在你的 `files` 里），但它们不算数。\n\n"
+            f"基线提交：`{base}`\n\nchecks 清单的 sha256：`{digest}`（`approved-checks.json`）\n\n"
+            f"| 测试文件 | sha256 |\n| --- | --- |\n{rows}")
+
+
+FIX_BACKUP = ("approved-checks.json", "brief-exec.md", "approved.sha256", "approved.sha256.sig")
+
+
+def stage_test_fix(m: Mission, diag: dict) -> None:
+    """把诊断写好的测试修正放进 control/：更新测试文件、approved-checks.json、brief-exec.md 里的哈希和签名清单，删掉旧签名。
+    旧的文件先备份；用户签名才生效，回答意见就恢复备份。"""
+    import difflib
+    c, d = m.control, diag["diagnosis"]
+    k = len([e for e in m.events() if e.get("kind") == "test-fix"]) + 1
+    backup = m.dir / "repair" / f"test-fix-{k}" / "backup"
+    shutil.rmtree(backup, ignore_errors=True)
+    backup.mkdir(parents=True)
+    for name in FIX_BACKUP:
+        if (c / name).is_file():
+            shutil.copyfile(c / name, backup / name)
+    shutil.copytree(c / "approved-tests", backup / "approved-tests")
+    approved = json.loads((c / "approved-checks.json").read_text(encoding="utf-8"))
+    diffs = []
+    for fx in d["test_fix"]:
+        dst = c / "approved-tests" / fx["file"]
+        old, new = dst.read_text(encoding="utf-8"), Path(fx["path"]).read_text(encoding="utf-8")
+        diffs.append("".join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), f"a/{fx['file']}", f"b/{fx['file']}")))
+        write_atomic(dst, new)
+        approved["test_files"][fx["file"]] = hashlib.sha256(dst.read_bytes()).hexdigest()
+    text = json.dumps(approved, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    write_atomic(c / "approved-checks.json", text)
+    brief = (c / "brief-exec.md").read_text(encoding="utf-8")
+    start = brief.index("\n## 冻结的验收测试\n")
+    nxt = brief.find("\n## ", start + 1)
+    brief = brief[:start] + frozen_section(approved["base"], hashlib.sha256(text.encode()).hexdigest(), approved["test_files"]) \
+        + (brief[nxt:] if nxt != -1 else "")
+    write_atomic(c / "brief-exec.md", brief)
+    names = [line.split("  ", 1)[1] for line in (c / "approved.sha256").read_text(encoding="utf-8").splitlines() if "  " in line]
+    write_atomic(c / "approved.sha256", "".join(f"{hashlib.sha256((c / n).read_bytes()).hexdigest()}  {n}\n" for n in names))
+    (c / "approved.sha256.sig").unlink(missing_ok=True)
+    diff_path = m.dir / "repair" / f"test-fix-{k}" / "test.diff"
+    write_atomic(diff_path, "\n".join(diffs))
+    m.append("test-fix", "orc step", job=diag["job"], k=k, files=[fx["file"] for fx in d["test_fix"]],
+             backup=str(backup), diff=str(diff_path), cause=d["cause"])
+    control = os.path.realpath(c)
+    q = (f"诊断（{diag['job']}）认为冻结的验收测试本身有错：{d['cause']}\n\n修正（{diff_path}）：\n\n```diff\n"
+         + "\n".join(diffs)[:6000] + "\n```\n\n"
+         f"- 同意：在你自己的终端运行 `northstar approve-mission {control}`，核对后输入 SEAL 并按 Touch ID。签名后 orc 把修正提交到 "
+         "mission 分支，接着往下走，已经做好的工作都保留。\n"
+         "- 不同意：回答你的意见。orc 撤回这个修正（恢复签名过的旧测试），把你的意见交给诊断会话重新诊断。\n"
+         f"- 放弃这一轮：运行 `orc abandon --mission {m.name} \"<原因>\"`。")
+    path = m.block("等用户确认测试的修正", q, "ask-user", "orc step")
+    m.append("repair-question", "orc step", id=path.stem, job=diag["job"], reason="测试修正", test_fix=k)
+    print(f"mission {m.name}：诊断认为测试有错，修正已放进 control/，等用户签名（northstar approve-mission {control}）")
+
+
+def signature_ok(m: Mission) -> bool:
+    control = os.path.realpath(m.control)
+    northstar = northstar_root() / "bin" / "northstar"
+    if not (m.control / "approved.sha256.sig").is_file():
+        return False
+    if subprocess.run([str(northstar), "verify-mission", control], capture_output=True).returncode != 0:
+        return False
+    return subprocess.run([sys.executable, str(SCRIPTS / "verify-approved-authority.py"), "--control-dir", control],
+                          capture_output=True).returncode == 0 and verify_frozen_checks(m) is None
+
+
+def test_fix_step(m: Mission) -> Optional[str]:
+    """step 开头：有等签名的测试修正时，签了就生效，用户回答了意见就撤回；都没有就照常停在问题上。返回 None 表示照常往下走。"""
+    fix = pending_test_fix(m)
+    if fix is None:
+        return None
+    q = next(e for e in m.events() if e.get("kind") == "repair-question" and e.get("test_fix") == fix["k"])
+    answered = q["id"] in m.replay()["answered"]
+    if signature_ok(m):
+        finalize_test_fix(m, fix, q, answered)
+        return None
+    if answered:
+        withdraw_test_fix(m, fix)
+        return None
+    return f"ask-user {(m.dir / 'questions' / (q['id'] + '.md')).read_text(encoding='utf-8').strip()}"
+
+
+def finalize_test_fix(m: Mission, fix: dict, q: dict, answered: bool) -> None:
+    parent = parent_worktree(m)
+    approved = approved_checks(m)
+    for rel in fix["files"]:
+        shutil.copyfile(m.control / "approved-tests" / rel, parent / rel)
+    run_git(parent, "add", "--", *fix["files"])
+    clauses = sorted({c for t in approved_tasks(m).values() for c in t.get("clauses", [])}, key=lambda c: int(c[1:]))
+    prefix = f"[{','.join(clauses)}]" if clauses else "[orc]"
+    run_git(parent, *ORC_GIT, "commit", "-q", "-m",
+            f"{prefix} orc：冻结 mission {m.name} 的验收测试（第 {fix['k']} 次修正，用户已签名）\n\n根因: {fix['cause']}")
+    for rel, digest in approved["test_files"].items():
+        if sha256_file(parent / rel) != digest:
+            raise OrcError(f"修正后 mission 分支上的验收测试 {rel} 和签名的哈希不一致。把这条消息告诉用户。")
+    tip = mission_tip(m)
+    if not answered:
+        answer = m.dir / "answers" / f"{q['id']}.md"
+        write_atomic(answer, "已签名同意测试的修正。\n")
+        m.append("answer", "orc step", id=q["id"], file=str(answer))
+    m.append("test-fix-signed", "orc step", k=fix["k"], tip=tip)
+    for node, state in m.node_states().items():   # 已开工、没集成的节点要拿到新测试；停着的节点继续
+        if state in ("pending", "integrated"):
+            continue
+        if state == "parked":
+            unpark_node(m, node, f"冻结的验收测试已按诊断修正，用户签了名（{fix['diff']}）。worktree 已合并最新提交。"
+                                 "继续当前这条验收标准；做完按格式结束这一轮。")
+        else:
+            sync_to_tip(m, node)
+    print(f"mission {m.name}：测试修正已签名并提交（{tip[:12]}）")
+
+
+def withdraw_test_fix(m: Mission, fix: dict) -> None:
+    backup, c = Path(fix["backup"]), m.control
+    shutil.rmtree(c / "approved-tests", ignore_errors=True)
+    shutil.copytree(backup / "approved-tests", c / "approved-tests")
+    for name in FIX_BACKUP:
+        (c / name).unlink(missing_ok=True)
+        if (backup / name).is_file():
+            shutil.copyfile(backup / name, c / name)
+    m.append("test-fix-withdrawn", "orc step", k=fix["k"])
+    print(f"mission {m.name}：用户没有同意测试修正，已恢复签名过的测试，重新诊断")
 
 
 def issues_text(issues: List[dict]) -> str:
@@ -3308,7 +3995,9 @@ def h_reviewing(m: Mission):
         launch_mission_job(m, "final", tip, {})
         return "wait", False
     outcome = final.get("outcome")
-    if outcome == "rework":
+    if outcome == "checks-failed":           # 修复闭环：诊断会话判断该谁修，不再按检查所属的节点打回
+        return repair_step(m, tip, "final", final["job"], final["failed"], [])
+    if outcome == "rework":                  # 最终审查的模型判不通过：它已经把问题落到了节点上
         return reopen_for(m, final, "final", "最终审查")
     if outcome != "passed":
         why = final.get("reason", "")
@@ -3334,13 +4023,20 @@ def h_reviewing(m: Mission):
         pr = current_pr(m, tip) or ensure_pr(m, tip)
     except OrcError as error:
         return f"error {error}", False
+    ci_all = [e for e in job_exits(m, MISSION_JOBS, "ci") if e.get("tip") == tip]
+    if ci_all and ci_all[-1].get("outcome") != "passed":
+        q = next((e for e in reversed(m.events()) if e.get("kind") == "repair-question" and e.get("job") == ci_all[-1]["job"]), None)
+        hints = repair_question_answers(m, event_index(m, q)) if q else []
+        if hints:                            # 用户看过考题输出后给了提示：进入修复闭环
+            return repair_step(m, tip, "ci", ci_all[-1]["job"], [], [{"node": "CI", "reason": ci_all[-1].get("reason", "")}])
     ci = mission_exit(m, "ci", tip)
     if ci is None:
         launch_mission_job(m, "ci", tip, {"pr": pr["url"]})
         return "wait", False
     if ci.get("outcome") != "passed":
-        m.block("PR 的 CI 没通过", f"mission {m.name} 的 PR {pr['url']} 的 CI 没通过：{ci.get('reason')}\n\n"
-                "隐藏考题只报通过或失败，orc 不知道具体是哪一题。处理后回答「重试」，orc 会重新等 CI。", "ask-user", "orc step")
+        ask_repair(m, "PR 的 CI 没通过", f"mission {m.name} 的 PR {pr['url']} 的 CI 没通过：{ci.get('reason')}\n\n"
+                   "隐藏考题只报通过或失败，orc 不知道具体是哪一题。你看过考题的输出后，把哪里不对告诉 orc，它会诊断并修复。",
+                   ci["job"], "只重新等 CI（例如 CI 本身出了故障、已经重跑）。")
         return None, True
     # 3. 进入 accepted 前重新核对
     try:
@@ -3498,7 +4194,8 @@ def render_status(m: Mission, tip: str) -> str:
 
     # 最终审查、PR、CI
     def round_line(e: dict) -> str:
-        verdict = {"passed": "通过", "rework": "打回节点", "unavailable": "没能完成", "unroutable": "落不到节点"}.get(e.get("outcome"), e.get("outcome"))
+        verdict = {"passed": "通过", "rework": "打回节点", "unavailable": "没能完成", "unroutable": "落不到节点",
+                   "checks-failed": "检查没过，进入修复闭环"}.get(e.get("outcome"), e.get("outcome"))
         issues = "".join(f"<li>节点 <code>{esc(str(i.get('node')))}</code>：{esc(str(i.get('problem', '')))}</li>" for i in e.get("issues", []))
         return f"<li>第 {rounds.index(e) + 1} 轮（<code>{str(e.get('tip', ''))[:12]}</code>）：{verdict} {ref(e)}" + (f"<ul>{issues}</ul>" if issues else "") + "</li>"
     suite = final_checks_.get("run-all")
@@ -3581,6 +4278,9 @@ def step(mission: Mission) -> Next:
             ctx = mission.replay()
             effective = ctx["blocked_from"] if ctx["state"] == "blocked" else ctx["state"]
             if effective in APPROVED_STATES:
+                waiting = test_fix_step(mission)      # 测试修正等签名：签了才生效，回答意见就撤回
+                if waiting:
+                    return waiting
                 problem = verify_approval(mission)
                 if problem:
                     return problem
@@ -4688,7 +5388,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--mission", required=True)
     p.set_defaults(func=cmd_go)
     p = sub.add_parser("gate", help="（orc 内部用）提交关口或整体评审的后台任务")
-    p.add_argument("--kind", choices=("gate", "submit", "final", "ci", "cross"), required=True)
+    p.add_argument("--kind", choices=("gate", "submit", "final", "ci", "cross", "diagnose"), required=True)
     p.add_argument("--mission", required=True)
     p.add_argument("--job", required=True)
     p.set_defaults(func=cmd_gate)

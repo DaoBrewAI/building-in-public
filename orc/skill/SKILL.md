@@ -25,7 +25,7 @@ In a phase, an action names its mission: `<kind> [<m>] …`; use `--mission <m>`
 | `wait` | Run `orc wait` (same `--product/--phase` or `--mission`) in the background; when it returns, loop. Say nothing to the user. |
 | `go-gate <url>` | Send the URL. Changes → `orc revise --mission <m> "<their words>"`. Go → `orc go --mission <m>`. |
 | `sign <dir>` | User runs `northstar approve-mission <dir>` in their own terminal (Touch ID). Loop after they confirm. |
-| `ask-user <q>` | Ask exactly that; reply → `orc answer --mission <m> "<reply>"`. Without `[m]` it is a phase question: follow its text (e.g. `orc done`). |
+| `ask-user <q>` | Ask exactly that; reply → `orc answer --mission <m> "<reply>"`. Without `[m]` it is a phase question: follow its text (e.g. `orc done`). Repair-loop questions list what the user can do (reply with a hint, sign a test fix with `northstar approve-mission`, or `orc abandon`): relay them whole, never answer them yourself. |
 | `mediate <file>` | Answer from what is decided (rule 3): `orc answer --mission <m> --file <file> "<answer>"`. |
 | `report <url>` | Give the URL and a two-line summary; in a phase, tell the user the PR is theirs to merge, then loop. |
 | `canvas <url>` | Send the URL; the user signs it with `northstar seal`. |

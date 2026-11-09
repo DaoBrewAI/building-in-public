@@ -162,7 +162,7 @@ pending → running → submitted → integrated
 - **检查挂在哪个节点上**（2026-11-08 加，brief 里的规则）：挂在节点 X 上的检查只能依赖 X 和它前置节点的改动；跑整套测试这类检查挂在依赖了所有相关节点的节点上。起因：mission `subtract` 实跑时，跑整套测试的检查挂在了前置节点上，要等后续节点做完才会通过，节点永远完成不了。其中「导入」这一部分 orc 会查（下一条）；其余（例如测试依赖别的节点改过的已有文件的新行为）仍只靠 brief。
 - **orc 校验**：每条验收标准至少一个检查；每个节点至少一个 `fail` 检查；测试文件只能是新文件，不能和任何节点的 `files` 重叠，不能在 `.northstar/`、`.github/`、`.git/` 下；**检查跑到的测试只能导入本节点和前置节点新建的文件**（`test_dependency_problems`，`proposals/2026-11-08-test-imports-follow-dag.md`）：从检查命令里找出它跑的 `.py` 测试文件（写了目录就是目录下的全部），顺着它导入的其他测试文件和上层目录的 `conftest.py`，读出每条 `import`（文件开头和函数里面的），导入根是仓库根、`src/` 和测试文件所在目录；用到的文件在起点上不存在、由不是本节点也不是它前置节点（层层往上）的节点新建，就退回验证会话。这一层只看 `import` 语句，不看字符串。
 - **依赖复核（模型找、orc 核对）**：写死的检查都过了，并且有检查碰得到别的节点的新文件时，orc 再用 `review_light` 模型（不给工具，`templates/test-deps-brief.md`）读一遍 DAG、检查和测试全文，找运行时才会用到别的节点新文件的地方（`"模块:名字"` 字符串交给会导入它的代码、`importlib`、子进程里的代码、按路径读文件；只拿来比较的字符串不算）。模型每一条都要原样引用测试里的一行；orc 逐条核对：检查存在且跑到这个测试、这一行真的在测试里、这一行写着那个文件的模块名或路径、文件由不是前置节点的节点新建。核对上的才退回验证会话，核对不上的丢掉，都记进 `test-deps-review` 事件。模型出错或超时不放行：`next: error`，再运行 `orc step` 重试。
-- **提交关口兜底**：上面两层都漏了时，节点的检查会在提交关口失败在导入上。orc 看失败输出里的导入错误：错误里的模块是不是前置节点的节点新建的（节点工作区里没有），并且冻结的测试自己写着这个模块，就判定是冻结的测试越过了依赖（`test-crosses-dag`），不退回执行会话，直接停下问用户（放弃这一轮再重跑）。实现代码去导入别的节点的文件（测试没写这个模块）仍照常退回执行会话。
+- **提交关口兜底**：上面两层都漏了时，节点的检查会在提交关口失败在导入上。orc 看失败输出里的导入错误：错误里的模块是不是前置节点的节点新建的（节点工作区里没有），并且冻结的测试自己写着这个模块，就判定是冻结的测试越过了依赖（`test-crosses-dag`），不退回执行会话，节点停下交给修复闭环（多半是诊断写好测试的修正、用户签名，不用重跑）。实现代码去导入别的节点的文件（测试没写这个模块）仍照常退回执行会话。
 - **检查用的副本**（验证、提交关口、最终审查都一样）：`git clone --shared` 产品仓库再检出对应提交，不跑 git hook。产品仓库自己的检查要用 git（daoharness-core 的 `core_checks.py` 用 `git ls-files`、`git merge-base origin/main HEAD` 比起点），所以副本不能只是文件（`proposals/2026-11-08-checks-need-git.md`）。`--shared` 只读产品仓库的对象，不写它；副本里的 `origin/<分支>` 就是产品仓库本地的分支。给验证会话读的 `repo/` 和给评审模型看的副本仍然只有文件。
 - **实际运行**：orc 用当前提交做一份干净的副本（带 git 历史，见下面「检查用的副本」），只放入列出的测试文件，在 macOS 沙箱（`sandbox-exec`）里逐条运行：只能写这份副本（`TMPDIR` 也指向里面），不能联网，每条最多 300 秒。`fail` 的必须失败，`pass` 的必须通过。产品仓库在验证期间有新提交时停下，`next: error`。
 - **通过**：复制进 mission 的 `verify/`，写 `verify-ready`，状态进入 `plan-review`。
@@ -208,6 +208,7 @@ pending → running → submitted → integrated
 
 | `status` | 其他字段 | orc 怎么处理 |
 | --- | --- | --- |
+| `outside` | `reason`（问题在哪、为什么不在本节点的文件里） | 节点停下（`parked`），交给修复闭环 |
 | `commit` | `acceptance`（这次完成的第几条，从 1 开始；rework 时可以为空）、`files`（改了哪些文件）、`message`（提交说明：第一行一句话；仓库约定要求的正文空一行写在后面，orc 原样保留，第一行前面加 `[N#] 节点名：`）、`notes`（遗留问题，可以为空；写进节点的 `report.md`） | 交给提交关口 |
 | `question` | `question` | 节点 `blocked`，mission 进入 `blocked`（ask-user），回答发回同一个会话 |
 | `test-wrong` | `check`（检查 id）、`reason` | 交给 `review` 模型判断冻结的测试有没有错（见下） |
@@ -239,7 +240,7 @@ pending → running → submitted → integrated
 执行会话输出 `test-wrong` 后，orc 用 `review` 模型新开一个只读会话（`claude -p`，只放行 Read），给它设计、本节点的 DAG 条目、测试全文、检查输出和执行会话的理由，要它输出 `{"verdict": "test-ok" | "test-wrong", "reason": "…"}`。
 
 - `test-ok`：带着理由发回执行会话，继续修实现。
-- `test-wrong`：节点 `blocked`，mission `ask-user`：改测试要回到写验证这一步，重新审阅、go、签名，由用户决定。
+- `test-wrong`：节点停下（`parked`），交给修复闭环：诊断会话写好测试的修正，用户签名后生效（见「修复闭环」）。
 
 ### 整体评审和集成
 
@@ -269,7 +270,8 @@ pending → running → submitted → integrated
 ### 1. 最终审查（后台任务 `final`）
 
 - 用 mission 分支的 tip 做一份检查用的副本（带 git 历史），在沙箱里重跑**全部**冻结检查，再跑产品仓库自己的 `.northstar/checks/run_all.sh`（有的话）。规则同提交关口：只能写副本、不能联网、每条最多 300 秒。
-- 有冻结检查没通过：按检查所属的节点打回，**不调用模型**。`run_all.sh` 没通过时落不到节点，停下 `mediate`。
+- 每个检查跑 3 次，任何一次失败都算失败（`fails` / `runs` 记在结果里），偶发失败不再靠运气通过。
+- 有检查没通过（冻结检查或 `run_all.sh`）：结果是 `checks-failed`，**不按检查所属的节点打回**，交给修复闭环（见下）。不调用最终审查的模型。
 - 检查都通过：`review` 角色的模型（`claude -p`，只放行 Read）在仓库外的临时目录里看代码副本。副本不带 `.northstar/` 和 `.github/`，Stop hook 不会拦它。提示词里有 NORTHSTAR、签名的设计、DAG、检查结果和整个 mission 的 diff；diff 超过 60000 字节就只给文件列表，让它用 Read 看。模板 `orc/templates/final-review-brief.md`。它最后输出 `{"verdict": "pass" | "fail", "issues": [{"node", "problem", "evidence"}]}`；每个问题必须落在一个 DAG 节点上。格式不对、节点不存在、模型出错，都**不放行、不降级**，停下 `ask-user`，回答后重做。
 
 ### 2. 打回节点（审查不通过）
@@ -281,12 +283,47 @@ pending → running → submitted → integrated
 - 之后和阶段 4 一样：提交关口、整体评审、`integrate-task.sh` 再合并一次（对同一个分支再合并，复用脚本不用改），全部集成后回到 `reviewing`，新的 tip 再做一次最终审查。
 - 最多打回 2 轮。第 3 次不通过就熔断，mission `blocked`（`mediate`），回答后重新做最终审查，计数清零。
 
+### 修复闭环（`proposals/2026-11-08-repair-loop.md`）
+
+**底线写死，修 bug 时由模型判断。** 底线：签名和哈希、冻结的测试只读（改测试要用户签名）、scope / forbid、NORTHSTAR 和 `run_all.sh`、每个提交先过检查再过评审（出错不放行）、broker 的 `diff_sha256`、沙箱、不改写历史、CI 必须通过。默认做法（节点只改自己的文件、打回失败检查所属的节点等）在修 bug 时由诊断会话判断怎么变通，orc 再核对结果有没有守住底线。
+
+**什么时候进入**：最终审查的检查没通过（`checks-failed`）；CI 没通过且用户给了提示；执行中的节点停下（`parked`）且没有别的事可做。节点停下的情形：执行会话输出 `outside`、判断测试对错的评审认为测试有错（`test-wrong`）、提交关口判定冻结的测试越过了依赖（`test-crosses-dag`）。停下的节点不挡其他节点；等到没有在跑的任务、也没有能启动的节点时，统一交给诊断。
+
+**1. 诊断**（mission 级后台任务 `diagnose`，`review` 角色，只放行 Read，在 tip 的代码副本里，模板 `templates/diagnose-brief.md`）
+- orc 先查事实：失败的检查在 tip 上再连跑 10 次（`facts`：`fails` / `runs`，含最终审查那 3 次）；mission 改动的每个文件属于哪个节点、最后一次由哪个提交改。
+- 交给诊断会话：失败的输出和事实、停下的节点说的原因和最近一张纠偏单、用户的提示（修复问题的回答，「重试」不算）、签名的设计、DAG、失败的检查跑的冻结测试全文、mission 的全部改动。
+- 它输出 `{"kind": "code" | "test" | "design", "cause", "files", "change", "evidence": [{"file", "line"}], "test_fix": [{"file", "content"}]}`。
+- orc 确定性核对：`code` 的文件必须是某个节点声明的文件、不能是冻结的测试，证据里的文件和行号在 tip 上存在；`test` 的文件必须是冻结的测试，内容非空、和现在不同、Python 能解析。核对不过就带着问题发回重写，2 次还不对才问用户。诊断出错不放行：问用户，回答「重试」重新诊断。
+
+**2. 按诊断动手**
+- `code`：broker 按签名的 DAG 核对每个节点能改的文件（底线），所以由**文件所属的节点**来修。已集成的节点重新打开（`node-reopen`，`stage` 是「修复」），控制目录里写 `repair.json`（诊断指定的文件、失败的检查、诊断时的 tip 和失败次数），纠偏单带上根因、改法和证据；停着的节点本身就是要修的，就合并最新提交后继续。其他停着的节点：被打回后没有任何改动的，撤回打回（`node-withdrawn`，回到 integrated）；否则等要修的节点重新集成后，合并 mission 分支的最新提交继续（`node-unparked`；没提交的改动先存成补丁）。要修的节点还没做完时，问用户。
+- `test`：把修正放进 control/（`approved-tests/`、`approved-checks.json`、`brief-exec.md` 里的哈希、`approved.sha256`），旧文件备份到 `repair/test-fix-<k>/backup/`，删掉旧签名，停下问用户（问题里有修正的 diff）。用户运行 `northstar approve-mission` 签名就是同意：orc 把修正提交到 mission 分支（提交说明含「orc：冻结 mission … 的验收测试（第 k 次修正，用户已签名）」和「根因:」），已开工没集成的节点合并最新提交，停着的节点继续。用户回答意见就是不同意：恢复备份，意见交给诊断会话重新诊断。等签名期间每次 step 先做这一步，不报签名错误。
+- `design`：问用户。
+- 修复闭环最多 3 轮（修代码或改测试各算一轮），用户回答修复问题后清零。
+
+**3. 修复关口**（节点有 `repair.json` 时，在普通提交关口之外）
+- 文件：改的文件只能是诊断指定的。
+- 证明修好了（诊断只涉及这一个节点、有失败的检查时）：失败的检查在修复后的副本上连跑 10 次，必须全部通过。
+- 撤掉修复失败要重现：节点的基线就是诊断时的 tip、诊断时测到过失败，就是撤掉修复后的状态，直接引用；否则在基线上重跑，最多 20 次，第一次失败就停；一次都没失败就不放行（`unavailable`，问用户）。
+- 修复改动的非测试代码里，新增的行不能出现 `pytest`、`PYTEST_`、`unittest`、`conftest` 或冻结测试的文件名（`cheat`）。
+- 修复评审（`review` 角色，没有工具，模板 `templates/repair-review-brief.md`）：给它诊断、改动、设计和整个 DAG，回答「改动是不是诊断说的那件事、有没有别的改动」「有没有改变某个节点承诺过的行为」，`{"verdict": "ok" | "reject"}`。不放行就是纠偏单；出错不放行。
+- 之后照常走对齐评审和 broker。记录在关口结果的 `repair` 里（修复后各跑几次、撤掉修复的结果、评审结论）。
+
+**问用户**：修复闭环的问题都写明回答方式，orc 都能直接执行：回答提示（交给诊断会话重新诊断）、回答「重试」（只在出错时）、签名（测试修正）、`orc abandon`。
+
+| `kind` | 额外字段 |
+| --- | --- |
+| `node-parked` / `node-unparked` / `node-withdrawn` | `node`、`reason` 或 `message` |
+| `repair` | `job`（诊断任务）、`targets`（节点 → 文件）、`cause`、`change` |
+| `test-fix` / `test-fix-signed` / `test-fix-withdrawn` | `k`、`files`、`backup`、`diff` |
+| `repair-question` | `id`、`job`、`reason` |
+
 ### 3. PR 和 CI（后台任务 `ci`）
 
 - 产品仓库没有 `origin` 时停下（`next: error`），说明要先建远程仓库。不跳过。
 - 把 `orc/<mission>` 推到 `origin`，用 `gh` 开一个指向默认分支的 PR；已经有这个分支的 open PR 就用它。记 `pr` 事件。**合并由你来做。**
 - 等 CI：每隔 20 秒查一次 `gh pr checks`，直到 `orc/config/orc.toml` 的 `[acceptance] required_checks`（默认 `verify,exam`）每一个都出现并结束，最多 `ci_timeout_seconds`。只有 `pass` 算通过；`skipping`（草稿 PR 上跳过的考题）不算。PR 的 head 不是审查过的 tip 时直接判失败。
-- CI 没通过、超时：停下 `ask-user`。隐藏考题只报通过或失败，orc 不知道是哪一题，所以不自动打回节点。回答后只重等 CI，不重做最终审查。
+- CI 没通过、超时：停下 `ask-user`。隐藏考题只报通过或失败，orc 不知道是哪一题。回答「重试」只重等 CI；回答别的内容（用户看过考题输出后的提示）就进入修复闭环，提示交给诊断会话。
 
 ### 4. 进入 `accepted` 前重新核对
 
