@@ -466,3 +466,38 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 | 1 两条卡死的重新集成路径 | `launch_integrate` 先比 HEAD 和最近一次 aligned 评审的 `head`，不等就回到整体评审再集成；「集成失败」提示跟着改；重新打开后没有改动的节点在 `run_submit` 就撤回，不拿空 diff 评审 |
 | 2 入口要搬过来的约束 | 第三节「入口」加三条：核对 `modelUsage`（写成底线，最终审查、跨 mission 评审一起补）、材料从签名的来源取、隔离运行；第 8 条决定引用它们；第 6 条决定写明只对新 mission 生效 |
 | 3 轮数前后矛盾 | 统一成 11-10 的「第二次还是 drift 就问你」：mission 结束时偏离评审打回 1 轮；已定决定表加一行改 `FINAL_ROUNDS`；跨 mission 评审仍是 2 轮 |
+
+## 第四版的独立评审意见（2026-11-14）
+
+评审对象是 `0d6700f`，行号以 `f2682fb`（#19）为准。结论：「回到整体评审」和修复闭环、重新打开的状态机不冲突；`modelUsage` 的严格写法方向对（误拦时是停下问人，不是悄悄放行），但上线前要先实测。有一处要改：撤回不能挪进 `run_submit`。按严重程度排列。
+
+### 1.【要改】撤回不能放进 `run_submit`
+
+- `run_submit` 是后台任务：`cmd_gate` 只写 `result.json`（`orc/bin/orc:2556-2620` 里没有 `m.append`），不拿生命周期锁；STATE「后台任务和事件」定的是「任务自己跑，下一次 `orc step` 读到结果，在锁里写 `job-exit`」。
+- `withdraw_reopen`（`:3943-3963`）要改两份 `state`、删 `unresolved-rework`、`parked`、`repair.json`、`reopen-prev`，还写 `node-withdrawn` 事件。放进后台任务，就是在锁外改状态、写事件，和 broker、`integrate-task.sh`（它们在锁里读这些文件）抢。
+- **要改：** `run_submit` 发现「有 `reopen-prev`、HEAD 等于基线」时，不评审，只返回一个结果（比如 `outcome: "unchanged"`）；由 `orc step` 在锁里处理这个结果时调用 `withdraw_reopen`。
+
+### 2.「回到整体评审」和状态机：不冲突（核过）
+
+- **分流的位置：** `launch_integrate` 由 `orc step` 在锁里调用（第 5 步 `:3002-3009`，以及 `resume == "integrate"`）。HEAD 不等于最近一次 aligned 的 `head` 时调用 `launch_submit`（写 `job-start`），节点仍是 submitted；评审 aligned 后，第 5 步再走到 `launch_integrate`，这次 HEAD 对得上。不要在 `launch_integrate` 里直接跑评审。
+- **测试修正那条路：** `sync_to_tip` 同时把基线改成 tip（`:3892` 起），重新评审的 diff（基线..HEAD）仍然只是节点自己没集成的改动；检查按新测试重跑，正是需要的。
+- **修复闭环：** `repair.json` 只在提交关口起作用，整体评审不受影响；重新打开的节点照常走提交关口 → 整体评审 → 集成。
+- **drift 计数：** 重新评审发生在一次 aligned 之后，「从上一次 aligned 以来连续」自然从 0 开始，不会因为这次分流多算一次。
+- **建议（次要）：** 分流时记一条事件（比如 `integrate-deferred`，带旧 `head`、新 HEAD、原因），状态页和事后排查能看到为什么又评审了一次。
+
+### 3.【要改】`FINAL_ROUNDS` 要拆成两个
+
+- `reopen_for` 对最终审查和跨 mission 评审用的是同一个常量（`:3466-3467`，`streak > FINAL_ROUNDS`；`final_streak` 按类型分开计数，`:3452-3461`）。
+- 只把 `FINAL_ROUNDS` 改成 1，跨 mission 评审也会变成 1 轮，和「跨 mission 评审仍是 2 轮」矛盾。
+- **要改：** 第 3 个 PR 里拆成两个常量（偏离评审 1、跨 mission 2），列进要改的地方；`STATE.md:284`「最多打回 2 轮」跟着改。
+
+### 4. `modelUsage` 的严格写法：方向对，上线前先实测
+
+- **误拦的代价是响的：** 判「不可用」就停下问你，不会悄悄放行。所以先严格是对的。
+- **可能误拦的三种情况（未在本机实测，按 Claude Code 的已知行为推断）：**
+  - Claude Code 有时会在后台用小模型做辅助工作。真出现的话，每次评审都判不可用，第一个 phase 会在每个节点停下。
+  - `modelUsage` 的键可能和配置的 id 写法不完全一样（比如带上下文长度后缀）。比较前要先规范化，规范化规则写进代码和测试。
+  - 反过来，`review` 和 `implement` 配成同一个模型时，这条核对会通过。mission 开始时加一条确定性检查：两者不能相同（现在 `:180` 只查 `fallback`）。
+- **要做：** 第 3 个 PR 合并前，在你 Mac 上的 CLI 版本里，用偏离评审的原样参数各跑几次「diff 在提示词里、不给工具」和「diff 太大、只给 Read」两种情况，把 `modelUsage` 的键记下来，做成测试用的样本；白名单按实测定。契约测试至少两条：样本里出现 `implement` 模型 → 不可用；没有 `review` 模型 → 不可用。
+
+**不用改：** 材料来源、隔离运行、第 6 条「只对新 mission 生效」都写对了；已定决定表加的 `FINAL_ROUNDS` 一行引用正确（`2026-11-08-phase5-open-points.md:46`）。
