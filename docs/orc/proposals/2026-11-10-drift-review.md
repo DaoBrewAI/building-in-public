@@ -553,3 +553,11 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 | --- | --- |
 | 1 `launch_integrate` 那段不能整段删 | 只挪走撤回；head 等于 tip 又撤回不了时 `raise OrcError` 停下的防护留着 |
 | 2 模型 id 按字符串比较 | `modelUsage` 键的规范化也用在 `resolve_models` 的 `:178`、`:180`；`models.toml` 只允许完整模型 id |
+
+## 第六版的独立评审意见（2026-11-14）
+
+评审对象是 `db6be1f`。第五轮的 2 条都改到了，前后一致，没有新的要改的地方。**可以交给林翰定。**
+
+- `launch_integrate` 只挪走撤回，head 等于 tip 又撤回不了时停下的防护留着，原因和「每条都 satisfied」的情况都写明了。
+- 模型 id 的规范化同时用在 `modelUsage` 核对和 `resolve_models` 的 `:178`、`:180`。
+- 留给第 3 个 PR 实现时定、不影响决定的一点：「只允许完整模型 id」怎么确定性地判断（CLI 对新模型会提示 `unrecognized_model`，没有现成的名单可查），按格式判断即可，写进契约测试。
