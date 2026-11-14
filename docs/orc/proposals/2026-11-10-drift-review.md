@@ -523,3 +523,25 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 | 2 状态机 | 写明分流时在锁里调用 `launch_submit`、不直接跑评审；分流记 `integrate-deferred` 事件 |
 | 3 `FINAL_ROUNDS` 共用 | 拆成两个常量：偏离评审 1 轮，跨 mission 评审 2 轮；STATE 第 284 行列进第 3 个 PR |
 | 4 `modelUsage` 误拦 | 比较前规范化键；第 3 个 PR 合并前用原样参数实测两种情况、记样本、按实测定白名单；两条契约测试。review 和 implement 同一个模型的情况，`resolve_models`（`:178`）已经在 mission 开始时拒绝（不只查 fallback），不另加 |
+
+## 第五版的独立评审意见（2026-11-14）
+
+评审对象是 `4264de7`，行号以 `f2682fb`（#19）为准。第四轮的 4 条都改到了。
+
+### 更正上一轮的说法
+
+上一轮说「`:180` 只查 fallback，要在 mission 开始时加一条 review 和 implement 不能相同的检查」，这是错的。`resolve_models` 的 `:178` 已经在做这件事；`models.json` 只在 `:420` 由 `resolve_models`（`:402`）的结果写入，`m.roles()`（`:235`）只读它，没有绕过的写入路径。第五版不另加，是对的。
+
+### 1.【要改】`launch_integrate` 里 head 等于 tip 的那段不能整段删
+
+- 第五版说撤回挪进 `orc step` 以后，「`launch_integrate` 里那一段可以删掉」。那一段（`:2650-2657`）做两件事：撤回打回，以及**撤回不了时报错停下**（`raise OrcError`「没有新提交……这是 orc 的 bug」）。
+- 后一件是防护：head 等于 mission tip 时，`integrate-task.sh` 的 `commit-tree -p T -p T` 只留一个父提交，会先移动 mission 分支再失败，之后永远对不上（`:2653` 的注释）。
+- 新的 `unchanged` 只覆盖「有 `reopen-prev`、HEAD 等于基线」的节点。没被重新打开、却一个提交都没有的节点（比如每条验收标准都判 `satisfied`），仍会走到 `launch_integrate`。
+- **要改：** 只把撤回挪走，`head == tip` 时报错停下的防护留在 `launch_integrate`。
+
+### 2.（次要）同一个模型的不同写法能绕过 `:178`
+
+- `:178` 和新的 `modelUsage` 核对都是按字符串比较模型名。`implement` 写全名、`review` 写别名（或带 `[1m]` 这类后缀）时，同一个模型会被当成两个，两道核对都放过。
+- **建议：** `modelUsage` 键的规范化规则同样用在 `:178` 和 `fallback` 那条（`:180`）上；`models.toml` 里只允许写完整的模型 id，不允许别名。
+
+**不用改：** 撤回由 `orc step` 在锁里做、分流调用 `launch_submit` 并记 `integrate-deferred`、`FINAL_ROUNDS` 拆成两个、`modelUsage` 的实测和契约测试，都写对了。
