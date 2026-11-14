@@ -1,6 +1,6 @@
 # 提案：防偏离交给独立的偏离评审，确定性检查只守底线
 
-状态：**方向已定，按三轮独立评审意见改过（第四版），细节等林翰定**。
+状态：**方向已定，按四轮独立评审意见改过（第五版），细节等林翰定**。
 
 - **11-10 林翰定的：**
   - orc 要解决的核心问题是：长时间运行时，每个 session、每个 phase 不偏离总体设计。
@@ -9,6 +9,7 @@
   - 分类、给评审的材料、评审只回答的问题、什么时候评审、结果怎么用，都按 11-10 对话里的建议做（下面第三、四节写清楚）。
 - **等林翰定：** 最后「要你定的」8 条。
 - **第三轮独立评审（11-14）：** 第 8 条（入口移出信任层）不削弱底线；第四版补上两条会卡死的重新集成路径、入口要搬过来的三条约束，统一了 mission 结束时的轮数。逐条对应见文末「第四版按评审意见改了什么」。
+- **第四轮独立评审（11-14）：** 「回到整体评审」和修复闭环、reopen 的状态机不冲突；第五版把撤回挪回锁里、拆开 `FINAL_ROUNDS`、补上 `modelUsage` 的实测要求。逐条对应见文末「第五版按评审意见改了什么」。
 - **独立评审（11-12）：** 见文末「独立评审意见」，第二版按它改了：文件归属不放宽（底线）；列出改到的已定决定；补全偏离评审的材料、输出和打回对象；跨 mission 评审保持独立；等 #19 合并后再做。逐条对应见文末「第二版按评审意见改了什么」。
 - **第二轮独立评审（11-14）：** 结论是第 2 条决定在底线上站得住。第三版按它改了：「评审过的字节」交给 `integrate-task.sh` 已有的核对；写明偏离评审的入口；列出 STATE 要改的几段；mission 结束统一走 `reopen_for`；补上中间提交的风险和几条细节。逐条对应见文末「第三版按评审意见改了什么」。
 
@@ -110,21 +111,31 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
   - 原因：`northstar-review` 只用退出码 0/1/2 表达结论，装不下带 `rule`、`side`、`node` 的输出；改它要改 `test_align.sh`，还要重新 sudo 安装。
   - `northstar-review` 留在信任层，只管 agent 自己直接提交的情况（`align.sh`），不变。
   - 从信任层搬过来、必须照样守住的三条（第三轮评审第 2 条）：
-    - **模型核对（底线）：** 读 `claude -p --output-format json` 输出里的 `modelUsage`：必须出现配置的 `review` 模型，出现任何别的模型也判这次评审不可用（不放行、不降级、问你）。先这样严格做；如果实跑发现 Claude Code 自己会调用辅助的小模型，再改成白名单，但 `implement` 的模型永远不在里面。现在 `claude_result`（`orc/bin/orc:1960`）不看这个字段，最终审查和跨 mission 评审也一起补上。11-10 实测 `modelUsage` 的键就是模型 id。
+    - **模型核对（底线）：** 读 `claude -p --output-format json` 输出里的 `modelUsage`：必须出现配置的 `review` 模型，出现任何别的模型也判这次评审不可用（不放行、不降级、问你）。先这样严格做；如果实跑发现 Claude Code 自己会调用辅助的小模型，再改成白名单，但 `implement` 的模型永远不在里面。误拦的结果是停下问你，不是放行。
+      - 比较前把键规范化（去掉 `[1m]` 这类后缀），免得写法不同被误拦。
+      - review 和 implement 配成同一个模型的情况，`resolve_models`（`orc/bin/orc:178`）在 mission 开始时已经拒绝，不用另加。
+      - **第 3 个 PR 合并前先实测**：在这台 Mac 的 CLI 上用和 orc 完全一样的参数各跑一次「不给工具」和「只给 Read」，把 `modelUsage` 的键记下来做测试样本，白名单按实测定。
+      - 契约测试至少两条：出现 `implement` 的模型 → 不可用；没有 `review` 的模型 → 不可用。现在 `claude_result`（`orc/bin/orc:1960`）不看这个字段，最终审查和跨 mission 评审也一起补上。11-10 实测 `modelUsage` 的键就是模型 id。
     - **材料从签名的来源取：** NORTHSTAR 用 `git show` 从节点的基线提交读（和 `run_final` 在 `:3166` 一样，不读 worktree 里可能被改过的文件）；简要设计按固定标题从签名的 `approved-design.md` 截取；DAG 条目从签名的 `approved-task-dag.json` 取。
     - **隔离：** 在仓库外的临时目录里运行，只放行 Read，读的是去掉 `.northstar/` 和 `.github/` 的导出副本（`export_tree`），和最终审查一样。
 - **什么时候评：**
   - **节点做完时：** 替换现在的「整体评审」（`run_submit` 里的 `northstar-review --role review`）。
     - 「集成的就是评审看过的那个提交」交给集成脚本已有的核对（第二轮评审第 1 条）：`integrate-task.sh:297` 读出节点的 tip，`:307-309` 在集成锁里要求它等于 `verification.sha` 和 `coordinator-verification.sha`。
     - 漏洞在 `orc/bin/orc:2660-2661`：`launch_integrate` 把重新读到的 HEAD 写进这两个文件，脚本的核对就成了空转。改成写偏离评审记录里的 `head`（`run_submit` 的 `out["head"]`）。不在 Python 里另写核对，底线仍由确定性脚本守。
-    - **集成前先比一次（第三轮评审第 1 条）：** `launch_integrate` 发现节点 HEAD 不等于最近一次 aligned 评审记录里的 `head`，就不集成，回到整体评审（重跑本节点全部冻结检查，再做偏离评审），通过后用新的 `head` 集成。这一步只是分流，底线仍是脚本的核对。不这样做会卡死的两条路径：
+    - **集成前先比一次（第三轮评审第 1 条）：** `launch_integrate` 发现节点 HEAD 不等于最近一次 aligned 评审记录里的 `head`，就不集成，回到整体评审（重跑本节点全部冻结检查，再做偏离评审），通过后用新的 `head` 集成。这一步只是分流，底线仍是脚本的核对。
+      - `launch_integrate` 本来就在锁里运行（`orc step` 第 5 步 `:3002-3009` 和 `resume=integrate`），分流时调用 `launch_submit` 启动后台的整体评审，不在锁里直接跑评审（第四轮评审第 2 条）。
+      - 分流时记一条事件 `integrate-deferred`，带旧的 `head`、现在的 HEAD 和原因（测试修正后同步、集成失败后改了提交等）。不这样做会卡死的两条路径：
       - 测试修正签名后，`orc/bin/orc:4163-4173` 对已 aligned、还在排队等集成的节点也做 `sync_to_tip`（`:3892`），HEAD 变了，`integrate-task.sh:308` 失败；回答「重试」取的还是同一条旧评审，永远过不去。
       - 集成失败后你在节点里改了提交，`resume=integrate`（`:2803-2804`、`:3006`）仍用旧的 `head`。
     - 「集成失败」的提示（`:2909-2910`）跟着改：说明「改了节点的提交以后回答重试，orc 会先重新评审再集成」。
-    - 重新打开后没有任何改动的节点（HEAD 等于重新打开时的基线）：`run_submit` 看到 `reopen-prev` 就直接撤回打回（`withdraw_reopen`），不拿空 diff 去评审。现在这一步在 `launch_integrate` 里才做。
+    - 重新打开后没有任何改动的节点（HEAD 等于重新打开时的基线）不拿空 diff 去评审（第四轮评审第 1 条）：
+      - `run_submit` 是后台任务，只写 `result.json`，不拿锁、不写事件，所以它只返回 `outcome: "unchanged"`；
+      - `orc step` 处理这个结果时在锁里调用 `withdraw_reopen`（改两份 `state`、删控制文件、写 `node-withdrawn`）。
+      - 现在这一步在 `launch_integrate` 里才做，挪到这里以后 `launch_integrate` 里那一段可以删掉。
   - **轮数（第三轮评审第 3 条）：** 节点评审和 mission 结束时的评审一样，都是 11-10 定的「第二次还是 `drift` 就停下问你」。
     - 节点评审：同一个节点，从上一次 `aligned`（或节点被重新打开）以来连续第 2 次 `drift` 就停下问你；回答后清零。和提交关口「连续被拒」的算法一样。
-    - mission 结束时：`drift` 打回 1 轮；打回的节点重新集成后，同一个 mission 的评审连续第 2 次还是 `drift`，就停下问你（`mediate`），回答后清零。也就是偏离评审这一路的 `FINAL_ROUNDS` 从 2 改成 1，写进已定决定表。
+    - mission 结束时：`drift` 打回 1 轮；打回的节点重新集成后，同一个 mission 的评审连续第 2 次还是 `drift`，就停下问你（`mediate`），回答后清零。
+      - 现在 `reopen_for`（`:3464-3467`）对最终审查和跨 mission 评审共用一个 `FINAL_ROUNDS = 2`，只改它会让跨 mission 评审也变成 1 轮（第四轮评审第 3 条）。所以拆成两个常量：mission 结束时的偏离评审 1 轮，跨 mission 评审 2 轮不变。写进已定决定表。
     - 最终审查的冻结检查没通过，走的是修复闭环，不受这一条影响；跨 mission 评审保持「最多打回 2 轮」不变。
   - **mission 结束时：** 替换现在最终审查里模型的那部分。最终审查连跑 3 次冻结检查不变，那是底线。
     - `drift` 按 `node` 打回，和现在最终审查的 `issues` 一样走 `reopen_for`（#19 上 `orc/bin/orc:4242`）。轮数见下面「轮数」：打回 1 轮，第 2 次问你。
@@ -181,7 +192,7 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 | orc 的评审和提交前 hook 用同一个入口（信任层的 `northstar-review`） | `2026-11-07-commit-gate.md`；`STATE.md:218-227` | orc 的偏离评审改在 orc 里直接调用 `claude -p`，不经过 `northstar-review`；`northstar-review` 只管 agent 自己直接提交（第 8 条决定） |
 | PLAN「提交」：对齐评审在 broker 之前的提交关口里做，broker 只提交评审过的字节 | `PLAN.md`「已确定的决定」 | 提交关口只跑检查和底线；对齐评审移到节点做完时（偏离评审）；broker 不改 |
 | PLAN「默认参数」：同一节点连续偏离 3 次熔断 | 同上 | 提交关口的连续被拒熔断照旧（检查不过、范围不对）。偏离评审：第 1 次 `drift` 打回，第 2 次问你 |
-| 最终审查的模型判不通过「最多打回 2 轮，第 3 次熔断」（`FINAL_ROUNDS = 2`） | `2026-11-08-phase5-open-points.md`；`STATE.md`「验收」第 2 步 | mission 结束时的偏离评审打回 1 轮，第 2 次问你（和 11-10 定的规则一致）。跨 mission 评审仍是 2 轮 |
+| 最终审查的模型判不通过「最多打回 2 轮，第 3 次熔断」（`FINAL_ROUNDS = 2`） | `2026-11-08-phase5-open-points.md`；`STATE.md`「验收」第 2 步（#19 分支上第 284 行） | mission 结束时的偏离评审打回 1 轮，第 2 次问你（和 11-10 定的规则一致）。`FINAL_ROUNDS` 拆成两个常量，跨 mission 评审仍是 2 轮 |
 | PLAN「默认参数」：每次提交最多 8 个文件 | 同上 | 不变。orc 自己的提交路径不经过这条（它在 `align.sh` 里，只管 agent 直接提交）；orc 的上限是评审的 60000 字节，超过就给文件列表让评审用 Read 看。删掉「一轮一条」以后单次提交可能变大，但不受 8 个文件的限制，这一点和现在一样 |
 | PLAN「模型」：简单评审用 Opus | 同上 | 不变。`review_light` 还在用：测试依赖的模型复核（`orc/bin/orc:1067`）、信任层 `northstar-review --role auto`（agent 直接提交时）。只是 orc 的提交关口不再调用它 |
 | `2026-11-06-review-checks-timing.md`：取消「每完成一条就提交」会影响小步提交和 8 个文件上限 | 该提案 | 小步提交不再强制；8 个文件上限见上 |
@@ -231,7 +242,9 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
      - 替换整体评审和最终审查里的模型评审，删掉提交关口的对齐评审；
      - `verification.sha` 和 `coordinator-verification.sha` 改写评审记录里的 `head`；
      - 规划会话写简要设计；
-     - STATE.md 跟着改：提交关口第 4、5 步，「连续被拒」不再算 DRIFT，第 5 步「评审之后改一个字节都提交不进去」，`coordinator-verification.md` 的文字（现在写「对齐评审 ALIGNED」）。
+     - STATE.md 跟着改：提交关口第 4、5 步，「连续被拒」不再算 DRIFT，第 5 步「评审之后改一个字节都提交不进去」，`coordinator-verification.md` 的文字（现在写「对齐评审 ALIGNED」），「验收」第 2 步的打回轮数（第 284 行）；
+     - `FINAL_ROUNDS` 拆成两个常量；
+     - 合并前先实测 `modelUsage`（第三节「入口」）。
 
    开 PR 前逐提交扫描密钥和大文件：推荐另开一个 PR，不和上面三个绑在一起。备选：不做。
 
@@ -501,3 +514,12 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 - **要做：** 第 3 个 PR 合并前，在你 Mac 上的 CLI 版本里，用偏离评审的原样参数各跑几次「diff 在提示词里、不给工具」和「diff 太大、只给 Read」两种情况，把 `modelUsage` 的键记下来，做成测试用的样本；白名单按实测定。契约测试至少两条：样本里出现 `implement` 模型 → 不可用；没有 `review` 模型 → 不可用。
 
 **不用改：** 材料来源、隔离运行、第 6 条「只对新 mission 生效」都写对了；已定决定表加的 `FINAL_ROUNDS` 一行引用正确（`2026-11-08-phase5-open-points.md:46`）。
+
+## 第五版按评审意见改了什么（2026-11-14）
+
+| 第四轮评审 | 改动 |
+| --- | --- |
+| 1 撤回不能放进 `run_submit` | `run_submit` 只返回 `outcome: "unchanged"`，由 `orc step` 在锁里调用 `withdraw_reopen` |
+| 2 状态机 | 写明分流时在锁里调用 `launch_submit`、不直接跑评审；分流记 `integrate-deferred` 事件 |
+| 3 `FINAL_ROUNDS` 共用 | 拆成两个常量：偏离评审 1 轮，跨 mission 评审 2 轮；STATE 第 284 行列进第 3 个 PR |
+| 4 `modelUsage` 误拦 | 比较前规范化键；第 3 个 PR 合并前用原样参数实测两种情况、记样本、按实测定白名单；两条契约测试。review 和 implement 同一个模型的情况，`resolve_models`（`:178`）已经在 mission 开始时拒绝（不只查 fallback），不另加 |
