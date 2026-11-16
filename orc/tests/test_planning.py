@@ -128,7 +128,7 @@ work = pathlib.Path(os.getcwd())
 if action.startswith("sleep:"):
     time.sleep(float(action.split(":")[1])); action = "ok"
 def outputs(task_extra):
-    (work / "design.md").write_text("# 设计\n\n## 关键决定\n- 用 CSV\n")
+    (work / "design.md").write_text("# 设计\n\n## 简要设计\n\n- 导出只用标准库 csv，不要新建别的导出模块\n\n## 关键决定\n- 用 CSV\n")
     (work / "plan.md").write_text("# 计划\n1. 导出\n")
     task = {"id": "export", "depends_on": [], "files": ["src/export.py"], "contracts": [],
             "verification": ["python -m pytest tests/test_export.py"], "state": "ready",
