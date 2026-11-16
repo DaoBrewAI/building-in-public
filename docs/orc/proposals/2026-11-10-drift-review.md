@@ -563,3 +563,52 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 - `launch_integrate` 只挪走撤回，head 等于 tip 又撤回不了时停下的防护留着，原因和「每条都 satisfied」的情况都写明了。
 - 模型 id 的规范化同时用在 `modelUsage` 核对和 `resolve_models` 的 `:178`、`:180`。
 - 留给第 3 个 PR 实现时定、不影响决定的一点：「只允许完整模型 id」怎么确定性地判断（CLI 对新模型会提示 `unrecognized_model`，没有现成的名单可查），按格式判断即可，写进契约测试。
+
+## 第七轮独立评审意见（2026-11-16，Fable 5.2 从头重审）
+
+前六轮都在 Opus 5.5 上审。林翰 11-16 要求合并前由 Fable 5.2 审，于是在同一个云端评审会话里换成 Fable 5.2，对 `76261fa` 从头重审，不沿用前几轮的结论。行号以 `f2682fb` 为准。
+
+结论：**先不合并，改完 1–3 再合并**。都是文档改动，不动林翰定的 8 条。4–6 可以一起改，也可以留到实现 PR。
+
+### 1.【要改】mission 结束时的评审拿不到 DAG，却要填 `node`
+
+- 材料里只有节点评审给 `entry.json`。mission 结束时评审不知道节点 id，也不知道文件归谁。
+- orc 只核对 `node` 在 DAG 里，不核对证据文件属于它。打回错节点时，那个节点改不了那个文件（broker 按 DAG 拦），白花一轮；而 mission 结束时只有 1 轮。
+- 现在的 `final-review-brief.md` 给的是完整 DAG。
+- 建议：评审不填 `node`，orc 用 `file_owners`（`:3505`）按 `evidence.file` 确定性地定节点；没有文件可定的（mission 结束时的 `missing`）停下问人。或者给一张「节点 id、组件、files」的小表，并核对 `evidence.file` 在该节点的 `files` 里。
+
+### 2.【要改】进行中的 mission 怎么过渡没写
+
+- `orc/templates/brief-exec.md:6-7` 是冻结并签名的执行规则，写着「每完成一条验收标准就提交一次」「每次提交前都会有对齐评审」，每个执行会话都读它（`:2150`）。
+- (a) 模板要改：第 6 行进第 2 个 PR，第 7 行进第 3 个 PR，两个清单都没列。不改的话，新 mission 的执行会话会同时读到两种说法。
+- (b) PR 合并前已签名的 mission：签名的规则和代码行为不一致，签名的 `approved-design.md` 也没有简要设计一节。要写一条规则：新流程只对之后 go 的 mission 生效；orc 遇到没有简要设计的已签名 mission 就停下说明（跑完或放弃后重开）。
+
+### 3.【要改】偏离评审是否总能 Read 没写清
+
+- 第三节「材料」说超过 60000 字节才用 Read，「入口·隔离」说只放行 Read，「实测」又分「不给工具」「只给 Read」。
+- 不给工具时评审只看得到 diff，节点评审的 `duplicate`（`existing`）、`interface`（`other`）拿不到证据，这两类在小 diff 上等于没有。
+- 建议写明：总是只放行 Read、读导出副本；diff 不超过 60000 字节时同时放进提示词。
+
+### 4.【应改】`modelUsage` 核对只列了三处
+
+只列了偏离评审、最终审查、跨 mission 评审。同样用 `review` 角色的还有：验证会话写冻结测试（`:474`）、判断测试对错（`:2625`）、修复评审（`:2434`）、诊断（`:3723`）。建议放进共用的 `claude_result` 一层，按调用方的角色核对。
+
+### 5.【应改】要改的地方漏列
+
+- 续跑提示 `:2841`、`:3983`、`:4170`；
+- `PLAN.md` 第 18 行（`fable-5-1`）、第 21 行（提交）、第 26 行（默认参数）；
+- `2026-11-08-one-criterion-vs-invariants.md` 的状态还是「待林翰决定」；
+- 规划校验要加「简要设计一节存在、不超过 40 行」；
+- 画布也要写明从签名来源取（`git show` 基线提交的 `.northstar/architecture.json`）。
+
+### 6.【小】引用错
+
+`resume=integrate` 在 `:2807-2808`，不是 `:2803-2804`（那是 `resume=gate`）。
+
+### 实测（云端容器，CLI 2.1.325，不是 Mac）
+
+用 orc 的参数形状跑了两次 `claude -p --model claude-fable-5-2 --output-format json`，`--tools ""` 和 `--allowedTools=Read` 读一个文件两种情况，`modelUsage` 的键都只有 `claude-fable-5-2`，没有后缀，也没有辅助模型。Mac 上仍要按提案实测。
+
+### 核过成立的
+
+正文其余行号引用；文件归属是底线；`verification.sha` 写评审 head，由 `integrate-task.sh:307-309` 在锁里核对；HEAD 变了回到整体评审；撤回在锁里做、head 等于 tip 的防护保留；`FINAL_ROUNDS` 拆分；已定决定表。数据一节看不到 `events.jsonl`，没核。
