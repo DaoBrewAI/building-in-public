@@ -177,9 +177,7 @@ class ExecCase(PlanningCase):
             for to in ("planning", "verifying", "plan-review"):
                 m.transition(to, "test")
             c = m.control
-            brief = (ORC_ROOT / "templates" / "brief-exec.md").read_text(encoding="utf-8")
-            brief = brief.replace("{{MISSION}}", "m1").replace("{{IMPLEMENT_MODEL}}", m.roles()["implement"]["model"])
-            brief += orc.freeze_verification(m)
+            brief = orc.render_brief_exec(m) + orc.freeze_verification(m)
             written = {"approved-design.md": (plan / "design.md").read_bytes(),
                        "approved-plan.md": (plan / "plan.md").read_bytes(), "brief-exec.md": brief.encode()}
             for name, data in written.items():
@@ -439,7 +437,7 @@ class Gate(ExecCase):
         self.assertEqual(set(second["checks"]), {"ca2", "ca"})             # 用冻结的检查确认
         self.assertEqual(len(self.ev("commit")), 1)                         # 没有新提交
         self.assertEqual([c["role"] for c in self.calls("review")], ["auto", "review"])   # 没有 diff，不评审
-        self.assertIn("`files` 写 `[]`", self.calls("exec-a")[0]["prompt"])      # brief 里写明了这种情况怎么交
+        self.assertIn("不改 worktree，`acceptance` 写它的编号", self.calls("exec-a")[0]["prompt"])   # brief 里写明了这种情况怎么交
 
     def test_one_success_resets_the_streak(self):
         self.simple(("a",), two_acceptance=True)
@@ -560,20 +558,69 @@ class TestCrossesDag(ExecCase):
 
 
 class ExecutorResults(ExecCase):
-    def test_result_that_does_not_match_the_worktree_is_sent_back(self):
+    def test_result_without_json_is_sent_back(self):
         self.simple(("a",))
-        self.script("a", json.dumps({"write": {"a.txt": "a\n", "junk.tmp": "x"},
-                                     "out": {"status": "commit", "acceptance": [1], "files": ["a.txt"], "message": "a"}}),
-                    json.dumps({"write": {"junk.tmp": None}, "raw": "好了"}),
-                    commit({"a.txt": "a\n"}, [1]))
+        self.script("a", json.dumps({"write": {"a.txt": "a\n"}, "raw": "好了"}), commit({"a.txt": "a\n"}, [1]))
         r = self.drive()
         self.reached_reviewing(r)
         exits = self.ev("job-exit", type="executor")
-        self.assertEqual([e["outcome"] for e in exits], ["invalid", "invalid", "commit"])
-        self.assertIn("junk.tmp", exits[0]["problems"][0])
-        self.assertIn("没有 JSON 对象", exits[1]["problems"][0])
+        self.assertEqual([e["outcome"] for e in exits], ["invalid", "commit"])
+        self.assertIn("没有 JSON 对象", exits[0]["problems"][0])
         self.assertIn("orc 没能接受", self.calls("exec-a")[1]["prompt"])
         self.assertIn("--resume", self.calls("exec-a")[1]["args"])
+
+    def test_commit_needs_no_files_list_and_leftovers_are_committed_or_rejected(self):
+        # 执行会话不再写 files：orc 用 worktree 里的实际改动。留下的临时文件算进这次提交，不在声明文件里就被提交关口拒绝
+        self.simple(("a",))
+        self.script("a", json.dumps({"write": {"a.txt": "a\n", "junk.tmp": "x"},
+                                     "out": {"status": "commit", "acceptance": [1], "message": "a"}}),
+                    json.dumps({"write": {"junk.tmp": None}, "out": {"status": "commit", "acceptance": [1], "message": "a"}}))
+        r = self.drive()
+        self.reached_reviewing(r)
+        self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="executor")], ["commit", "commit"])
+        gates = self.ev("job-exit", type="gate")
+        self.assertEqual((gates[0]["outcome"], gates[0]["category"]), ("rejected", "scope"))
+        self.assertIn("junk.tmp", gates[0]["reason"])
+        self.assertEqual(gates[1]["outcome"], "committed")
+        self.assertEqual(self.git("show", "orc/m1:a.txt"), "a")
+
+    def test_one_round_can_complete_several_criteria(self):
+        # 不再一轮一条：一次交两条验收标准，一个提交就做完这个节点
+        self.simple(("a",), two_acceptance=True)
+        self.script("a", commit({"a.txt": "a\n", "a2.txt": "a2\n"}, [1, 2]))
+        r = self.drive()
+        self.reached_reviewing(r)
+        self.assertEqual(len(self.calls("exec-a")), 1)
+        gate, = self.ev("job-exit", type="gate")
+        self.assertEqual((gate["outcome"], sorted(gate["checks"])), ("committed", ["ca", "ca2"]))
+        prompt = self.calls("exec-a")[0]["prompt"]
+        self.assertIn("一轮做多少由你决定", prompt)
+        self.assertNotIn("一轮只做一条", prompt)
+        self.assertNotIn('"files"', prompt)
+
+    def test_mission_signed_under_another_flow_version_stops(self):
+        # 签名的执行规则没有流程版本（流程版本加进来之前 go 的）：签名的规则和代码不一致，不按任何一种继续；放弃照样能做
+        m = self.simple(("a",))
+        c = m.control
+        brief = (c / "brief-exec.md").read_text()
+        line = f"流程版本：{self.orc.FLOW_VERSION}\n"
+        self.assertIn(line, brief)
+        old = brief.replace(line, "")
+        (c / "brief-exec.md").write_text(old)
+        digest = __import__("hashlib").sha256(old.encode()).hexdigest()
+        lines = [(f"{digest}  brief-exec.md" if l.endswith("  brief-exec.md") else l)
+                 for l in (c / "approved.sha256").read_text().splitlines()]
+        (c / "approved.sha256").chmod(0o644)                       # 冻结时设成了只读
+        (c / "approved.sha256").write_text("\n".join(lines) + "\n")
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith(f"next: error mission m1 是按流程版本 0 签名的，现在的 orc 是流程版本 {self.orc.FLOW_VERSION}"),
+                        r.stdout + r.stderr)
+        self.assertIn("orc abandon --mission m1", self.next_line(r))
+        self.assertEqual(self.calls("exec-a"), [])
+        a = self.run_orc("abandon", "--mission", "m1", "签名时的规则已经不用了")
+        self.assertEqual(a.returncode, 0, a.stdout + a.stderr)
+        self.assertEqual(self.ev("state")[-1]["to"], "failed")
 
     def test_crash_is_retried_once_then_blocks(self):
         self.simple(("a",))

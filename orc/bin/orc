@@ -59,6 +59,9 @@ class SyncConflict(OrcError):
 
 
 APPROVED_STATES = {"approved", "executing", "reviewing", "accepted"}   # 每次 step 都重新校验签名和哈希
+# 推进时核对签名的流程版本：已经 go、还要按签名的执行规则往下走的状态。accepted 只剩清理，不核对；
+# orc abandon 和读以前 mission 的地方（跨 mission 评审、orc phase 看依赖）都不经过 step，也不核对
+FLOW_CHECKED_STATES = {"approved", "executing", "reviewing"}
 
 
 def illegal_transition(ctx: dict, to: str, event: dict) -> Optional[str]:
@@ -1765,6 +1768,26 @@ def h_terminal(m: Mission):
 EXEC_CONFIG = Path(os.environ.get("ORC_EXEC_CONFIG", ORC_ROOT / "config" / "orc.toml"))
 EXEC_KEYS = ("max_parallel", "session_timeout_seconds", "crash_retries")
 RESULT_REPAIRS = 2              # 执行会话的结果格式不对时，发回同一个会话修的次数
+# 签名的执行规则（brief-exec.md）的流程版本。改了签名的执行规则或签名材料的格式就加 1：新流程只对之后 go 的 mission 生效，
+# 版本和代码不一致的 mission 停下说明（proposals/2026-11-10-drift-review.md「进行中的 mission 怎么过渡」）。
+# 1：删掉「一轮一条验收标准」，执行会话不再写 files。
+FLOW_VERSION = 1
+FLOW_RE = re.compile(r"^流程版本：([0-9]+)[ \t]*$", re.M)
+
+
+def render_brief_exec(m: "Mission") -> str:
+    """go 时签名的执行规则（不含冻结检查和 scope，那两段由调用方接在后面）。"""
+    brief = (ORC_ROOT / "templates" / "brief-exec.md").read_text(encoding="utf-8")
+    return (brief.replace("{{MISSION}}", m.name).replace("{{IMPLEMENT_MODEL}}", m.roles()["implement"]["model"])
+            .replace("{{FLOW_VERSION}}", str(FLOW_VERSION)))
+
+
+def signed_flow_version(m: "Mission") -> int:
+    """签名的 brief-exec.md 里的流程版本；没有这一行的（流程版本加进来之前签名的）算 0。"""
+    found = FLOW_RE.search(read1(m.control / "brief-exec.md"))
+    return int(found.group(1)) if found else 0
+
+
 STREAK_FRESH, STREAK_BLOCK = 2, 3   # 连续被拒第 2 次：撤回改动、新开会话；第 3 次：节点 blocked
 REVIEW_TIMEOUT = 1800           # 一次对齐评审最多等多久（秒）；超时按「评审服务出错」处理，不放行
 NODE_EVENTS = {"node-start", "job-start", "job-exit", "node-blocked", "node-unblocked", "node-reopen",
@@ -2194,7 +2217,7 @@ def validate_executor_result(m: Mission, node: str, obj: Optional[dict]) -> List
     task = approved_tasks(m)[node]
     if status == "commit":
         problems = []
-        acc, files, message = obj.get("acceptance"), obj.get("files"), obj.get("message")
+        acc, message = obj.get("acceptance"), obj.get("message")    # files 不用写：orc 用 worktree 里的实际改动
         n = len(task.get("acceptance", []))
         if not isinstance(acc, list) or not all(isinstance(a, int) and not isinstance(a, bool) and 1 <= a <= n for a in acc):
             problems.append(f"acceptance 必须是 1 到 {n} 之间的编号列表")
@@ -2204,16 +2227,8 @@ def validate_executor_result(m: Mission, node: str, obj: Optional[dict]) -> List
             problems.append("message 必须是一句非空的提交说明")
         if not isinstance(obj.get("notes", ""), str):
             problems.append("notes（遗留问题）必须是字符串，没有就写空字符串")
-        actual = changed_paths(m.worktree(node))
-        if not actual and isinstance(files, list) and files:
-            problems.append("worktree 里没有任何改动，但 files 不是空的")
-        if not actual and not acc:
+        if not changed_paths(m.worktree(node)) and not acc:
             problems.append("worktree 里没有任何改动，也没有写已经满足的验收标准：没有可提交、可确认的东西")
-        if not isinstance(files, list) or not all(isinstance(f, str) for f in files):
-            problems.append("files 必须是文件路径列表")
-        elif set(files) != set(actual):
-            problems.append(f"files 和 worktree 里实际改动的文件不一致：你写的是 {sorted(set(files))}，实际是 {actual}。"
-                            "把多出来的文件删掉，或者把它们写进 files")
         return problems
     if status == "question":
         q = obj.get("question")
@@ -2812,9 +2827,9 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
             patch = discard_changes(m, node) if changed_paths(m.worktree(node)) else None
             undo = f"上一个会话被拒的改动已撤回（存成 {patch}）。" if patch else ""
             launch_executor(m, node, f"{undo}从上一次通过的提交重新开始。用户（或 coordinator）的裁决：\n\n{answer}\n\n"
-                                     "据此继续；做完一条验收标准就按格式结束这一轮。", fresh=True)
+                                     "据此继续；做好就按格式结束这一轮。", fresh=True)
         else:
-            launch_executor(m, node, f"用户（或 coordinator）的回答：\n\n{answer}\n\n据此继续；做完一条验收标准就按格式结束这一轮。")
+            launch_executor(m, node, f"用户（或 coordinator）的回答：\n\n{answer}\n\n据此继续；做好就按格式结束这一轮。")
         return
     type_, outcome = last["type"], last.get("outcome")
     if type_ == "executor":
@@ -2839,7 +2854,7 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
             n = consecutive(job_exits(m, node, "executor"), {"failed"})
             if n <= cfg["crash_retries"]:
                 launch_executor(m, node, f"上一轮异常结束（{last['reason']}）。先看一下 worktree 现在的状态，"
-                                         "继续当前这条验收标准；做完按格式结束这一轮。")
+                                         "继续做还没提交的验收标准；做好就按格式结束这一轮。")
             else:
                 block_node(m, node, "执行会话反复崩溃",
                            f"节点 {node} 的执行会话连续 {n} 次异常结束（最近一次：{last['reason']}）。"
@@ -2858,7 +2873,7 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
                         else "冻结的检查确认它已经被之前的提交满足（没有改动，不提交）")
                 launch_executor(m, node, f"{done}（验收标准 {last.get('acceptance')}）。"
                                          f"还没提交的验收标准：\n\n{acceptance_lines(m, node, left)}\n\n"
-                                         "继续做下一条；做完一条就按格式结束这一轮。")
+                                         "继续做；做好就按格式结束这一轮。")
         elif outcome == "rejected":
             streak = gate_streak(m, node)
             card = card_text(last.get("card"))
@@ -3991,7 +4006,7 @@ def unpark_ready(m: Mission) -> None:
         if withdraw_reopen(m, node):       # 被打回、自己没有新提交：撤回打回，不继续（继续了也没东西可集成）
             continue
         unpark_node(m, node, f"你停下来等的问题已经由节点 {'、'.join(waiting)} 修好并集成（诊断 {info.get('repair')}）。"
-                             "worktree 已合并 mission 分支的最新提交。继续当前这条验收标准；做完按格式结束这一轮。")
+                             "worktree 已合并 mission 分支的最新提交。继续做还没提交的验收标准；做好就按格式结束这一轮。")
 
 
 def parked_payload(m: Mission) -> Tuple[str, List[dict], List[dict]]:
@@ -4178,7 +4193,7 @@ def finalize_test_fix(m: Mission, fix: dict, q: dict, answered: bool) -> None:
             continue
         if state == "parked":
             unpark_node(m, node, f"冻结的验收测试已按诊断修正，用户签了名（{fix['diff']}）。worktree 已合并最新提交。"
-                                 "继续当前这条验收标准；做完按格式结束这一轮。")
+                                 "继续做还没提交的验收标准；做好就按格式结束这一轮。")
         elif read1(node_ctl(m, node) / "worktrees.txt").split("\t")[2] != tip:
             sync_to_tip(m, node)
     m.append("test-fix-signed", "orc step", k=fix["k"], tip=tip)
@@ -4554,6 +4569,10 @@ def step(mission: Mission) -> Next:
             ctx = mission.replay()
             effective = ctx["blocked_from"] if ctx["state"] == "blocked" else ctx["state"]
             try:
+                if effective in FLOW_CHECKED_STATES and signed_flow_version(mission) != FLOW_VERSION:
+                    return (f"error mission {mission.name} 是按流程版本 {signed_flow_version(mission)} 签名的，现在的 orc 是流程版本 "
+                            f"{FLOW_VERSION}：签名的执行规则和现在的代码不一致，orc 不按任何一种继续。用签名时的 orc 跑完，或者运行 "
+                            f"`orc abandon --mission {mission.name} \"<原因>\"` 放弃后重开（是 phase 里的 mission 就再运行 orc phase）。")
                 if effective in APPROVED_STATES:
                     waiting = test_fix_step(mission)      # 测试修正等签名：签了才生效，回答意见就撤回
                     if waiting:
@@ -5423,9 +5442,7 @@ def cmd_go(args) -> int:
         if not published_is_current(m, "plan"):
             raise OrcError("审阅页还没有发布（或者计划改过、还没重新发布）。先运行 orc step 发布，让用户看过最新的审阅页再说 go。")
         c, plan = m.control, m.dir / "plan"
-        brief = (ORC_ROOT / "templates" / "brief-exec.md").read_text(encoding="utf-8")
-        brief = brief.replace("{{MISSION}}", m.name).replace("{{IMPLEMENT_MODEL}}", m.roles()["implement"]["model"])
-        brief += freeze_verification(m) + scope_block(m)
+        brief = render_brief_exec(m) + freeze_verification(m) + scope_block(m)
         written = {"approved-design.md": (plan / "design.md").read_bytes(),
                    "approved-plan.md": (plan / "plan.md").read_bytes(),
                    "brief-exec.md": brief.encode()}
