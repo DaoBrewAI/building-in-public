@@ -437,7 +437,7 @@ class Gate(ExecCase):
         self.assertEqual(set(second["checks"]), {"ca2", "ca"})             # 用冻结的检查确认
         self.assertEqual(len(self.ev("commit")), 1)                         # 没有新提交
         self.assertEqual([c["role"] for c in self.calls("review")], ["auto", "review"])   # 没有 diff，不评审
-        self.assertIn("`files` 写 `[]`", self.calls("exec-a")[0]["prompt"])      # brief 里写明了这种情况怎么交
+        self.assertIn("不改 worktree，`acceptance` 写它的编号", self.calls("exec-a")[0]["prompt"])   # brief 里写明了这种情况怎么交
 
     def test_one_success_resets_the_streak(self):
         self.simple(("a",), two_acceptance=True)
