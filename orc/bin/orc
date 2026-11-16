@@ -3211,6 +3211,78 @@ def gh(m: Mission, *args: str, check: bool = True) -> str:
     return r.stdout.strip()
 
 
+# 开 PR 前的逐提交扫描（proposals/2026-11-10-drift-review.md「中间提交没有任何人看过」，第 7 条决定）。
+# 偏离评审看累计 diff，最终审查和 CI 看最终代码：一个提交加进密钥或大文件、下一个再删掉，三道关都看不见。
+LARGE_FILE_BYTES = 5 * 1024 * 1024
+SECRET_PATTERNS = [
+    ("私钥", re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")),
+    ("AWS access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})\b")),
+    ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
+    ("OpenAI API key", re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}")),
+    ("Slack token", re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("Stripe live key", re.compile(r"\b[rs]k_live_[0-9A-Za-z]{20,}")),
+]
+
+
+def scan_commits(m: Mission, base: str, tip: str) -> List[dict]:
+    """base..tip 的每个提交：新增的行里有没有密钥的常见格式，有没有超过 LARGE_FILE_BYTES 的文件。
+    只记位置和类型，不记命中的内容（不把密钥写进日志和问题里）。"""
+    repo, found = m.repo(), []
+    # 集成的合并提交不单独扫：它带进来的改动就是节点自己的提交，已经逐个扫过
+    for sha in run_git(repo, "rev-list", "--reverse", "--no-merges", f"{base}..{tip}").split():
+        listing = run_git(repo, "diff-tree", "-r", "--no-commit-id", "--no-renames", sha)
+        for line in listing.splitlines():
+            meta, _, path = line.partition("\t")
+            parts = meta.split()
+            if len(parts) < 5 or parts[4] == "D" or parts[3].strip("0") == "":
+                continue
+            size = int(run_git(repo, "cat-file", "-s", parts[3]) or 0)
+            if size > LARGE_FILE_BYTES:
+                found.append({"commit": sha, "file": path, "kind": f"大文件（{size // 1024} KB）"})
+        patch = subprocess.run(["git", "-C", str(repo), "show", "--format=", "--no-renames", "-U0", sha],
+                               capture_output=True).stdout.decode("utf-8", "replace")
+        current = None
+        for line in patch.splitlines():
+            if line.startswith("+++ "):
+                current = line[6:] if line.startswith("+++ b/") else None
+            elif line.startswith("+") and current:
+                for kind, pattern in SECRET_PATTERNS:
+                    if pattern.search(line):
+                        found.append({"commit": sha, "file": current, "kind": kind})
+    unique = []
+    for f in found:
+        if f not in unique:
+            unique.append(f)
+    return unique
+
+
+def commit_scan_step(m: Mission, tip: str):
+    """开 PR 前扫描一次。没命中就往下走；命中就停下问，只有用户回答「继续」（确认是误报）才推上去。"""
+    scans = [e for e in m.events() if e.get("kind") == "commit-scan" and e.get("tip") == tip]
+    if scans:
+        last = scans[-1]
+        if not last.get("findings"):
+            return None
+        answer = next((e for e in m.events() if e.get("kind") == "answer" and e.get("id") == last.get("question")), None)
+        if answer and Path(answer["file"]).is_file() and Path(answer["file"]).read_text(encoding="utf-8").strip() == "继续":
+            return None
+    findings = scan_commits(m, exec_setup(m)["base"], tip)
+    if not findings:
+        m.append("commit-scan", "orc step", tip=tip, findings=[])
+        return None
+    rows = "\n".join(f"- 提交 `{f['commit'][:12]}` 的 `{f['file']}`：{f['kind']}" for f in findings)
+    q = m.block("开 PR 前的提交扫描命中",
+                f"mission {m.name} 要推到 origin、开 PR 了，但逐个扫描它的提交时命中了下面这些（只列位置，不列内容）：\n\n{rows}\n\n"
+                "推上去就收不回，orc 也不改写历史。确认是误报、可以推上去，回答「继续」。不是误报的话不要回答「继续」："
+                f"运行 `orc abandon --mission {m.name} \"<原因>\"` 放弃后重开，并处理泄露的密钥。回答别的内容，orc 会再扫一次、再问。",
+                "ask-user", "orc step")
+    m.append("commit-scan", "orc step", tip=tip, findings=findings, question=q.stem)
+    print(f"mission {m.name}：开 PR 前的提交扫描命中 {len(findings)} 处，停下问用户")
+    return None, True
+
+
 def ensure_pr(m: Mission, tip: str) -> dict:
     """把 mission 分支推到产品仓库的 origin，开（或找到已有的）指向默认分支的 PR。合并由用户来做。"""
     repo, branch = m.repo(), mission_branch(m)
@@ -4271,6 +4343,11 @@ def h_reviewing(m: Mission):
             m.block("跨 mission 评审没能完成", f"mission {m.name} 的跨 mission 评审没能完成：{cross.get('reason', '')}\n\n"
                     "评审不降级、出错时不放行。排除问题后回答「重试」，orc 会重新评审。", "ask-user", "orc step")
             return None, True
+    # 1c. 开 PR 前逐个扫描 mission 的每个提交（密钥、大文件）：push 收不回，orc 又不改写历史，命中就停下问
+    if not current_pr(m, tip):
+        stop = commit_scan_step(m, tip)
+        if stop:
+            return stop
     # 2. PR 和 CI
     try:
         pr = current_pr(m, tip) or ensure_pr(m, tip)
