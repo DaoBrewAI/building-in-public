@@ -10,6 +10,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_execution import ExecCase, commit, task  # noqa: E402
@@ -283,6 +284,41 @@ class FinalReview(AcceptCase):
         self.assertEqual(finals[0]["tip"], finals[1]["tip"])
         self.assertEqual(len(self.ev("job-exit", type="integrate", node="a", outcome="integrated")), 1)
 
+    def test_reopen_that_crashes_before_the_event_keeps_the_state_to_restore(self):
+        # 重新打开时写完 state=ready、记 node-reopen 之前断掉：再 step 重新打开，reopen-prev 仍是打开前的 integrated，
+        # 之后撤回能回到 integrated
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({}, [1]))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "少了什么", "evidence": "a.txt:1"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        orc, original = self.orc, self.orc.Mission.append
+        crashed = []
+
+        def crash_on_reopen(m, kind, *args, **kwargs):
+            if kind == "node-reopen" and not crashed:
+                crashed.append(kind)
+                raise RuntimeError("断电")
+            return original(m, kind, *args, **kwargs)
+        orc.Mission.append = crash_on_reopen
+        try:
+            with mock.patch.dict(os.environ, self.env):
+                for _ in range(60):
+                    try:
+                        orc.step(orc.Mission("m1"))
+                    except RuntimeError:
+                        break
+                    w = self.run_orc("wait", "--mission", "m1", "--timeout", "60")
+                    self.assertEqual(w.returncode, 0, w.stdout + w.stderr)
+        finally:
+            orc.Mission.append = original
+        self.assertEqual(crashed, ["node-reopen"])
+        prev = self.mdir / "control" / "tasks" / "a" / "reopen-prev"
+        self.assertEqual(json.loads(prev.read_text())["ctl"], "integrated")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["node"] for e in self.ev("node-withdrawn")], ["a"])
+        self.assertEqual((self.mdir / "control" / "tasks" / "a" / "state").read_text().strip(), "integrated")
+
     def test_bug_found_after_merge_is_fixed_by_the_node_that_owns_the_file(self):
         # fintelli-p1-1-3：b 的检查在合并后失败，问题却在 a 的文件里。以前按检查所属的节点打回 b，b 改不了
         self.two_nodes("grep -q '^a$' a.txt\n", "grep -q '^b$' b.txt && ! grep -q bad a.txt\n")
@@ -321,6 +357,34 @@ class FinalReview(AcceptCase):
         self.assertIn("b.txt 第一行是 b", review)                       # 评审看得到别的节点的约定
         self.assertEqual([e["outcome"] for e in self.ev("job-exit", type="final")], ["checks-failed", "passed"])
         self.assertEqual(self.git("show", "orc/m1:a.txt"), "a")
+
+    def test_repair_may_change_only_the_files_the_diagnosis_named(self):
+        # a 有 a.txt 和 a2.txt，诊断只点了 a.txt：修复顺手改了 a2.txt 就拒绝（scope），只改 a.txt 的那次才提交
+        tasks = [
+            {"id": "a", "depends_on": [], "files": ["a.txt", "a2.txt"], "contracts": ["a.txt 第一行是 a"], "verification": ["x"],
+             "state": "ready", "acceptance": ["a.txt 是 a，a2.txt 是 a2"], "clauses": ["N1"], "component": "core"},
+            {"id": "b", "depends_on": [], "files": ["b.txt"], "contracts": ["b.txt 第一行是 b"], "verification": ["x"],
+             "state": "ready", "acceptance": ["b.txt 是 b"], "clauses": ["N1"], "component": "core"}]
+        tests = {"tests/orc/check_a.sh": "grep -q '^a$' a.txt && grep -q '^a2$' a2.txt\n",
+                 "tests/orc/check_b.sh": "grep -q '^b$' b.txt && ! grep -q bad a.txt\n"}
+        checks = [{"id": "ca", "node": "a", "acceptance": [1], "command": "sh tests/orc/check_a.sh", "expect_before": "fail"},
+                  {"id": "cb", "node": "b", "acceptance": [1], "command": "sh tests/orc/check_b.sh", "expect_before": "fail"}]
+        self.signed(tasks, checks, tests)
+        self.script("a", commit({"a.txt": "a\nbad\n", "a2.txt": "a2\n"}, [1]),
+                    commit({"a.txt": "a\n", "a2.txt": "a2\nmore\n"}, []),     # 多改了诊断没点的 a2.txt
+                    commit({"a.txt": "a\n", "a2.txt": "a2\n"}, [], files=["a.txt"]))   # 把 a2.txt 改回去
+        self.script("b", commit({"b.txt": "b\n"}, [1]))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 多了一行 bad，b 的约定不允许",
+                                            "files": ["a.txt"], "change": "删掉 bad 那一行",
+                                            "evidence": [{"file": "a.txt", "line": 2}]}))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        gates = self.ev("job-exit", type="gate", node="a")
+        self.assertEqual((gates[1]["outcome"], gates[1]["category"]), ("rejected", "scope"))
+        self.assertIn("只能改诊断指定的文件", gates[1]["reason"])
+        self.assertIn("a2.txt", gates[1]["reason"])
+        self.assertEqual(gates[2]["outcome"], "committed")
+        self.assertEqual(self.git("show", "orc/m1:a2.txt"), "a2")
 
     def test_test_found_wrong_after_merge_is_fixed_after_the_user_signs(self):
         # a 的冻结测试要求 b.txt 不存在，和 b 节点冲突：诊断认为测试本身有错，写好修正，用户签名才生效
@@ -472,6 +536,40 @@ class PullRequestAndCI(AcceptCase):
         self.assertEqual(len(self.calls("exec-b")), 2)                # b 没有再被叫回来
         self.assertEqual(len(self.ev("job-exit", type="integrate", node="b", outcome="integrated")), 1)
         self.assertTrue(list((self.mdir / "nodes" / "b").glob("discarded-*.patch")))
+
+    def legacy_reopen_of_b(self, b_reply):
+        """fintelli-p1-1-3 的迁移：b 是旧版 orc 打回的（那时还不写 reopen-prev）。b 先停下来问，期间删掉 reopen-prev
+        模拟旧状态；回答后 b 按 b_reply 结束，问题在 a.txt，诊断让 a 修。"""
+        self.simple(("a", "b"))
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
+        self.script("b", commit({"b.txt": "b\n"}, [1]),
+                    json.dumps({"out": {"status": "question", "question": "问题好像不在 b.txt？"}}), b_reply)
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "b", "problem": "末尾少空行", "evidence": "a.txt"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾少一个空行", "files": ["a.txt"],
+                                            "change": "加空行", "evidence": [{"file": "a.txt", "line": 1}],
+                                            "repro": BLANK_LINE_REPRO}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user"), r.stdout + r.stderr)
+        prev = self.mdir / "control" / "tasks" / "b" / "reopen-prev"
+        self.assertTrue(prev.is_file())
+        prev.unlink()
+        self.answer("问题在 a.txt")
+        return self.drive()
+
+    def test_node_reopened_by_the_old_orc_is_withdrawn(self):
+        r = self.legacy_reopen_of_b(json.dumps({"out": {"status": "outside", "reason": "问题在 a.txt，不在 b.txt"}}))
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["node"] for e in self.ev("node-withdrawn")], ["b"])
+        self.assertEqual(len(self.calls("exec-b")), 3)                # 撤回后 b 没有再被叫回来
+        self.assertEqual(len(self.ev("job-exit", type="integrate", node="b", outcome="integrated")), 1)
+
+    def test_node_reopened_by_the_old_orc_that_says_satisfied_is_withdrawn(self):
+        # 回「已经满足」：提交关口删掉 unresolved-rework，之后在集成前撤回（不能在 head 等于 tip 时报 orc 的 bug）
+        r = self.legacy_reopen_of_b(commit({}, [1]))
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual([e["node"] for e in self.ev("node-withdrawn")], ["b"])
+        self.assertEqual(len(self.ev("job-exit", type="integrate", node="b", outcome="integrated")), 1)
 
     def test_verify_failure_log_goes_straight_to_diagnosis(self):
         # verify 的日志是公开的：orc 取下失败步骤的日志交给诊断，不问用户

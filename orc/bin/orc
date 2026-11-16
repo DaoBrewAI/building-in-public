@@ -2794,6 +2794,7 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
                                  "问题其实不在你的文件里时，用 outside 结束这一轮。")
         return
     if kind == "node-unparked":
+        (node_ctl(m, node) / "parked").unlink(missing_ok=True)      # unpark_node 记了事件、删 parked 之前断掉
         launch_executor(m, node, last["message"])
         return
     if kind == "node-unblocked":
@@ -3429,8 +3430,10 @@ def reopen_node(m: Mission, node: str, issues: List[dict], round_: int, label: s
     if changed_paths(wt):
         raise OrcError(f"节点 {node} 的 worktree 有没提交的改动，重新打开前不能覆盖。把这条消息告诉用户。")
     run_git(wt, "merge", "-q", "--ff-only", tip)
-    write_atomic(ctl / "reopen-prev", json.dumps({"ctl": read1(ctl / "state") or "integrated",
-                                                   "work": read1(work / "state") or "integrated"}) + "\n")
+    if not (ctl / "reopen-prev").exists():
+        # 已经有了就是上次写完 state=ready、记 node-reopen 之前断掉：留着打开前的状态，不能覆盖成 ready
+        write_atomic(ctl / "reopen-prev", json.dumps({"ctl": read1(ctl / "state") or "integrated",
+                                                       "work": read1(work / "state") or "integrated"}) + "\n")
     row = read1(ctl / "worktrees.txt").split("\t")
     row[2] = tip
     for d in (ctl, work):
@@ -3932,11 +3935,17 @@ def sync_conflict_block(m: Mission, c: SyncConflict) -> str:
 
 
 def unpark_node(m: Mission, node: str, message: str) -> None:
+    evs = node_events(m, node)
+    if evs and evs[-1]["kind"] == "node-unparked":       # 上次记了事件、删 parked 之前断掉：补删，不重复继续
+        (node_ctl(m, node) / "parked").unlink(missing_ok=True)
+        return
     patch = sync_to_tip(m, node)
-    (node_ctl(m, node) / "parked").unlink(missing_ok=True)
     if patch:
         message += f"\n\n（你没提交的改动已存成补丁 {patch} 并撤回；worktree 已合并 mission 分支的最新提交。需要的话从补丁里取回。）"
+    # 先记事件再删 parked：反过来的话，中间断掉的节点既不是 parked、又没有事件让它往下走。
+    # 记了事件、还没删就断掉的，由 decide 处理 node-unparked 时补删
     m.append("node-unparked", "orc step", node=node, message=message)
+    (node_ctl(m, node) / "parked").unlink(missing_ok=True)
     print(f"节点 {node}：继续")
 
 
@@ -3945,8 +3954,10 @@ def withdraw_reopen(m: Mission, node: str) -> bool:
     没提交的改动（例如执行会话留下的临时脚本）先存成补丁再撤回，不留在 worktree 里。"""
     ctl, work, wt = node_ctl(m, node), node_work(m, node), m.worktree(node)
     # 是不是被打回过看 reopen-prev（重新打开时写，集成或撤回时才删）。unresolved-rework 不行：
-    # 执行会话回「已经满足」时提交关口就删了它，之后集成永远走不到撤回
-    if not (ctl / "reopen-prev").exists():
+    # 执行会话回「已经满足」时提交关口就删了它，之后集成永远走不到撤回。
+    # 旧版 orc 打回时不写 reopen-prev（fintelli-p1-1-3 的迁移）：集成过（有 integrated_sha）、现在又不是 integrated，
+    # 只可能是被打回过。调用方只对没在 integrated 的节点调用
+    if not (ctl / "reopen-prev").exists() and not read1(ctl / "integrated_sha"):
         return False
     base = read1(ctl / "worktrees.txt").split("\t")[2]
     if run_git(wt, "rev-parse", "HEAD") != base:
