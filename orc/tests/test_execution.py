@@ -741,6 +741,63 @@ class Disputes(ExecCase):
         subjects = self.git("log", "--format=%s", f"{base}..orc/m1").splitlines()
         self.assertEqual([s for s in subjects if not re.match(r"^\[(N[0-9]+(,N[0-9]+)*|NS|orc)\]", s)], [])
 
+    def test_unpark_that_crashes_before_the_event_is_retried(self):
+        # 继续停着的节点时，记 node-unparked 之前断掉：节点不能既不是 parked、又没有事件让它往下走
+        self.simple(("a",))
+        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}),
+                    commit({"a.txt": "a\n"}, [1]))
+        self.script("dispute", json.dumps({"out": {"verdict": "test-wrong", "reason": "测试多要求了换行"}}))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "检查多要求了一个设计里没有的换行",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a' a.txt\n"}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout)
+        (self.mdir / "control" / "approved.sha256.sig").write_text("sig\n")      # 用户签名
+        orc, original = self.orc, self.orc.Mission.append
+
+        def crash_on_unpark(m, kind, *args, **kwargs):
+            if kind == "node-unparked":
+                raise RuntimeError("断电")
+            return original(m, kind, *args, **kwargs)
+        orc.Mission.append = crash_on_unpark
+        try:
+            with mock.patch.dict(os.environ, self.env), self.assertRaises(RuntimeError):
+                orc.step(orc.Mission("m1"))
+        finally:
+            orc.Mission.append = original
+        self.assertEqual(self.ev("node-unparked", node="a"), [])
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)
+
+    def test_unpark_that_crashes_after_the_event_does_not_stay_parked(self):
+        # 记了 node-unparked、还没删 parked 就断掉：再 step 时补删，节点接着做，不停在 parked
+        self.simple(("a",))
+        self.script("a", json.dumps({"out": {"status": "test-wrong", "check": "ca", "reason": "测试要求的不对"}}),
+                    commit({"a.txt": "a\n"}, [1]))
+        self.script("dispute", json.dumps({"out": {"verdict": "test-wrong", "reason": "测试多要求了换行"}}))
+        self.script("diagnose", json.dumps({"kind": "test", "cause": "检查多要求了一个设计里没有的换行",
+                                            "test_fix": [{"file": "tests/orc/check_a.sh", "content": "grep -q '^a' a.txt\n"}]}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 诊断（_mission.diagnose.1）认为冻结的验收测试本身有错"), r.stdout)
+        (self.mdir / "control" / "approved.sha256.sig").write_text("sig\n")      # 用户签名
+        orc, original = self.orc, self.orc.unpark_node
+        parked = self.mdir / "control" / "tasks" / "a" / "parked"
+
+        def unpark_then_crash(m, node, message):
+            saved = parked.read_text()
+            original(m, node, message)
+            parked.write_text(saved)                 # 相当于删 parked 之前断掉
+            raise RuntimeError("断电")
+        orc.unpark_node = unpark_then_crash
+        try:
+            with mock.patch.dict(os.environ, self.env), self.assertRaises(RuntimeError):
+                orc.step(orc.Mission("m1"))
+        finally:
+            orc.unpark_node = original
+        self.assertTrue(parked.exists())
+        self.reached_reviewing(self.drive())
+        self.assertFalse(parked.exists())
+        self.assertEqual(len(self.ev("node-unparked", node="a")), 1)
+
     def test_signed_test_fix_resumes_after_a_crash_midway(self):
         # 签名生效时，继续停着的节点之后、记 test-fix-signed 之前断掉：再 step 不重复提交、不重复继续，补记 test-fix-signed
         self.simple(("a",))
