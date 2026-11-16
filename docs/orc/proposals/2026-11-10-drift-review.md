@@ -113,7 +113,7 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
     - mission 结束时：orc 用签名 DAG 的 `file_owners`（`orc/bin/orc:3505`）按 `evidence.file` 确定性地找节点。评审拿不到 DAG 里的文件归属，让它填，填错了打回的节点改不了那个文件（broker 按 DAG 拦），而 mission 结束时只有 1 轮。
     - 找不到唯一的节点就停下问你，不猜：`evidence.file` 不在任何节点的 `files` 里；mission 结束时的 `missing` 引的是简要设计的行，没有文件可定。
 - **入口（第二轮评审第 2 条，第 8 条决定）：** 偏离评审放在 orc 里，和现在的最终审查、跨 mission 评审一样，orc 自己调用 `claude -p`，不再经过信任层的 `northstar-review`。
-  - 原因：`northstar-review` 只用退出码 0/1/2 表达结论，装不下带 `rule`、`side`、`node` 的输出；改它要改 `test_align.sh`，还要重新 sudo 安装。
+  - 原因：`northstar-review` 只用退出码 0/1/2 表达结论，装不下带 `rule`、`side` 和证据位置的输出；改它要改 `test_align.sh`，还要重新 sudo 安装。
   - `northstar-review` 留在信任层，只管 agent 自己直接提交的情况（`align.sh`），不变。
   - 从信任层搬过来、必须照样守住的三条（第三轮评审第 2 条）：
     - **模型核对（底线）：** 读 `claude -p --output-format json` 输出里的 `modelUsage`：必须出现配置的 `review` 模型，出现任何别的模型也判这次评审不可用（不放行、不降级、问你）。先这样严格做；如果实跑发现 Claude Code 自己会调用辅助的小模型，再改成白名单，但 `implement` 的模型永远不在里面。误拦的结果是停下问你，不是放行。
