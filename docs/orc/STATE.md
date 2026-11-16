@@ -155,7 +155,7 @@ pending → running → submitted → integrated
 
 **验证会话**（`verifying`）：在实现之前写好验收测试。见 `proposals/2026-11-07-tests-before-implement.md`。
 
-- **模型**：`review` 角色（目前 Fable 5.1），和执行用的模型不同。启动方式、沙箱、提问、自动修 2 次再 `mediate`，都和规划会话一样。
+- **模型**：`review` 角色（目前 Fable 5.2），和执行用的模型不同。启动方式、沙箱、提问、自动修 2 次再 `mediate`，都和规划会话一样。
 - **每一轮从头开始**：每次 `planning → verifying` 都清空 `~/.orc-worktrees/<mission>/verify-work/`，新开会话（不 resume 上一轮）。轮内的提问回答和修复仍回到同一个会话。
 - **只给**：`spec/design.md`、`spec/task-dag.json`（orc 从 `plan/` 复制）、`repo/`（产品仓库当前提交的副本，没有 `.git`，提交号写进 `verify-snapshot`）、用户在审阅时提过的意见。**不给** `plan.md`，也看不到规划会话的过程。
 - **产出**：`repo/` 里新建的测试文件，和工作目录根上的 `checks.json`（`test_files`、`checks`：每个检查有 `id`、`node`、`acceptance`（第几条验收标准）、`command`、`expect_before`（fail / pass））。
