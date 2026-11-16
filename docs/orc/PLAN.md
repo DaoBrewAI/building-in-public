@@ -15,7 +15,7 @@
 | 方向 | 新建 workflow `orc`；旧 orchestrator 里能用的脚本连同测试直接搬过来，其余重写（见 REUSE.md） |
 | 原则 | 流程交给代码，判断留给模型。新增约束放进脚本，不往 skill 里加文字 |
 | coordinator | 一个 Claude Code 会话，带约 450 词的薄 skill，循环执行 `orc step` |
-| 模型 | **2026-11-07 改**（见 `proposals/2026-11-07-claude-implement.md`）：实现和规划用 Claude Opus（目前 `claude-opus-5-5`）；重要、复杂的评审用 Claude 当前最强（目前 `claude-fable-5-1`，不降级，不能和实现用同一个模型），简单评审用 Opus。分级规则写在代码里。按"最强"由用户手动更新，名字只写在 `config/models.toml` |
+| 模型 | **2026-11-07 改**（见 `proposals/2026-11-07-claude-implement.md`）：实现和规划用 Claude Opus（目前 `claude-opus-5-5`）；重要、复杂的评审用 Claude 当前最强（目前 `claude-fable-5-2`，不降级，不能和实现用同一个模型），简单评审用 Opus。分级规则写在代码里。按"最强"由用户手动更新，名字只写在 `config/models.toml` |
 | 子任务 | **2026-11-07 改**：`claude -p`（Claude Code 无界面模式）后台运行，每个任务一个独立 worktree；开沙箱，主仓库 `.git` 设 denyWrite |
 | 并发 | 第一版就支持并行：DAG 里声明文件互不重叠、前置都已集成的节点同时跑；集成按顺序加锁 |
 | 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单。**2026-11-07 改**（见 `proposals/2026-11-07-commit-gate.md`）：对齐评审在 broker 之前的提交关口里做（锁外），broker 只提交评审过的字节（`diff_sha256` 绑定），复用的 broker 脚本不改 |

@@ -577,7 +577,7 @@ class Doctor(OrcCase):
         r = self.run_orc("doctor", "--live", env=env)
         self.assertEqual(r.returncode, 0, r.stdout)
         self.assertIn("ok  模型可用：claude-opus-5-5（implement、plan、review_light）", r.stdout)
-        self.assertIn("ok  模型可用：claude-fable-5-1（review）", r.stdout)
+        self.assertIn("ok  模型可用：claude-fable-5-2（review）", r.stdout)
 
     def test_live_requires_a_line_that_is_exactly_ok(self):
         env = self.fake_install(with_codex=False)

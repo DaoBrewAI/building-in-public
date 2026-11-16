@@ -16,7 +16,7 @@ effort = "high"
 
 [review]                          # 重要、复杂的评审：节点整体评审、最终审查、DRIFT 之后的复审、大改动
 cli    = "claude"
-model  = "claude-fable-5-1"
+model  = "claude-fable-5-2"
 effort = "high"
 deep_review_over_lines = "300"    # 单次提交改动（+/- 行）超过这么多行，也用这个角色
 # 不设 fallback：这个模型不可用时 orc 停下来问你，绝不降级成 implement 的模型（不能自己审自己）
