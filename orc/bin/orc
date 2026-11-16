@@ -155,6 +155,16 @@ def parse_toml_minimal(text: str) -> Dict[str, Dict[str, str]]:
     return data
 
 
+# models.toml 里 claude 的模型只写完整的 id（例如 claude-fable-5-2），不写别名：评审的模型核对和「review 不能是 implement」
+# 都按 id 比较（proposals/2026-11-10-drift-review.md「入口」）
+CLAUDE_MODEL_RE = re.compile(r"claude-[a-z]+(-[0-9]+)+\Z")
+
+
+def normalize_model(name: str) -> str:
+    """模型 id 的规范写法：去掉 [1m] 这类后缀和空白，小写。比较两个模型是不是同一个都先过这一步。"""
+    return re.sub(r"\[[^\]]*\]\s*$", "", str(name)).strip().lower()
+
+
 def resolve_models(path: Path = MODELS_TOML) -> dict:
     if not path.is_file():
         raise OrcError(f"找不到模型配置 {path}。把 orc/config/models.toml 放回原位再运行。")
@@ -175,12 +185,15 @@ def resolve_models(path: Path = MODELS_TOML) -> dict:
             raise OrcError(f"models.toml 的 [{role}] 缺少 {', '.join(missing)}。")
         if section["cli"] not in ("claude", "codex"):
             raise OrcError(f"models.toml 的 [{role}] 写的 cli 是「{section['cli']}」：cli 只能是 claude 或 codex。")
+        if section["cli"] == "claude" and not CLAUDE_MODEL_RE.match(str(section["model"])):
+            raise OrcError(f"models.toml 的 [{role}] 写的模型是「{section['model']}」：只写完整的模型 id（例如 claude-fable-5-2），"
+                           "不写别名或后缀。评审的模型核对按 id 比较。")
         roles[role] = {k: str(v) for k, v in section.items()}
     implement, review = roles["implement"]["model"], roles["review"]
     # 重要的评审要独立：不能由写代码的同一个模型来审，也不能在不可用时降级成它
-    if review["model"] == implement:
+    if normalize_model(review["model"]) == normalize_model(implement):
         raise OrcError(f"models.toml 里 [review] 和 [implement] 都是 {implement}：重要的评审不能用 implement 的模型（等于自己审自己）。给 review 换一个更强的模型。")
-    if review.get("fallback") == implement:
+    if review.get("fallback") and normalize_model(review["fallback"]) == normalize_model(implement):
         raise OrcError(f"models.toml 的 [review] fallback 是 {implement}：重要的评审不能降级成 implement 的模型。删掉 fallback，不可用时 orc 会停下来问你。")
     threshold = review.get("deep_review_over_lines", "")
     if not threshold.isdigit() or int(threshold) <= 0:
@@ -1076,7 +1089,7 @@ def model_test_dependency_problems(m: Mission, tasks: Dict[str, dict], new_files
                              input=prompt, cwd=str(cwd), capture_output=True, text=True, timeout=TEST_DEPS_TIMEOUT,
                              env=dict(os.environ, ORC_ROLE="test-deps"))
         write_atomic(cwd / "out.json", run.stdout)
-        text, error = claude_result(cwd / "out.json") if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+        text, error = claude_result(cwd / "out.json", role["model"]) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
     except subprocess.TimeoutExpired:
         text, error = None, f"超过 {TEST_DEPS_TIMEOUT} 秒没有结束"
     finally:
@@ -1281,6 +1294,20 @@ def finish_agent_run(m: Mission, kind: str, n: int, rc: Optional[int]):
         question.rename(work / ".runs" / f"{n}.question.md")
         return None, True
     info: dict = {}
+    if rc == 0 and kind == "verifier":
+        # 冻结测试是评审角色写的（底线）：确实是配置的 review 模型写的，才往下走；不是就停下问用户，不发回同一个会话
+        try:
+            envelope = json.loads((work / ".runs" / f"{n}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            envelope = {}
+        model = m.roles()["review"]["model"]
+        problem = model_usage_problem(envelope if isinstance(envelope, dict) else {}, model)
+        if problem:
+            q = m.ask(f"{spec['label']}没能确认是配置的 review 模型（{model}）写的冻结测试：{problem}。\n\n"
+                      "检查 models.toml 和 claude 的登录后回答「重试」，回答会发给验证会话重新写出产出。", "ask-user", "orc step")
+            m.append(f"{kind}-exit", "orc step", run=n, rc=rc, outcome="unavailable", problems=[problem], question=q.stem)
+            m.transition("blocked", "orc step", reason=f"{spec['label']}的模型核对没有通过", question=q.stem, type="ask-user")
+            return None, True
     if rc == 0:
         if kind == "planner":
             problems = validate_plan_outputs(m, work)
@@ -1980,8 +2007,20 @@ def last_json_object(text: str) -> Optional[dict]:
     return None
 
 
-def claude_result(path: Path) -> Tuple[Optional[str], Optional[str]]:
-    """读 claude -p --output-format json 的输出：返回 (最后一条消息, 错误)。"""
+def model_usage_problem(data: dict, model: str) -> Optional[str]:
+    """评审确实是配置的模型做的（底线）：modelUsage 里必须有它，出现任何别的模型也不算（不放行、不降级、问用户）。
+    实测（2026-11-16，CLI 2.1.318，claude-fable-5-2）：不给工具、只给 Read、给 Bash 和 Write，键都只有模型 id 本身。"""
+    usage = data.get("modelUsage")
+    if not isinstance(usage, dict) or not usage:
+        return f"输出里没有 modelUsage，确认不了评审用的是 {model}"
+    used = sorted({normalize_model(k) for k in usage})
+    if used != [normalize_model(model)]:
+        return f"评审不是只由配置的模型 {model} 做的：modelUsage 里是 {'、'.join(used)}"
+    return None
+
+
+def claude_result(path: Path, model: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+    """读 claude -p --output-format json 的输出：返回 (最后一条消息, 错误)。给了 model（评审角色的调用都给）就核对 modelUsage。"""
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -1990,6 +2029,10 @@ def claude_result(path: Path) -> Tuple[Optional[str], Optional[str]]:
         return None, "输出不是 JSON 对象"
     if data.get("is_error"):
         return None, f"claude 报错：{str(data.get('result'))[:300]}"
+    if model:
+        problem = model_usage_problem(data, model)
+        if problem:
+            return None, problem
     return str(data.get("result") or ""), None
 
 
@@ -2453,7 +2496,7 @@ def repair_review(m: Mission, repair: dict, diff: str) -> Tuple[str, str]:
                               "--tools", ""], input=prompt, cwd=str(cwd), capture_output=True, text=True,
                              timeout=REVIEW_TIMEOUT, env=dict(os.environ, ORC_ROLE="repair-review"))
         write_atomic(cwd / "out.json", run.stdout)
-        text, error = claude_result(cwd / "out.json") if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+        text, error = claude_result(cwd / "out.json", cfg["model"]) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
     except subprocess.TimeoutExpired:
         text, error = None, f"超过 {REVIEW_TIMEOUT} 秒没有结束"
     finally:
@@ -2715,7 +2758,7 @@ def finish_job(m: Mission, start: dict, status: str, rc: Optional[int], timed_ou
             err = read1(job_file(m, job, "err"))[-500:]
             fields.update(outcome="unavailable", reason=f"{'提交关口' if type_ == 'gate' else '整体评审'}{why}：{err}")
     elif type_ == "dispute":
-        text, error = (claude_result(job_file(m, job, "out")) if status == "done" and rc == 0
+        text, error = (claude_result(job_file(m, job, "out"), m.roles()["review"]["model"]) if status == "done" and rc == 0
                        else (None, "超时被结束" if timed_out else f"异常结束（退出码 {rc}）"))
         obj = last_json_object(text) if text is not None else None
         if error or not obj or obj.get("verdict") not in ("test-ok", "test-wrong"):
@@ -3198,7 +3241,7 @@ def run_final(m: Mission, job: str, tip: str) -> dict:
         run = subprocess.run(argv, input=prompt, cwd=str(review_dir), capture_output=True, text=True,
                              timeout=REVIEW_TIMEOUT, env=dict(os.environ, ORC_ROLE="final-review"))
         write_atomic(job_file(m, job, "review.json"), run.stdout)
-        text, error = claude_result(job_file(m, job, "review.json")) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+        text, error = claude_result(job_file(m, job, "review.json"), cfg["model"]) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
     except subprocess.TimeoutExpired:
         text, error = None, f"超过 {REVIEW_TIMEOUT} 秒没有结束"
     finally:
@@ -3748,7 +3791,7 @@ def run_diagnose(m: Mission, job: str, data: dict) -> dict:
                              input=prompt, cwd=str(review_dir), capture_output=True, text=True, timeout=REVIEW_TIMEOUT,
                              env=dict(os.environ, ORC_ROLE="diagnose"))
         write_atomic(job_file(m, job, "review.json"), run.stdout)
-        text, error = claude_result(job_file(m, job, "review.json")) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+        text, error = claude_result(job_file(m, job, "review.json"), cfg["model"]) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
     except subprocess.TimeoutExpired:
         text, error = None, f"超过 {REVIEW_TIMEOUT} 秒没有结束"
     finally:
@@ -4904,7 +4947,7 @@ def phase_conclude(prod: Product, phase: str, plan: Dict[str, dict]) -> str:
                                  env=dict(os.environ, ORC_ROLE="phase-conclusion"))
             path = Path(cwd) / "out.json"
             write_atomic(path, run.stdout)
-            text, error = claude_result(path)
+            text, error = claude_result(path, cfg["model"])
         except subprocess.TimeoutExpired:
             text, error = None, "超时"
         finally:
@@ -5211,7 +5254,7 @@ def run_cross(m: Mission, job: str, tip: str) -> dict:
                              input=prompt, cwd=str(review_dir), capture_output=True, text=True, timeout=REVIEW_TIMEOUT,
                              env=dict(os.environ, ORC_ROLE="cross-review"))
         write_atomic(job_file(m, job, "review.json"), run.stdout)
-        text, error = claude_result(job_file(m, job, "review.json")) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
+        text, error = claude_result(job_file(m, job, "review.json"), role["model"]) if run.returncode == 0 else (None, f"退出码 {run.returncode}")
     except subprocess.TimeoutExpired:
         text, error = None, f"超过 {REVIEW_TIMEOUT} 秒没有结束"
     finally:

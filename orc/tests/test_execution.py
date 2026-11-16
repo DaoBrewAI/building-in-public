@@ -27,7 +27,10 @@ fake = pathlib.Path(os.environ["ORC_FAKE"])
 args = sys.argv[1:]
 prompt = sys.stdin.read()
 role = os.environ.get("ORC_ROLE")
-envelope = lambda result: print(json.dumps({"type": "result", "is_error": False, "result": result}, ensure_ascii=False))
+MODEL = args[args.index("--model") + 1] if "--model" in args else "claude-unknown-0"
+OVERRIDE = fake / f"model-usage-{os.environ.get('ORC_ROLE')}"   # 测试用：让这个角色的调用报别的模型
+USAGE = json.loads(OVERRIDE.read_text()) if OVERRIDE.exists() else {MODEL: {"inputTokens": 1}}
+envelope = lambda result: print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "result": result}, ensure_ascii=False))
 if role == "publish":
     # 假发布（阶段 5 的状态页）：记下调用，输出 claude.ai 链接
     pages = sorted(pathlib.Path(".").glob("*.html"))
@@ -91,7 +94,7 @@ if step.get("sleep"):
 if "exit" in step:
     sys.exit(step["exit"])
 result = step["raw"] if "raw" in step else json.dumps(step["out"], ensure_ascii=False)
-print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": result}, ensure_ascii=False))
+print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "session_id": session, "result": result}, ensure_ascii=False))
 '''
 
 FAKE_REVIEW = r'''#!/usr/bin/env python3

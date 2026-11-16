@@ -30,6 +30,9 @@ fake = pathlib.Path(os.environ["ORC_FAKE"])
 args = sys.argv[1:]
 if "-p" not in args:
     sys.exit(2)
+MODEL = args[args.index("--model") + 1] if "--model" in args else "claude-unknown-0"
+OVERRIDE = fake / f"model-usage-{os.environ.get('ORC_ROLE')}"   # 测试用：让这个角色的调用报别的模型
+USAGE = json.loads(OVERRIDE.read_text()) if OVERRIDE.exists() else {MODEL: {"inputTokens": 1}}
 prompt = sys.stdin.read()
 if os.environ.get("ORC_ROLE") == "publish":
     # 假发布：记下调用，检查网页文件在当前目录里，输出和 claude -p --output-format json 一样的信封
@@ -42,7 +45,7 @@ if os.environ.get("ORC_ROLE") == "publish":
         line = json.dumps({"url": "https://claude.ai/code/artifact/fake-plan"})
     else:
         line = json.dumps({"error": "Artifact tool unavailable"})
-    print(json.dumps({"type": "result", "is_error": False, "result": "发布好了。\n" + line}))
+    print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "result": "发布好了。\n" + line}))
     sys.exit(0)
 if os.environ.get("ORC_ROLE") == "test-deps":
     # 假依赖复核：按 $ORC_FAKE/test-deps 第 n 行输出（默认没有发现）；fail 表示模型出错
@@ -52,7 +55,7 @@ if os.environ.get("ORC_ROLE") == "test-deps":
     line = lines[n - 1] if n - 1 < len(lines) else '{"findings": []}'
     if line == "fail":
         sys.exit(3)
-    print(json.dumps({"type": "result", "is_error": False, "result": line}))
+    print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "result": line}))
     sys.exit(0)
 if os.environ.get("ORC_ROLE") == "verify":
     # 假验证会话：在 repo/ 里写测试，在工作目录根上写 checks.json
@@ -113,7 +116,7 @@ if os.environ.get("ORC_ROLE") == "verify":
     elif action == "nochecks":
         test.parent.mkdir(parents=True, exist_ok=True); test.write_text("x\n")
         (work / "checks.json").unlink(missing_ok=True)
-    print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "done"}))
+    print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "session_id": session, "result": "done"}))
     sys.exit(0)
 n = len(list(fake.glob("call-*.json"))) + 1
 session = args[args.index("--session-id") + 1] if "--session-id" in args else args[args.index("--resume") + 1]
@@ -148,7 +151,7 @@ elif action == "bad":
     outputs({"acceptance": []})
 elif action == "crash":
     sys.exit(3)
-print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": "done"}))
+print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "session_id": session, "result": "done"}))
 '''
 
 FAKE_NORTHSTAR = r'''#!/bin/sh

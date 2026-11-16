@@ -489,19 +489,26 @@ class Models(OrcCase):
     def test_config_errors_say_what_to_fix(self):
         def role(name, model, extra=""):
             return f'[{name}]\ncli = "claude"\nmodel = "{model}"\neffort = "high"\n{extra}'
-        good = (role("implement", "opus") + role("plan", "opus")
-                + role("review", "fable", 'deep_review_over_lines = "300"\n') + role("review_light", "opus"))
+        opus, fable = "claude-opus-5-5", "claude-fable-5-2"
+        good = (role("implement", opus) + role("plan", opus)
+                + role("review", fable, 'deep_review_over_lines = "300"\n') + role("review_light", opus))
         p = self.tmp / "ok.toml"
         p.write_text(good)
-        self.assertEqual(self.orc.resolve_models(p)["roles"]["review"]["model"], "fable")
+        self.assertEqual(self.orc.resolve_models(p)["roles"]["review"]["model"], fable)
         cases = [
-            (role("implement", "opus"), "缺少 [plan]"),
-            (good.replace('model = "fable"\n', ''), "[review] 缺少 model"),
-            (good.replace('"fable"', '"opus"'), "重要的评审不能用 implement 的模型"),
-            (good.replace('deep_review_over_lines = "300"\n', 'deep_review_over_lines = "300"\nfallback = "opus"\n'),
+            (role("implement", opus), "缺少 [plan]"),
+            (good.replace(f'model = "{fable}"\n', ''), "[review] 缺少 model"),
+            (good.replace(f'"{fable}"', f'"{opus}"'), "重要的评审不能用 implement 的模型"),
+            (good.replace('deep_review_over_lines = "300"\n', f'deep_review_over_lines = "300"\nfallback = "{opus}"\n'),
+             "不能降级成 implement 的模型"),
+            # 同一个模型换个写法也不行：带 [1m] 后缀、大写
+            (good.replace('deep_review_over_lines = "300"\n', f'deep_review_over_lines = "300"\nfallback = "Claude-Opus-5-5[1m]"\n'),
              "不能降级成 implement 的模型"),
             (good.replace('"300"', '"很多"'), "deep_review_over_lines"),
             (good.replace('[plan]\ncli = "claude"', '[plan]\ncli = "gemini"'), "cli 只能是 claude 或 codex"),
+            # 只写完整的模型 id：别名、带后缀的都不行（评审的模型核对按 id 比较）
+            (good.replace(f'"{fable}"', '"fable"'), "只写完整的模型 id"),
+            (good.replace(f'"{fable}"', f'"{fable}[1m]"'), "只写完整的模型 id"),
         ]
         for text, expect in cases:
             p = self.tmp / "m.toml"
@@ -512,6 +519,27 @@ class Models(OrcCase):
         with self.assertRaises(self.orc.OrcError) as ctx:
             self.orc.resolve_models(self.tmp / "missing.toml")
         self.assertIn("找不到模型配置", str(ctx.exception))
+
+    def test_review_output_must_come_from_the_configured_model_only(self):
+        # 底线：评审确实是配置的模型做的。出现 implement 的模型、没有 review 的模型、没有 modelUsage，都不可用
+        def result(usage):
+            p = self.tmp / "out.json"
+            envelope = {"type": "result", "is_error": False, "result": '{"verdict": "aligned"}'}
+            if usage is not None:
+                envelope["modelUsage"] = usage
+            p.write_text(json.dumps(envelope))
+            return self.orc.claude_result(p, "claude-fable-5-2")
+        self.assertEqual(result({"claude-fable-5-2": {}}), ('{"verdict": "aligned"}', None))
+        self.assertEqual(result({"claude-fable-5-2[1m]": {}})[1], None)          # 后缀不算别的模型
+        text, error = result({"claude-fable-5-2": {}, "claude-opus-5-5": {}})
+        self.assertIsNone(text)
+        self.assertIn("claude-opus-5-5", error)                                   # 混进了 implement 的模型
+        self.assertIn("claude-opus-5-5", result({"claude-opus-5-5": {}})[1])     # 没有 review 的模型
+        self.assertIn("没有 modelUsage", result(None)[1])
+        self.assertIn("没有 modelUsage", result({})[1])
+        p = self.tmp / "out.json"                                                  # 不给 model：不核对（执行会话、规划会话）
+        p.write_text(json.dumps({"type": "result", "is_error": False, "result": "x"}))
+        self.assertEqual(self.orc.claude_result(p), ("x", None))
 
 
 class ReviewTier(OrcCase):

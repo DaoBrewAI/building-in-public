@@ -470,6 +470,21 @@ class FinalReview(AcceptCase):
         self.assertEqual(len(self.ev("test-fix-withdrawn")), 1)
         self.assertIn("这个修正把测试放得太宽了", self.calls("diagnose")[1]["prompt"])   # 用户的意见交给诊断
 
+    def test_final_review_by_another_model_blocks(self):
+        # 底线：最终审查的模型判断必须是配置的 review 模型做的；modelUsage 里混进 implement 的模型就不算，停下问，不放行
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        (self.fake / "model-usage-final-review").write_text(json.dumps({"claude-fable-5-2": {}, "claude-opus-5-5": {}}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的最终审查没能完成"), r.stdout + r.stderr)
+        self.assertIn("claude-opus-5-5", self.next_line(r))
+        final, = self.ev("job-exit", type="final")
+        self.assertEqual(final["outcome"], "unavailable")
+        (self.fake / "model-usage-final-review").unlink()
+        self.answer("重试")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+
     def test_reviewer_output_that_names_an_unknown_node_blocks(self):
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]))
