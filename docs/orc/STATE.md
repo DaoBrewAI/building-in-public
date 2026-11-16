@@ -186,7 +186,9 @@ pending → running → submitted → integrated
   5. 如果规划产出了 N# 约束，而且产品仓库有 `.northstar/`，就把约束追加到产品仓库的 `drafts/NORTHSTAR.md`，等用户 `northstar seal`。
   6. 输出 `next: sign <control 目录>`。
 
-**签名**：用户在自己的终端运行 `northstar approve-mission <control 目录>`，按 Touch ID。之后 `orc step` 先跑 `northstar verify-mission`，再跑 `verify-approved-authority.py`，再按 `brief-exec.md` 里的哈希核对 `approved-checks.json` 和 `approved-tests/`（多一个、少一个、改一个都不行），全部通过才进入 `approved`。进入 `approved` 之后每次 step 都重新做这三项。没签名时一直是 `next: sign …`；签名无效时输出 `next: error`，状态停在 `plan-review`。
+**签名**：用户在自己的终端运行 `northstar approve-mission <control 目录>`，按 Touch ID。之后 `orc step` 先跑 `northstar verify-mission`，再跑 `verify-approved-authority.py`，再按 `brief-exec.md` 里的哈希核对 `approved-checks.json` 和 `approved-tests/`（多一个、少一个、改一个都不行），全部通过才进入 `approved`。进入 `approved` 之后每次 step 都重新做这三项。
+
+**流程版本**：`brief-exec.md` 末尾有一行「流程版本：N」，go 时从模板生成、随执行规则一起签名（测试修正重写它时从备份保留原文）。代码里的当前版本是 `FLOW_VERSION`：改了签名的执行规则或签名材料的格式就加 1。`orc step` 推进 `approved`、`executing`、`reviewing`（含从这三个状态进入的 `blocked`）的 mission 时，签名的版本和代码不一致（没有这一行的算 0）就输出 `next: error`，不按任何一种规则继续：用签名时的 orc 跑完，或者 `orc abandon` 后重开。`accepted` 只剩清理，不核对；`orc abandon` 和读以前 mission 的地方（跨 mission 评审、`orc phase` 看依赖）不经过这一步。新流程因此只对之后 go 的 mission 生效（`proposals/2026-11-10-drift-review.md`「进行中的 mission 怎么过渡」）。没签名时一直是 `next: sign …`；签名无效时输出 `next: error`，状态停在 `plan-review`。
 
 ## 执行（阶段 4）
 
@@ -201,7 +203,7 @@ pending → running → submitted → integrated
 - **调度**：节点 `pending`，前置节点都 `integrated`，声明文件不和任何已启动、未集成的节点重叠，运行中的节点数没到上限，就启动它。每次 step 都重新算。
 - **启动**：从 mission 分支当前的提交开出分支 `orc-task/<mission>/<node>`，worktree 在 `~/.orc-worktrees/<mission>/<node>/`。按复用脚本的约定写好控制文件：`control/tasks/<node>/` 的 `worktrees.txt`、`task-state-dir`、`generation`、`accepted-thread-id`、`outcome-nonce`、`state`；`nodes/<node>/` 的 `worktrees.txt`、`state`。
 - **执行会话**：`implement` 角色，`claude -p` 在后台运行，工作目录是节点的 worktree。沙箱开、`failIfUnavailable`、不允许脱离沙箱；主仓库 `.git` denyWrite（git 只读）；网络关；Write / Edit 只放行 worktree；环境变量 `ORC_ROLE=implement`、`ORC_NODE=<node>`（Stop hook 据此放行未提交的改动）。实测见 `proposals/2026-11-07-stop-gate-implement.md`。
-- **一条验收标准一轮**：执行会话做完一条验收标准就结束这一轮，最后输出一个 JSON 结果（见下）。orc 处理完再用 `claude --resume` 回到同一个会话，发下一条指示。
+- **一轮做多少由执行会话决定**：可以做一条，也可以一次做完几条验收标准（一个冻结检查常常覆盖几条，要一起做完），做好就结束这一轮，最后输出一个 JSON 结果（见下）。2026-11-16 起不再「一轮一条」（`proposals/2026-11-10-drift-review.md`）。orc 处理完再用 `claude --resume` 回到同一个会话，发下一条指示。
 - **超时和崩溃**：一轮超过 `session_timeout_seconds` 就结束整个进程组，按崩溃处理（提交关口、整体评审、集成内部各有超时：检查每条 300 秒、评审 1800 秒、broker 600 秒）。崩溃（退出码非 0、进程不见了、超时）按 `crash_retries` 重试，重试用同一个会话；再失败，节点 `blocked`。
 
 **执行会话每轮最后输出的 JSON**（只认最后一条消息里的这个对象）：
@@ -209,11 +211,11 @@ pending → running → submitted → integrated
 | `status` | 其他字段 | orc 怎么处理 |
 | --- | --- | --- |
 | `outside` | `reason`（问题在哪、为什么不在本节点的文件里） | 节点停下（`parked`），交给修复闭环 |
-| `commit` | `acceptance`（这次完成的第几条，从 1 开始；rework 时可以为空）、`files`（改了哪些文件）、`message`（提交说明：第一行一句话；仓库约定要求的正文空一行写在后面，orc 原样保留，第一行前面加 `[N#] 节点名：`）、`notes`（遗留问题，可以为空；写进节点的 `report.md`） | 交给提交关口 |
+| `commit` | `acceptance`（这次完成的编号，可以几条，从 1 开始；rework 时可以为空）、`message`（提交说明：第一行一句话；仓库约定要求的正文空一行写在后面，orc 原样保留，第一行前面加 `[N#] 节点名：`）、`notes`（遗留问题，可以为空；写进节点的 `report.md`） | 交给提交关口 |
 | `question` | `question` | 节点 `blocked`，mission 进入 `blocked`（ask-user），回答发回同一个会话 |
 | `test-wrong` | `check`（检查 id）、`reason` | 交给 `review` 模型判断冻结的测试有没有错（见下） |
 
-格式不对、`files` 和 worktree 里实际改动的文件对不上，都算这一轮没完成，把问题发回同一个会话修，最多修 2 次；第 3 次还不对，节点 `blocked`、mission `mediate`。
+不用写 `files`：orc 提交 worktree 里的全部实际改动，留下的临时文件不在声明文件里就被提交关口拒绝。格式不对算这一轮没完成，把问题发回同一个会话修，最多修 2 次；第 3 次还不对，节点 `blocked`、mission `mediate`。
 
 ### 提交关口（锁外的后台任务；`proposals/2026-11-07-commit-gate.md`）
 
