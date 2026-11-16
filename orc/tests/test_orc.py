@@ -337,7 +337,7 @@ class ApprovalReverified(OrcCase):
                              "checks": [{"id": "a", "node": "a", "acceptance": [1], "command": "pytest", "expect_before": "fail"}]})
         (c / "approved-checks.json").write_text(checks)
         (c / "brief-exec.md").write_text(
-            f"brief\n\n流程版本：1\n\nchecks 清单的 sha256：`{hashlib.sha256(checks.encode()).hexdigest()}`（`approved-checks.json`）\n")
+            f"brief\n\n流程版本：{self.orc.FLOW_VERSION}\n\nchecks 清单的 sha256：`{hashlib.sha256(checks.encode()).hexdigest()}`（`approved-checks.json`）\n")
         (c / "approved-task-dag.json").write_text(json.dumps({"version": 1, "mission": "m1", "tasks": [
             {"id": "a", "depends_on": [], "files": ["a.txt"], "contracts": [], "verification": ["true"], "state": "ready"}]}))
         subprocess.run("shasum -a 256 approved-design.md approved-plan.md brief-exec.md approved-task-dag.json > approved.sha256",

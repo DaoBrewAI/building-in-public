@@ -603,8 +603,9 @@ class ExecutorResults(ExecCase):
         m = self.simple(("a",))
         c = m.control
         brief = (c / "brief-exec.md").read_text()
-        self.assertIn("流程版本：1\n", brief)
-        old = brief.replace("流程版本：1\n", "")
+        line = f"流程版本：{self.orc.FLOW_VERSION}\n"
+        self.assertIn(line, brief)
+        old = brief.replace(line, "")
         (c / "brief-exec.md").write_text(old)
         digest = __import__("hashlib").sha256(old.encode()).hexdigest()
         lines = [(f"{digest}  brief-exec.md" if l.endswith("  brief-exec.md") else l)
@@ -613,7 +614,7 @@ class ExecutorResults(ExecCase):
         (c / "approved.sha256").write_text("\n".join(lines) + "\n")
         self.script("a", commit({"a.txt": "a\n"}, [1]))
         r = self.step()
-        self.assertTrue(self.next_line(r).startswith("next: error mission m1 是按流程版本 0 签名的，现在的 orc 是流程版本 1"),
+        self.assertTrue(self.next_line(r).startswith(f"next: error mission m1 是按流程版本 0 签名的，现在的 orc 是流程版本 {self.orc.FLOW_VERSION}"),
                         r.stdout + r.stderr)
         self.assertIn("orc abandon --mission m1", self.next_line(r))
         self.assertEqual(self.calls("exec-a"), [])
