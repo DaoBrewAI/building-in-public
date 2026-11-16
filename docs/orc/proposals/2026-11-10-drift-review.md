@@ -1,6 +1,8 @@
 # 提案：防偏离交给独立的偏离评审，确定性检查只守底线
 
-状态：**已定**（林翰 11-14：「要你定的」8 条全部按推荐）。经过六轮独立评审（第六版，评审结论「可以交给林翰定」）。实现分 3 个 PR，加 1 个逐提交扫描的 PR，都等 #19 合并以后再开。
+状态：**已定**（林翰 11-14：「要你定的」8 条全部按推荐）。经过六轮独立评审（Opus 5.5，第六版结论「可以交给林翰定」），11-16 又由 Fable 5.2 从头重审（第七轮），第七版按它补了 6 处，不动 8 条的选择，等第七轮评审复核。实现分 3 个 PR，加 1 个逐提交扫描的 PR，都等 #19 合并以后再开。
+
+- **第七轮独立评审（11-16，Fable 5.2）：** 要改 3 条：mission 结束时打回哪个节点改由 orc 按证据文件定；写明进行中的 mission 怎么过渡；偏离评审总是只放行 Read。另有 3 条：`modelUsage` 核对覆盖所有评审调用、补列漏掉的改动点、一处行号。逐条对应见文末「第七版按评审意见改了什么」。
 
 - **11-10 林翰定的：**
   - orc 要解决的核心问题是：长时间运行时，每个 session、每个 phase 不偏离总体设计。
@@ -75,14 +77,13 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
   - **节点评审再加：** 这个节点的 DAG 条目（`entry.json`：组件、`files`、contracts、验收标准）。没有它，评审判断不了节点是不是在做别的组件的事。
   - **diff：**
     - 节点评审看节点的累计 diff，mission 结束时看整个 mission 的 diff。
-    - 超过 60000 字节只给文件列表，让评审用 Read 看代码副本（不带 `.northstar/` 和 `.github/`），和现在的最终审查一样。
+    - 评审**总是**只放行 Read，能读导出的代码副本（不带 `.northstar/` 和 `.github/`，见「入口·隔离」）。不超过 60000 字节时 diff 同时放进提示词；超过就只给文件列表，和现在的最终审查一样（第七轮评审第 3 条：不给工具的话，`duplicate` 和 `interface` 拿不到另一边的证据）。
   - **不给：** 完整设计、计划、执行记录、执行会话的说明、以前的评审记录。例外：重评一次 DRIFT 时，带上次的原因。
 - **输出：**
 
   ```jsonc
   {"verdict": "aligned" | "drift",
-   "drift": [{"node": "节点 id（mission 结束时必填）",
-              "rule": "N#｜简要设计第几行｜extra｜interface｜duplicate｜missing",
+   "drift": [{"rule": "N#｜简要设计第几行｜extra｜interface｜duplicate｜missing",
               "ref": "missing 时：acceptance:N 或 contract:N",
               "evidence": {"side": "tip" | "base", "file": "…", "line": 0},
               "existing": {"file", "line"},   // duplicate 必填
@@ -105,9 +106,12 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
   - 删掉东西造成的偏离，证据在基线上：`side: "base"`。
   - orc 只确定性地核对这几件事：
     - 引的 N#、简要设计的行、本节点的验收标准或 contract 存在；
-    - 每一条证据（`evidence`、`existing`、`other`）的文件和行在对应的一边存在；
-    - mission 结束时，`node` 是 DAG 里的节点。
+    - 每一条证据（`evidence`、`existing`、`other`）的文件和行在对应的一边存在。
   - 核对不过就发回重写一次。第二次还不合格：不放行、不降级，停下问你，和现在其他评审一样。
+  - **打回哪个节点由 orc 定，评审不填 `node`**（第七轮评审第 1 条）：
+    - 节点评审：就是这个节点。
+    - mission 结束时：orc 用签名 DAG 的 `file_owners`（`orc/bin/orc:3505`）按 `evidence.file` 确定性地找节点。评审拿不到 DAG 里的文件归属，让它填，填错了打回的节点改不了那个文件（broker 按 DAG 拦），而 mission 结束时只有 1 轮。
+    - 找不到唯一的节点就停下问你，不猜：`evidence.file` 不在任何节点的 `files` 里；mission 结束时的 `missing` 引的是简要设计的行，没有文件可定。
 - **入口（第二轮评审第 2 条，第 8 条决定）：** 偏离评审放在 orc 里，和现在的最终审查、跨 mission 评审一样，orc 自己调用 `claude -p`，不再经过信任层的 `northstar-review`。
   - 原因：`northstar-review` 只用退出码 0/1/2 表达结论，装不下带 `rule`、`side`、`node` 的输出；改它要改 `test_align.sh`，还要重新 sudo 安装。
   - `northstar-review` 留在信任层，只管 agent 自己直接提交的情况（`align.sh`），不变。
@@ -115,10 +119,11 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
     - **模型核对（底线）：** 读 `claude -p --output-format json` 输出里的 `modelUsage`：必须出现配置的 `review` 模型，出现任何别的模型也判这次评审不可用（不放行、不降级、问你）。先这样严格做；如果实跑发现 Claude Code 自己会调用辅助的小模型，再改成白名单，但 `implement` 的模型永远不在里面。误拦的结果是停下问你，不是放行。
       - 比较前把键规范化（去掉 `[1m]` 这类后缀），免得写法不同被误拦。同一个规范化也用在 `resolve_models` 的 `:178`（review 和 implement 不能是同一个模型）和 `:180`（fallback 不能是 implement 的模型），免得一边写全名、一边写别名或带后缀时被当成两个模型；`models.toml` 只允许完整的模型 id（第五轮评审第 2 条）。
       - review 和 implement 配成同一个模型的情况，`resolve_models`（`orc/bin/orc:178`）在 mission 开始时已经拒绝，不用另加。
-      - **第 3 个 PR 合并前先实测**：在这台 Mac 的 CLI 上用和 orc 完全一样的参数各跑一次「不给工具」和「只给 Read」，把 `modelUsage` 的键记下来做测试样本，白名单按实测定。
-      - 契约测试至少两条：出现 `implement` 的模型 → 不可用；没有 `review` 的模型 → 不可用。现在 `claude_result`（`orc/bin/orc:1960`）不看这个字段，最终审查和跨 mission 评审也一起补上。11-10 实测 `modelUsage` 的键就是模型 id。
-    - **材料从签名的来源取：** NORTHSTAR 用 `git show` 从节点的基线提交读（和 `run_final` 在 `:3166` 一样，不读 worktree 里可能被改过的文件）；简要设计按固定标题从签名的 `approved-design.md` 截取；DAG 条目从签名的 `approved-task-dag.json` 取。
-    - **隔离：** 在仓库外的临时目录里运行，只放行 Read，读的是去掉 `.northstar/` 和 `.github/` 的导出副本（`export_tree`），和最终审查一样。
+      - **第 3 个 PR 合并前先实测**：在这台 Mac 的 CLI 上用和 orc 完全一样的参数各跑一次「不给工具」和「只给 Read」，把 `modelUsage` 的键记下来做测试样本，白名单按实测定。偏离评审总是只给 Read；「不给工具」的样本给下面其他不带工具的评审调用用。第七轮评审在云端容器（CLI 2.1.325）上两种都跑过，键都只有 `claude-fable-5-2`，Mac 上照样要测。
+      - **核对放在共用的 `claude_result`（`orc/bin/orc:1960`）一层**（第七轮评审第 4 条）：调用方把自己角色配置的模型传进去，`claude_result` 按它核对。现在 `claude_result` 不看这个字段。用 `review` 角色的调用全部覆盖：偏离评审、最终审查、跨 mission 评审，以及验证会话写冻结测试（`:474`）、修复评审（`:2434`）、判断测试对错（`:2625`）、诊断（`:3723`）；用 `review_light` 的测试依赖复核（`:1067`）按 `review_light` 的模型核对。
+      - 契约测试至少两条：出现 `implement` 的模型 → 不可用；没有调用方角色的模型 → 不可用。11-10 实测 `modelUsage` 的键就是模型 id。
+    - **材料从签名的来源取：** NORTHSTAR 和画布（`.northstar/architecture.json`）都用 `git show` 从节点的基线提交读（和 `run_final` 在 `:3166` 一样，不读 worktree 里可能被改过的文件）；简要设计按固定标题从签名的 `approved-design.md` 截取；DAG 条目从签名的 `approved-task-dag.json` 取。
+    - **隔离：** 在仓库外的临时目录里运行，总是只放行 Read（不管 diff 多大），读的是去掉 `.northstar/` 和 `.github/` 的导出副本（`export_tree`），和最终审查一样。
 - **什么时候评：**
   - **节点做完时：** 替换现在的「整体评审」（`run_submit` 里的 `northstar-review --role review`）。
     - 「集成的就是评审看过的那个提交」交给集成脚本已有的核对（第二轮评审第 1 条）：`integrate-task.sh:297` 读出节点的 tip，`:307-309` 在集成锁里要求它等于 `verification.sha` 和 `coordinator-verification.sha`。
@@ -127,7 +132,7 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
       - `launch_integrate` 本来就在锁里运行（`orc step` 第 5 步 `:3002-3009` 和 `resume=integrate`），分流时调用 `launch_submit` 启动后台的整体评审，不在锁里直接跑评审（第四轮评审第 2 条）。
       - 分流时记一条事件 `integrate-deferred`，带旧的 `head`、现在的 HEAD 和原因（测试修正后同步、集成失败后改了提交等）。不这样做会卡死的两条路径：
       - 测试修正签名后，`orc/bin/orc:4163-4173` 对已 aligned、还在排队等集成的节点也做 `sync_to_tip`（`:3892`），HEAD 变了，`integrate-task.sh:308` 失败；回答「重试」取的还是同一条旧评审，永远过不去。
-      - 集成失败后你在节点里改了提交，`resume=integrate`（`:2803-2804`、`:3006`）仍用旧的 `head`。
+      - 集成失败后你在节点里改了提交，`resume=integrate`（`:2807-2808`、`:3006`）仍用旧的 `head`。
     - 「集成失败」的提示（`:2909-2910`）跟着改：说明「改了节点的提交以后回答重试，orc 会先重新评审再集成」。
     - 重新打开后没有任何改动的节点（HEAD 等于重新打开时的基线）不拿空 diff 去评审（第四轮评审第 1 条）：
       - `run_submit` 是后台任务，只写 `result.json`，不拿锁、不写事件，所以它只返回 `outcome: "unchanged"`；
@@ -139,7 +144,7 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
       - 现在 `reopen_for`（`:3464-3467`）对最终审查和跨 mission 评审共用一个 `FINAL_ROUNDS = 2`，只改它会让跨 mission 评审也变成 1 轮（第四轮评审第 3 条）。所以拆成两个常量：mission 结束时的偏离评审 1 轮，跨 mission 评审 2 轮不变。写进已定决定表。
     - 最终审查的冻结检查没通过，走的是修复闭环，不受这一条影响；跨 mission 评审保持「最多打回 2 轮」不变。
   - **mission 结束时：** 替换现在最终审查里模型的那部分。最终审查连跑 3 次冻结检查不变，那是底线。
-    - `drift` 按 `node` 打回，和现在最终审查的 `issues` 一样走 `reopen_for`（#19 上 `orc/bin/orc:4242`）。轮数见下面「轮数」：打回 1 轮，第 2 次问你。
+    - `drift` 打回 orc 按证据文件定出的节点（见「输出」），和现在最终审查的 `issues` 一样走 `reopen_for`（#19 上 `orc/bin/orc:4242`）。轮数见下面「轮数」：打回 1 轮，第 2 次问你。
     - 不交给诊断：#19 的代码里，最终审查的模型判不通过也是走 `reopen_for`，不进修复闭环（第二轮评审第 2 条）。
   - **跨 mission 评审：** 不并进来，保持现状（第 4 条决定，评审第 5 条）。
 
@@ -171,9 +176,9 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 
 | 规则 | 现在 | 改成 | 依据 |
 | --- | --- | --- | --- |
-| 一轮一条验收标准 | brief 要求每轮只做一条；`orc/bin/orc:2814/2816/2860` 的续跑提示和 `STATE.md:204` 也这样写 | 删掉。执行会话自己决定一次做几条，`acceptance` 写这次满足的编号，提交关口照旧跑对应的冻结检查。同时取代待定的 `2026-11-08-one-criterion-vs-invariants.md` | 数据第 1 点：6 轮来回全来自这条。评审第 7 条：不涉及底线 |
+| 一轮一条验收标准 | 签名的执行规则 `orc/templates/brief-exec.md:6` 要求每完成一条就提交一次；`orc/bin/orc:2814/2816/2841/2860/3983/4170` 的续跑提示和 `STATE.md:204` 也这样写 | 删掉。执行会话自己决定一次做几条，`acceptance` 写这次满足的编号，提交关口照旧跑对应的冻结检查。同时取代待定的 `2026-11-08-one-criterion-vs-invariants.md`，把它的状态改成「被 `2026-11-10-drift-review.md` 取代」 | 数据第 1 点：6 轮来回全来自这条。评审第 7 条：不涉及底线 |
 | `files` 必须和实际改动完全一致 | 不一致就发回重写，最多 2 次，然后 `mediate` | 不再要求执行会话写 `files`，orc 用 worktree 里的实际改动。范围仍由 broker 按 DAG 核对 | 评审第 7 条：orc 本来就用实际改动生成 `paths`（`:2531`），broker 也核对请求和 worktree 一致（`commit-broker.sh:785`） |
-| 每次提交的对齐评审 | 每次提交调用 `northstar-review --role auto`：平时用 `review_light`（Opus，和执行会话同一个模型），上一次 DRIFT 或改动超过 300 行时升级到 `review`（Fable） | 删掉。提交只靠冻结检查和底线；方向在节点做完时由偏离评审判断；集成脚本核对集成的就是评审看过的那个提交 | 数据第 3 点。**这条改了已定的决定**，见下一节和第 2 条决定 |
+| 每次提交的对齐评审 | 每次提交调用 `northstar-review --role auto`：平时用 `review_light`（Opus，和执行会话同一个模型），上一次 DRIFT 或改动超过 300 行时升级到 `review`（Fable）。签名的 `brief-exec.md:7` 告诉执行会话「每次提交前都会有对齐评审」 | 删掉，`brief-exec.md:7` 改成「节点做完时有偏离评审」。提交只靠冻结检查和底线；方向在节点做完时由偏离评审判断；集成脚本核对集成的就是评审看过的那个提交 | 数据第 3 点。**这条改了已定的决定**，见下一节和第 2 条决定 |
 
 **不改：节点文件归属。** 第一版提议把它放宽到 mission 的 `scope`。评审第 1、2 条指出这不行：
 
@@ -191,13 +196,23 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 | 修复闭环的分类表：「每个提交先过检查再过评审（出错不放行）」是底线 | `2026-11-08-repair-loop.md`；`STATE.md`「修复闭环」（#19 分支上第 288 行） | 改成「每个提交先过检查；每个节点集成前过偏离评审，集成的就是评审过的那个提交（出错不放行）」 |
 | 修复闭环的分类表：「broker 的 `diff_sha256`」 | 同上 | 不变，但含义从「绑定评审过的字节」变成「绑定检查过的字节」。「绑定评审过的字节」由集成脚本对 `verification.sha` 的核对接替 |
 | orc 的评审和提交前 hook 用同一个入口（信任层的 `northstar-review`） | `2026-11-07-commit-gate.md`；`STATE.md:218-227` | orc 的偏离评审改在 orc 里直接调用 `claude -p`，不经过 `northstar-review`；`northstar-review` 只管 agent 自己直接提交（第 8 条决定） |
-| PLAN「提交」：对齐评审在 broker 之前的提交关口里做，broker 只提交评审过的字节 | `PLAN.md`「已确定的决定」 | 提交关口只跑检查和底线；对齐评审移到节点做完时（偏离评审）；broker 不改 |
-| PLAN「默认参数」：同一节点连续偏离 3 次熔断 | 同上 | 提交关口的连续被拒熔断照旧（检查不过、范围不对）。偏离评审：第 1 次 `drift` 打回，第 2 次问你 |
+| PLAN「模型」：重要、复杂的评审用当前最强，目前 `claude-fable-5-1` | `PLAN.md:18` | 「目前」改成 `claude-fable-5-2`，和 `models.toml` 一起在第 1 个 PR 改（第 6 条决定） |
+| PLAN「提交」：对齐评审在 broker 之前的提交关口里做，broker 只提交评审过的字节 | `PLAN.md:21`（「已确定的决定」） | 提交关口只跑检查和底线；对齐评审移到节点做完时（偏离评审）；broker 不改 |
+| PLAN「默认参数」：同一节点连续偏离 3 次熔断 | `PLAN.md:26` | 提交关口的连续被拒熔断照旧（检查不过、范围不对）。偏离评审：第 1 次 `drift` 打回，第 2 次问你 |
 | 最终审查的模型判不通过「最多打回 2 轮，第 3 次熔断」（`FINAL_ROUNDS = 2`） | `2026-11-08-phase5-open-points.md`；`STATE.md`「验收」第 2 步（#19 分支上第 284 行） | mission 结束时的偏离评审打回 1 轮，第 2 次问你（和 11-10 定的规则一致）。`FINAL_ROUNDS` 拆成两个常量，跨 mission 评审仍是 2 轮 |
-| PLAN「默认参数」：每次提交最多 8 个文件 | 同上 | 不变。orc 自己的提交路径不经过这条（它在 `align.sh` 里，只管 agent 直接提交）；orc 的上限是评审的 60000 字节，超过就给文件列表让评审用 Read 看。删掉「一轮一条」以后单次提交可能变大，但不受 8 个文件的限制，这一点和现在一样 |
-| PLAN「模型」：简单评审用 Opus | 同上 | 不变。`review_light` 还在用：测试依赖的模型复核（`orc/bin/orc:1067`）、信任层 `northstar-review --role auto`（agent 直接提交时）。只是 orc 的提交关口不再调用它 |
+| PLAN「默认参数」：每次提交最多 8 个文件 | `PLAN.md:26` | 不变。orc 自己的提交路径不经过这条（它在 `align.sh` 里，只管 agent 直接提交）；orc 的上限是评审的 60000 字节，超过就给文件列表让评审用 Read 看。删掉「一轮一条」以后单次提交可能变大，但不受 8 个文件的限制，这一点和现在一样 |
+| PLAN「模型」：简单评审用 Opus | `PLAN.md:18` | 不变。`review_light` 还在用：测试依赖的模型复核（`orc/bin/orc:1067`）、信任层 `northstar-review --role auto`（agent 直接提交时）。只是 orc 的提交关口不再调用它 |
 | `2026-11-06-review-checks-timing.md`：取消「每完成一条就提交」会影响小步提交和 8 个文件上限 | 该提案 | 小步提交不再强制；8 个文件上限见上 |
-| PLAN「并发」、PLAN「产品设计和 phase」（跨 mission 评审） | 同上 | **不变**：文件归属不放宽，跨 mission 评审保持独立 |
+| PLAN「并发」、PLAN「产品设计和 phase」（跨 mission 评审） | `PLAN.md:20`、`:24` | **不变**：文件归属不放宽，跨 mission 评审保持独立 |
+
+### 进行中的 mission 怎么过渡（第七轮评审第 2 条）
+
+- 签名的执行规则 `brief-exec.md` 每个执行会话都读（`orc/bin/orc:2150`）。模板跟着规则改：第 6 行（一轮一条）在第 2 个 PR 改，第 7 行（每次提交前的对齐评审）在第 3 个 PR 改。不改的话，新 mission 的执行会话会同时读到两种说法。
+- PR 合并前已经签名的 mission，签名的规则和新代码对不上；第 3 个 PR 以后，它签名的 `approved-design.md` 也没有简要设计一节。规则：**新流程只对 PR 合并以后 go 的 mission 生效。**
+  - 做法：`brief-exec.md` 模板加一行「流程版本：N」，随执行规则一起签名；代码里写当前版本。第 2、3 个 PR 各把 N 加 1。没有这一行的已签名 mission 算版本 0。
+  - `orc step` 遇到签名版本和代码不一致的 mission，就停下说明，不按任何一种规则继续：用合并前的 orc 跑完，或者放弃后重开。
+  - 现在还在跑的 `fintelli-p1-1-3`（卡在问题 001）要在第 2 个 PR 合并前跑完，否则按这条重开。
+- 规划校验（`product_plan_problems`）在第 3 个 PR 加一条：签名前 `design.md` 必须有简要设计一节，按固定标题能截出来，不超过 40 行。
 
 ### 先不动，等数据
 
@@ -239,12 +254,15 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 5. **简要设计谁写：** 推荐规划会话写在 `design.md` 开头，40 行以内，必须包括分层、「不要新建 X」、错误处理策略、接口的形状；你在审阅页上读，go 时签名。备选：你自己写。已经合并的 mission（比如 P1-1）没有简要设计，不补：偏离评审只看当前 mission 的简要设计和画布，跨 mission 评审照旧看完整设计。
 6. **`models.toml` 的 `review` 改成 `claude-fable-5-2`：** 推荐改。偏离评审在 orc 里调用（第 8 条），读的是仓库里的 `orc/config/models.toml`；mission 开始时会把它快照进 `models.json`（`orc/bin/orc:420`），所以**只对之后新开的 mission 生效**，跑到一半的 mission 继续用原来的模型。信任层装的那一份 `/opt/northstar/models.toml` 只影响 agent 自己直接提交时的评审，可以下次重装信任层时顺带改，不急。`review_light` 不动，它还被测试依赖复核和信任层用着。
 7. **做的顺序：** 推荐 3 个 PR，都**等 #19 合并以后**从 main 开（评审第 6 条：前两个和 #19 改的是同一段代码）：
-   - 换模型（一行）；
-   - 删掉「一轮一条」（brief、续跑提示、STATE），`files` 由 orc 自动填；
+   - 换模型：`models.toml` 一行，加上 `PLAN.md:18`；
+   - 删掉「一轮一条」：`brief-exec.md:6`、续跑提示（`:2814/2816/2841/2860/3983/4170`）、`STATE.md:204`、`PLAN.md:26` 里随之变化的部分；`files` 由 orc 自动填；`one-criterion-vs-invariants.md` 标成被取代；`brief-exec.md` 加「流程版本」并做版本核对（见第四节「过渡」）；
    - 偏离评审：
-     - 替换整体评审和最终审查里的模型评审，删掉提交关口的对齐评审；
+     - 替换整体评审和最终审查里的模型评审，删掉提交关口的对齐评审，`brief-exec.md:7` 跟着改，流程版本加 1；
      - `verification.sha` 和 `coordinator-verification.sha` 改写评审记录里的 `head`；
-     - 规划会话写简要设计；
+     - 规划会话写简要设计，规划校验核对它存在、不超过 40 行；
+     - 打回的节点由 orc 用 `file_owners` 按证据文件定；
+     - `modelUsage` 核对放进 `claude_result`，覆盖所有评审调用；
+     - `PLAN.md:21`、`:26` 按已定决定表改；
      - STATE.md 跟着改：提交关口第 4、5 步，「连续被拒」不再算 DRIFT，第 5 步「评审之后改一个字节都提交不进去」，`coordinator-verification.md` 的文字（现在写「对齐评审 ALIGNED」），「验收」第 2 步的打回轮数（第 284 行）；
      - `FINAL_ROUNDS` 拆成两个常量；
      - 合并前先实测 `modelUsage`（第三节「入口」）。
@@ -612,3 +630,18 @@ orc 现在的确定性检查共 50 多条（清单见附录）。
 ### 核过成立的
 
 正文其余行号引用；文件归属是底线；`verification.sha` 写评审 head，由 `integrate-task.sh:307-309` 在锁里核对；HEAD 变了回到整体评审；撤回在锁里做、head 等于 tip 的防护保留；`FINAL_ROUNDS` 拆分；已定决定表。数据一节看不到 `events.jsonl`，没核。
+
+## 第七版按评审意见改了什么（2026-11-16）
+
+第七轮的 6 条都核过 `f2682fb` 上的代码，都成立：`file_owners` 在 `:3505`；`brief-exec.md:6-7` 是那两句；执行会话在 `:2150` 读它；`:474/2434/2625/3723` 都用 `review` 角色；`:2841/3983/4170` 都是「继续当前这条验收标准」；`PLAN.md:18/21/26` 和 `one-criterion-vs-invariants.md` 的状态如评审所说；`resume=integrate` 在 `:2807-2808`。
+
+| 第七轮评审 | 改动 |
+| --- | --- |
+| 1 mission 结束时的评审填不对 `node` | 输出去掉 `node`。节点评审打回本节点；mission 结束时由 orc 用 `file_owners` 按 `evidence.file` 定节点，定不出唯一节点（不在任何节点的 `files` 里，或 `missing` 引的是简要设计的行）就停下问你 |
+| 2 进行中的 mission 怎么过渡 | 第四节新增「进行中的 mission 怎么过渡」：`brief-exec.md:6` 进第 2 个 PR、`:7` 进第 3 个 PR；模板加「流程版本」随规则签名，版本和代码不一致的 mission 停下说明；`fintelli-p1-1-3` 要在第 2 个 PR 前跑完，否则重开 |
+| 3 是否总能 Read | 写明总是只放行 Read、读导出副本；diff 不超过 60000 字节时同时放进提示词 |
+| 4 `modelUsage` 只核三处 | 核对放进 `claude_result`，调用方传自己角色的模型；覆盖 `:474/2434/2625/3723` 和测试依赖复核（`review_light`） |
+| 5 漏列的改动点 | 续跑提示补上 `:2841/3983/4170`；已定决定表补 `PLAN.md:18`，`:21`、`:26` 写明行号，原来几处含糊的「同上」改成具体行号；`one-criterion-vs-invariants.md` 标成被取代；规划校验核对简要设计存在、不超过 40 行；画布从基线提交 `git show`。都列进第 7 条决定的 PR 清单 |
+| 6 行号 | `resume=integrate` 改成 `:2807-2808` |
+
+8 条决定的选择都没变，这几处都是落实细节。第七轮的实测（云端 CLI 2.1.325，`modelUsage` 只有 `claude-fable-5-2`）记在第三节「入口」，Mac 上照样要测。
