@@ -3752,11 +3752,12 @@ def final_streak(m: Mission, type_: str = "final") -> int:
 
 def reopen_for(m: Mission, result: dict, type_: str, label: str):
     """审查打回：按问题所属的节点重新打开，回到 executing。mission 结束时的偏离评审打回 FINAL_DRIFT_ROUNDS 轮、
-    跨 mission 评审打回 CROSS_ROUNDS 轮，再多一次就 mediate。"""
+    跨 mission 评审打回 CROSS_ROUNDS 轮，再多一次就停下：偏离评审问用户（ask-user，林翰 11-17 定），跨 mission 评审 mediate。"""
     streak = final_streak(m, type_)
     if streak > (FINAL_DRIFT_ROUNDS if type_ == "final" else CROSS_ROUNDS):
         m.block(f"{label}连续 {streak} 次没通过", f"mission {m.name} 的{label}连续 {streak} 次没通过，已熔断。最近一次的问题：\n\n"
-                f"{issues_text(result['issues'])}\n\n回答后 orc 会重新做{label}。", "mediate", "orc step")
+                f"{issues_text(result['issues'])}\n\n回答后 orc 会重新做{label}。",
+                "ask-user" if type_ == "final" else "mediate", "orc step")
         return None, True
     done = {e["node"] for e in m.events()[event_index(m, result):] if e.get("kind") == "node-reopen"}
     by_node: Dict[str, List[dict]] = {}

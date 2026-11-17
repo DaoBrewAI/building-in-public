@@ -296,7 +296,7 @@ pending → running → submitted → integrated
   - 控制文件的 `state` 改回 `ready`，写 `unresolved-rework` 和纠偏单，节点状态 `integrated → rework`；
   - mission `reviewing → executing`；执行会话 `--resume` 回到同一个会话，收到纠偏单。
 - 之后和阶段 4 一样：提交关口、整体评审、`integrate-task.sh` 再合并一次（对同一个分支再合并，复用脚本不用改），全部集成后回到 `reviewing`，新的 tip 再做一次最终审查。
-- 偏离评审打回 1 轮（`FINAL_DRIFT_ROUNDS`）：第 2 次还是 `drift` 就 mission `blocked`（`mediate`），回答后重新做最终审查，计数清零（11-10 定：第二次还是 drift 就问你）。跨 mission 评审仍是最多打回 2 轮（`CROSS_ROUNDS`）。
+- 偏离评审打回 1 轮（`FINAL_DRIFT_ROUNDS`）：第 2 次还是 `drift` 就 mission `blocked`（`ask-user`，直接问你，不由 coordinator 答；林翰 11-17 定），回答后重新做最终审查，计数清零（11-10 定：第二次还是 drift 就问你）。跨 mission 评审仍是最多打回 2 轮（`CROSS_ROUNDS`）。
 
 ### 修复闭环（`proposals/2026-11-08-repair-loop.md`）
 

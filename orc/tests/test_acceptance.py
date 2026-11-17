@@ -258,9 +258,9 @@ class FinalReview(AcceptCase):
         bad = drift("a.txt", "还是不对")
         self.script("final", bad, bad)
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: mediate "), r.stdout + r.stderr)
-        self.assertIn("连续 2 次没通过", Path(self.next_line(r)[len("next: mediate "):]).read_text())
-        self.assertEqual(len(self.ev("node-reopen")), 1)                  # 偏离评审打回 1 轮，第 2 次问（11-10 定）
+        # 偏离评审打回 1 轮，第 2 次直接问你（11-10 定「停下问你」；林翰 11-17 定 mission 结束时也是 ask-user，不由 coordinator 答）
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的最终审查连续 2 次没通过"), r.stdout + r.stderr)
+        self.assertEqual(len(self.ev("node-reopen")), 1)
         self.assertEqual(self.state(), "blocked")
         # 回答后重新做最终审查（这次通过）
         self.answer("接受现状")
