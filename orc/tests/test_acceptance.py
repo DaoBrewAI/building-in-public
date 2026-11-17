@@ -484,6 +484,122 @@ class FinalReview(AcceptCase):
 
 
 class PullRequestAndCI(AcceptCase):
+    FAKE_KEY = "AKIA" + "ABCDEFGHIJKLMNOP"          # AWS access key 的格式（拼起来，免得仓库扫描把测试本身当成密钥）
+
+    def test_commit_with_a_secret_stops_before_the_pr(self):
+        # 中间提交加进了密钥、下一个提交再删掉：最终代码里没有，但 push 会把它带上去。开 PR 前逐个扫描提交，命中就停下问
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": f"a\nkey={self.FAKE_KEY}\n"}, [1]),
+                    commit({"a.txt": "a\n"}, []))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "多了一行", "evidence": "a.txt:2"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        question = sorted((self.mdir / "questions").glob("*.md"))[-1].read_text()
+        self.assertIn("开 PR 了", question)
+        self.assertIn("`a.txt`：AWS access key", question)
+        self.assertNotIn(self.FAKE_KEY, question)                         # 只列位置，不列内容
+        self.assertNotIn(self.FAKE_KEY, (self.mdir / "events.jsonl").read_text())
+        self.assertEqual([a for a in self.gh_calls() if a[:2] == ["pr", "create"]], [])   # 没推、没开 PR
+        self.answer("先看看")                                              # 不是「继续」：再扫一次、再问
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        self.assertEqual(len(self.ev("commit-scan")), 2)
+        self.answer("继续")                                                # 确认是误报
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        self.assertEqual(len([a for a in self.gh_calls() if a[:2] == ["pr", "create"]]), 1)
+
+    def test_clean_commits_open_the_pr_without_asking(self):
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        scan, = self.ev("commit-scan")
+        self.assertEqual(scan["findings"], [])
+        self.assertFalse(list((self.mdir / "questions").glob("*.md")))
+
+    def test_large_files_are_found_in_any_commit(self):
+        # 大文件：只看函数本身（不在测试里真写几 MB）
+        import types
+        repo = self.tmp / "scan-repo"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True, env=self.env).stdout.strip()
+        g("init", "-q")
+        (repo / "x.txt").write_text("x\n")
+        g("add", "."); g("commit", "-qm", "base")
+        base = g("rev-parse", "HEAD")
+        (repo / "big.bin").write_text("y" * 200)
+        g("add", "."); g("commit", "-qm", "big")
+        (repo / "big.bin").unlink()
+        g("add", "-A"); g("commit", "-qm", "remove big")
+        tip = g("rev-parse", "HEAD")
+        orc = self.orc
+        old = orc.LARGE_FILE_BYTES
+        orc.LARGE_FILE_BYTES = 100
+        try:
+            found = orc.scan_commits(types.SimpleNamespace(repo=lambda: repo), base, tip)
+        finally:
+            orc.LARGE_FILE_BYTES = old
+        self.assertEqual([(f["file"], f["kind"]) for f in found], [("big.bin", "大文件（0 KB）")])
+
+    def test_keys_are_found_whatever_the_file_name_line_or_commit_kind(self):
+        # 评审实测漏掉的三种：非 ASCII 文件名（git 默认给路径加引号）、新增的行以「++ 」开头、合并提交里手工加的内容。
+        # 每个提交加一个密钥、之后都删掉：四个都要找到。子模块条目不让扫描出错
+        import types
+        repo = self.tmp / "scan-repo"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True,
+                                      capture_output=True, text=True, env=self.env).stdout.strip()
+        g("init", "-q", "-b", "main")
+        (repo / "x.txt").write_text("x\n")
+        g("add", "."); g("commit", "-qm", "base")
+        base = g("rev-parse", "HEAD")
+        key = f"key={self.FAKE_KEY}\n"
+        (repo / "配置.py").write_text(key)
+        g("add", "."); g("commit", "-qm", "non-ascii")
+        (repo / "plus.txt").write_text("++ counter\n" + key)
+        g("add", "."); g("commit", "-qm", "plus")
+        (repo / "plain.txt").write_text(key)
+        g("add", "."); g("commit", "-qm", "plain")
+        g("checkout", "-qb", "side", base)
+        (repo / "side.txt").write_text("side\n")
+        g("add", "."); g("commit", "-qm", "side")
+        g("checkout", "-q", "main")
+        g("merge", "-q", "--no-ff", "--no-commit", "side")
+        (repo / "evil.py").write_text(key)                                   # 解决合并时手工加的
+        g("add", "."); g("commit", "-qm", "merge side")
+        g("update-index", "--add", "--cacheinfo", f"160000,{base},vendor/sub")
+        g("rm", "-q", "配置.py", "plus.txt", "plain.txt", "evil.py")
+        g("commit", "-qm", "remove keys, add submodule")
+        found = self.orc.scan_commits(types.SimpleNamespace(repo=lambda: repo), base, g("rev-parse", "HEAD"))
+        self.assertEqual(sorted(f["file"] for f in found), ["evil.py", "plain.txt", "plus.txt", "配置.py"])
+        self.assertEqual({f["kind"] for f in found}, {"AWS access key"})
+
+    def test_confirmed_findings_are_not_asked_again_after_the_tip_changes(self):
+        # 回答「继续」确认过的（提交、文件、类型），修复闭环之后 tip 变了也不再问
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": f"a\nkey={self.FAKE_KEY}\n"}, [1]), commit({"a.txt": "a\n"}, []))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "多了一行", "evidence": "a.txt:2"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        first = self.ev("commit-scan")[-1]
+        self.answer("继续")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        orc, other = self.orc, "f" * 40                                      # 修复闭环之后的新 tip
+        with mock.patch.dict(os.environ, self.env), \
+                mock.patch.object(orc, "scan_commits", return_value=list(first["findings"])):
+            self.assertIsNone(orc.commit_scan_step(orc.Mission("m1"), other))   # 同一处，不再问
+        last = self.ev("commit-scan")[-1]
+        self.assertEqual((last["tip"], last["findings"]), (other, []))
+        new = [{**first["findings"][0], "file": "b.txt"}]
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(orc, "scan_commits", return_value=new), \
+                mock.patch.object(orc.Mission, "block", return_value=Path("q.md")) as block:
+            self.assertEqual(orc.commit_scan_step(orc.Mission("m1"), "e" * 40), (None, True))   # 新的一处照样问
+        self.assertIn("`b.txt`：AWS access key", block.call_args[0][1])
+
     def test_ci_failure_blocks_and_answer_reruns_ci_only(self):
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]))
