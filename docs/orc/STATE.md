@@ -95,7 +95,7 @@ pending → running → submitted → integrated
 | `state` | `from`、`to`、`reason`（可选）；进入 `blocked` 时另有 `question`（问题 id）和 `type`（ask-user / mediate） |
 | `node-state` | `node`、`from`、`to` |
 | `commit` | `node`、`sha`、`files` |
-| `review` | `node`、`verdict`（ALIGNED / DRIFT）、`reason` |
+| `review` | `node`（mission 级的是 null）、`stage`（node / final / cross）、`verdict`（节点的偏离评审：ALIGNED / DRIFT；最终审查：PASS / FAIL；跨 mission 评审：PASS / CONFLICT）、`reason` |
 | `correction` | `node`、`count`（连续第几次）、`card`（纠偏单文件） |
 | `check` | `node`（可选）、`id`、`passed`、`log` |
 | `ask` | `id`、`type`（ask-user / mediate）、`file` |
@@ -105,7 +105,8 @@ pending → running → submitted → integrated
 | `planner-exit` | `run`、`rc`、`outcome`（question / invalid / ready / failed）、`problems`（可选） |
 | `plan-ready` | `files`（文件名 → sha256） |
 | `verify-snapshot` | `cycle`（第几轮验证）、`base`（验证会话拿到的代码副本对应的提交） |
-| `verifier-start` / `verifier-exit` | 同 `planner-start` / `planner-exit`，另带 `cycle` |
+| `verifier-start` / `verifier-exit` | 同 `planner-start` / `planner-exit`，另带 `cycle`；`verifier-exit` 的 `outcome` 多一种 `unavailable`（模型核对没通过） |
+| `verifier-restart` | `reason`、`runs`：这一轮作废，下一次从头开新的一轮 |
 | `verify-ready` | `base`、`checks`（checks.json 的 sha256）、`tests`（测试文件 → sha256）、`results`（检查 id → 实现前的退出码） |
 | `feedback` | `id`、`text`：用户审阅后的修改意见 |
 | `published` | `route`、`url`、`sha256` |
@@ -157,6 +158,7 @@ pending → running → submitted → integrated
 
 - **模型**：`review` 角色（目前 Fable 5.1），和执行用的模型不同。启动方式、沙箱、提问、自动修 2 次再 `mediate`，都和规划会话一样。
 - **每一轮从头开始**：每次 `planning → verifying` 都清空 `~/.orc-worktrees/<mission>/verify-work/`，新开会话（不 resume 上一轮）。轮内的提问回答和修复仍回到同一个会话。
+- **模型核对（底线）**：每次运行结束（包括以提问结束的），核对这一轮**每一次**运行的 `.runs/<n>.json` 里的 `modelUsage` 都只有配置的 `review` 模型；没留下可核对输出的（异常退出）也算不过。不过就 `ask-user`，并记 `verifier-restart`：回答后清空工作目录、新开会话从头写，这一轮写的东西都不用，不发回同一个会话。
 - **只给**：`spec/design.md`、`spec/task-dag.json`（orc 从 `plan/` 复制）、`repo/`（产品仓库当前提交的副本，没有 `.git`，提交号写进 `verify-snapshot`）、用户在审阅时提过的意见。**不给** `plan.md`，也看不到规划会话的过程。
 - **产出**：`repo/` 里新建的测试文件，和工作目录根上的 `checks.json`（`test_files`、`checks`：每个检查有 `id`、`node`、`acceptance`（第几条验收标准）、`command`、`expect_before`（fail / pass））。
 - **检查挂在哪个节点上**（2026-11-08 加，brief 里的规则）：挂在节点 X 上的检查只能依赖 X 和它前置节点的改动；跑整套测试这类检查挂在依赖了所有相关节点的节点上。起因：mission `subtract` 实跑时，跑整套测试的检查挂在了前置节点上，要等后续节点做完才会通过，节点永远完成不了。其中「导入」这一部分 orc 会查（下一条）；其余（例如测试依赖别的节点改过的已有文件的新行为）仍只靠 brief。
@@ -247,7 +249,7 @@ pending → running → submitted → integrated
 
 ### 整体评审和集成
 
-- 节点每条验收标准都有一次通过的提交后，进入 `submitted`（`nodes/<node>/state` 设成 `completed`，写 `report.md`）。orc 在后台做整体评审：先在节点分支的最新提交上跑本节点全部冻结检查，不通过就 `rework`，不调用模型；通过后做**偏离评审**（见下面「偏离评审」）。判 `drift` 时写 `unresolved-rework`，节点回到 `rework`，纠偏单发回执行会话；rework 的提交通过提交关口后，清掉 `unresolved-rework`，再做一次整体评审，偏离评审带上上一次的原因。从上一次 `aligned`（或节点被重新打开、用户回答了它的问题）以来连续第 2 次 `drift`，节点 `blocked`、mission `mediate`，回答发给执行会话。被打回、之后没有任何改动的节点（HEAD 就是重新打开时的基线）不拿空 diff 去评审：整体评审返回 `unchanged`，`orc step` 在锁里撤回这次打回。
+- 节点每条验收标准都有一次通过的提交后，进入 `submitted`（`nodes/<node>/state` 设成 `completed`，写 `report.md`）。orc 在后台做整体评审：先在节点分支的最新提交上跑本节点全部冻结检查，不通过就 `rework`，不调用模型；通过后做**偏离评审**（见下面「偏离评审」）。判 `drift` 时写 `unresolved-rework`，节点回到 `rework`，纠偏单发回执行会话；rework 的提交通过提交关口后，清掉 `unresolved-rework`，再做一次整体评审，偏离评审带上上一次的原因。从上一次 `aligned`（或节点被重新打开、用户回答了它的问题）以来连续第 2 次 `drift`，节点 `blocked`、mission `ask-user`（11-10 定的「停下问你」，不由 coordinator 自己答），回答发给执行会话；之后的重评仍带上一次 drift 的原因。每次节点的偏离评审记一条 `review` 事件（`stage` 是 node）。被打回、之后没有任何改动的节点（HEAD 就是重新打开时的基线）不拿空 diff 去评审：整体评审返回 `unchanged`，`orc step` 在锁里撤回这次打回。
 - 整体评审通过：orc 先核对节点现在的 HEAD 就是偏离评审看过的那个提交（整体评审结果里的 `head`）。不是（测试修正后同步过、集成失败后改了提交）：不集成，记 `integrate-deferred`，回到整体评审。是：`verification.sha` 和 `coordinator-verification.sha` 写这个 `head`，再写 `coordinator-verification.md`、`parent-verification.sha`，然后在后台运行复用的 `integrate-task.sh`；脚本在集成锁里要求节点的 tip 等于 `verification.sha`，所以集成的就是评审看过的字节。集成一次只跑一个，脚本自己再拿集成锁，普通 merge，不改写历史。
 - 所有节点都 `integrated` 后，进入 `reviewing` 之前，orc 不只信日志，从协议文件重新算一遍：每个节点 `control/tasks/<node>/state` 是 `integrated`，记录的 `integrated_sha` 确实在 mission 分支上。和日志不一致就 `next: error`。
 
@@ -284,7 +286,8 @@ pending → running → submitted → integrated
 - 用 mission 分支的 tip 做一份检查用的副本（带 git 历史），在沙箱里重跑**全部**冻结检查，再跑产品仓库自己的 `.northstar/checks/run_all.sh`（有的话）。规则同提交关口：只能写副本、不能联网、每条最多 300 秒。
 - 每个检查跑 3 次，任何一次失败都算失败（`fails` / `runs` 记在结果里），偶发失败不再靠运气通过。
 - 有检查没通过（冻结检查或 `run_all.sh`）：结果是 `checks-failed`，**不按检查所属的节点打回**，交给修复闭环（见下）。不调用最终审查的模型。
-- 检查都通过：对整个 mission 的 diff 做**偏离评审**（见「偏离评审」）。判 `drift` 的每一项，orc 按证据文件在签名 DAG 里的归属确定性地定打回哪个节点（几个节点都有这个文件就取第一个，和修复闭环一样）；定不出来的（证据文件不属于任何节点，或者 `missing` 引的是简要设计的行）不猜，停下 `ask-user`。
+- 检查都通过：对整个 mission 的 diff 做**偏离评审**（见「偏离评审」）。判 `drift` 的每一项，orc 按证据文件在签名 DAG 里的归属确定性地定打回哪个节点（几个节点都有这个文件就取第一个，和修复闭环一样）；定不出来的（证据文件不属于任何节点，或者 `missing` 引的是简要设计的行）不猜，结果是 `drift-unroutable`，停下 `ask-user`；回答后在当前代码上重新做最终审查（回答不交给评审），也可以 `orc abandon`。
+- 偏离评审的 `notes` 不拦：每个节点最近一次通过的节点评审和这个 tip 上 mission 结束时的评审，写进 PR 正文的「评审意见」。
 
 ### 2. 打回节点（审查不通过）
 

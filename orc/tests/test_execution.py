@@ -951,19 +951,22 @@ class NodeReview(ExecCase):
         self.assertIn("偏离评审 aligned", (self.mdir / "control" / "tasks" / "a" / "coordinator-verification.md").read_text())
 
     def test_second_drift_in_a_row_stops_and_asks(self):
-        # 11-10 定：第二次还是 drift 就停下问你；回答发给执行会话，之后计数清零
+        # 11-10 定：第二次还是 drift 就停下问你（ask-user，不是 coordinator 自己答）；回答发给执行会话，之后计数清零
         self.simple(("a",))
         self.script("drift", self.DRIFT, self.DRIFT, self.ALIGNED)
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\nb\n"}, []), commit({"a.txt": "a\nc\n"}, []))
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: mediate "), r.stdout + r.stderr)
-        self.assertIn("连续 2 次判 drift", Path(self.next_line(r)[len("next: mediate "):]).read_text())
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 节点 a 的偏离评审连续 2 次判 drift"), r.stdout + r.stderr)
         self.assertEqual(len(self.calls("exec-a")), 2)
         self.answer("这个节点只写 a.txt 的第一行，别的都不要")
         r = self.drive()
         self.reached_reviewing(r)
         self.assertIn("只写 a.txt 的第一行", self.calls("exec-a")[2]["prompt"])
         self.assertEqual([s["outcome"] for s in self.ev("job-exit", type="submit")], ["rework", "rework", "aligned"])
+        self.assertIn("整体上绕开了设计", self.calls("drift")[2]["prompt"])      # 回答之后的重评也带上一次的原因
+        # 状态页按 review 事件数 DRIFT
+        self.assertEqual([e["verdict"] for e in self.ev("review", node="a")], ["DRIFT", "DRIFT", "ALIGNED"])
+        self.assertEqual({e["stage"] for e in self.ev("review", node="a")}, {"node"})
 
     BAD = json.dumps({"verdict": "drift", "drift": [{"rule": "N1", "evidence": {"side": "tip", "file": "a.txt", "line": 99},
                                                      "why": "x"}]})

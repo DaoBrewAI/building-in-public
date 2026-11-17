@@ -542,21 +542,6 @@ class Models(OrcCase):
         self.assertEqual(self.orc.claude_result(p), ("x", None))
 
 
-class ReviewTier(OrcCase):
-    """重要、复杂的评审用 review（Fable），其余用 review_light（Opus）；由代码按固定规则判断。"""
-
-    def test_tiering_rules(self):
-        rr = lambda stage, lines=10, drift=False: self.orc.review_role(stage, lines, drift, 300)
-        self.assertEqual(rr("node"), "review")                   # 节点整体评审
-        self.assertEqual(rr("final"), "review")                  # 最终审查
-        self.assertEqual(rr("commit"), "review_light")           # 平时的小步评审
-        self.assertEqual(rr("commit", drift=True), "review")     # DRIFT 之后的复审
-        self.assertEqual(rr("commit", lines=300), "review_light")
-        self.assertEqual(rr("commit", lines=301), "review")      # 大改动
-        with self.assertRaises(self.orc.OrcError):
-            rr("whatever")
-
-
 class Doctor(OrcCase):
     def fake_install(self, with_codex=True):
         ns = self.tmp / "opt-northstar"

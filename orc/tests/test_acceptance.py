@@ -497,8 +497,9 @@ class FinalReview(AcceptCase):
         self.script("a", commit({"a.txt": "a\n"}, [1]))
         self.script("final", drift("tests/orc/check_a.sh", "测试文件不归任何节点"))
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的最终审查没能完成"), r.stdout)
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 结束时的偏离评审判了 drift"), r.stdout)
         self.assertIn("定不出该打回哪个节点", self.next_line(r))
+        self.assertIn("orc abandon", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
         self.assertEqual(self.ev("node-reopen"), [])
         self.answer("重试")
         r = self.drive()
@@ -506,6 +507,20 @@ class FinalReview(AcceptCase):
 
 
 class PullRequestAndCI(AcceptCase):
+    def test_drift_review_notes_go_into_the_pr_body(self):
+        # 提案「结果怎么用」：notes 写进 PR 正文的「评审意见」，不拦
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.script("drift", json.dumps({"verdict": "aligned", "drift": [], "notes": ["命名可以更统一"]}, ensure_ascii=False))
+        self.script("final", json.dumps({"verdict": "aligned", "drift": [], "notes": ["README 没提导出"]}, ensure_ascii=False))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        create, = [a for a in self.gh_calls() if a[:2] == ["pr", "create"]]
+        body = create[create.index("--body") + 1]
+        self.assertIn("## 评审意见", body)
+        self.assertIn("- 节点 `a`：命名可以更统一", body)
+        self.assertIn("- 整个 mission：README 没提导出", body)
+
     def test_ci_failure_blocks_and_answer_reruns_ci_only(self):
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]))

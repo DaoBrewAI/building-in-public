@@ -597,6 +597,54 @@ class Verify(PlanningCase):
         r = self.step()
         self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout)
 
+    def other_model_for_verifier(self, mdir):
+        implement = json.loads((mdir / "models.json").read_text())["roles"]["implement"]["model"]
+        (self.fake / "model-usage-verify").write_text(json.dumps({implement: {"inputTokens": 1}}))
+
+    def test_run_by_another_model_restarts_the_verifier_from_scratch(self):
+        # 冻结测试是评审角色写的（底线）：别的模型写了测试，回答「重试」后清空工作目录、新开会话，不发回同一个会话
+        self.vscript("ok", "ok")
+        mdir = self.to_plan_review("ok")
+        self.other_model_for_verifier(mdir)
+        self.through_verify()
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        exit_ = [e for e in self.events(mdir) if e["kind"] == "verifier-exit"][-1]
+        self.assertEqual(exit_["outcome"], "unavailable")
+        self.assertFalse([e for e in self.events(mdir) if e["kind"] == "verify-ready"])
+        (self.fake / "model-usage-verify").unlink()
+        self.assertEqual(self.run_orc("answer", "重试").returncode, 0)
+        r = self.step()
+        self.assertIn("blocked → verifying", r.stdout)
+        self.wait()
+        first, second = self.vcalls()
+        self.assertIn("--session-id", second["args"])                            # 新开会话
+        self.assertNotEqual(second["args"][second["args"].index("--session-id") + 1],
+                            first["args"][first["args"].index("--session-id") + 1])
+        self.assertNotIn("repo/tests/orc/test_export.sh", second["files"])       # 别的模型写的测试不在了
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
+
+    def test_question_asked_by_another_model_is_checked_too(self):
+        # 以提问结束的运行也核对：不然别的模型先写测试再提问，回答后同一个会话只收尾就通过了
+        self.vscript("question:导出失败时要报错还是返回空文件？", "ok", "ok")
+        mdir = self.to_plan_review("ok")
+        self.other_model_for_verifier(mdir)
+        self.through_verify()
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        self.assertNotIn("导出失败时", self.next_line(r))                        # 问的是模型核对，不是它的问题
+        exit_ = [e for e in self.events(mdir) if e["kind"] == "verifier-exit"][-1]
+        self.assertEqual(exit_["outcome"], "unavailable")
+        self.assertTrue(exit_["problems"][0].startswith("第 1 次运行"), exit_["problems"])
+        (self.fake / "model-usage-verify").unlink()
+        self.assertEqual(self.run_orc("answer", "重试").returncode, 0)
+        r = self.step()
+        self.wait()
+        self.assertIn("--session-id", self.vcalls()[1]["args"])
+        r = self.step()
+        self.assertTrue(self.next_line(r).startswith("next: go-gate "), r.stdout + r.stderr)
+
     def test_checks_run_sandboxed_on_a_clean_copy(self):
         # 检查命令是 agent 写的：只能写快照目录和临时目录，不能联网
         self.vscript("escape")

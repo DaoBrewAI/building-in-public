@@ -202,18 +202,6 @@ def resolve_models(path: Path = MODELS_TOML) -> dict:
             "resolved_at": now(), "roles": roles}
 
 
-def review_role(stage: str, diff_lines: int, prior_drift: bool, threshold: int) -> str:
-    """评审分级（流程交给代码）：重要、复杂的用 review，其余用 review_light。
-    node = 节点进入 submitted 时的整体评审；final = 最终审查；commit = 每次提交前的对齐评审。"""
-    if stage in ("node", "final"):
-        return "review"
-    if stage != "commit":
-        raise OrcError(f"不认识的评审阶段 {stage}。这是 orc 的 bug。")
-    if prior_drift or diff_lines > threshold:
-        return "review"
-    return "review_light"
-
-
 # ---------------------------------------------------------------- mission
 
 class Mission:
@@ -497,9 +485,27 @@ def agent_work(m: Mission, kind: str) -> Path:
 
 
 def verify_cycle(m: Mission) -> int:
-    """第几轮验证：每次规划产出通过校验（planning → verifying）就开新的一轮，验证会话从头写。"""
+    """第几轮验证：每次规划产出通过校验（planning → verifying）就开新的一轮，验证会话从头写。
+    模型核对没通过（verifier-restart）也开新的一轮：清空工作目录、新开会话，别的模型写的东西一点不留。"""
     return sum(1 for e in m.events()
-               if e.get("kind") == "state" and e.get("from") == "planning" and e.get("to") == "verifying")
+               if (e.get("kind") == "state" and e.get("from") == "planning" and e.get("to") == "verifying")
+               or e.get("kind") == "verifier-restart")
+
+
+def verifier_model_problems(m: Mission) -> List[str]:
+    """这一轮验证的每一次运行（含以提问结束、异常退出的）都必须确实是配置的 review 模型。没留下可核对输出的也算不过。"""
+    model = m.roles()["review"]["model"]
+    problems = []
+    for s in agent_starts(m, "verifier"):
+        try:
+            envelope = json.loads((m.verify_work() / ".runs" / f"{s['run']}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            envelope = None
+        problem = (model_usage_problem(envelope, model) if isinstance(envelope, dict)
+                   else "没有留下可核对的 claude -p 输出")
+        if problem:
+            problems.append(f"第 {s['run']} 次运行：{problem}")
+    return problems
 
 
 def agent_starts(m: Mission, kind: str, current: bool = True) -> List[dict]:
@@ -1288,6 +1294,20 @@ def finish_agent_run(m: Mission, kind: str, n: int, rc: Optional[int]):
     spec = AGENTS[kind]
     work = agent_work(m, kind)
     question = work / "QUESTION.md"
+    if kind == "verifier" and rc == 0:
+        # 冻结测试是评审角色写的（底线）：这一轮的每一次运行都确实是配置的 review 模型，才往下走（提问也先核对）。
+        # 不是就停下问用户；回答后开新的一轮（清空工作目录、新开会话），不发回同一个会话
+        problems = verifier_model_problems(m)
+        if problems:
+            model = m.roles()["review"]["model"]
+            q = m.ask(f"{spec['label']}没能确认这一轮都是配置的 review 模型（{model}）在写冻结测试：\n"
+                      + "\n".join(f"- {p}" for p in problems) + "\n\n检查 models.toml 和 claude 的登录后回答「重试」。"
+                      "orc 会清空验证的工作目录、新开一个验证会话从头写，这一轮写的东西都不用。", "ask-user", "orc step")
+            m.append(f"{kind}-exit", "orc step", run=n, rc=rc, outcome="unavailable", problems=problems, question=q.stem)
+            m.append("verifier-restart", "orc step", reason="模型核对没有通过", runs=[s["run"] for s in agent_starts(m, kind)])
+            m.transition("blocked", "orc step", reason=f"{spec['label']}的模型核对没有通过", question=q.stem, type="ask-user")
+            question.unlink(missing_ok=True)
+            return None, True
     if question.is_file() and question.read_text(encoding="utf-8").strip():
         text = question.read_text(encoding="utf-8").strip()
         q = m.ask(text, "ask-user", "orc step")
@@ -1296,20 +1316,6 @@ def finish_agent_run(m: Mission, kind: str, n: int, rc: Optional[int]):
         question.rename(work / ".runs" / f"{n}.question.md")
         return None, True
     info: dict = {}
-    if rc == 0 and kind == "verifier":
-        # 冻结测试是评审角色写的（底线）：确实是配置的 review 模型写的，才往下走；不是就停下问用户，不发回同一个会话
-        try:
-            envelope = json.loads((work / ".runs" / f"{n}.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            envelope = {}
-        model = m.roles()["review"]["model"]
-        problem = model_usage_problem(envelope if isinstance(envelope, dict) else {}, model)
-        if problem:
-            q = m.ask(f"{spec['label']}没能确认是配置的 review 模型（{model}）写的冻结测试：{problem}。\n\n"
-                      "检查 models.toml 和 claude 的登录后回答「重试」，回答会发给验证会话重新写出产出。", "ask-user", "orc step")
-            m.append(f"{kind}-exit", "orc step", run=n, rc=rc, outcome="unavailable", problems=[problem], question=q.stem)
-            m.transition("blocked", "orc step", reason=f"{spec['label']}的模型核对没有通过", question=q.stem, type="ask-user")
-            return None, True
     if rc == 0:
         if kind == "planner":
             problems = validate_plan_outputs(m, work)
@@ -2620,9 +2626,17 @@ def node_drift_events(m: Mission, node: str) -> List[dict]:
 
 
 def prior_node_drift(m: Mission, node: str) -> Optional[str]:
-    """上一次偏离评审判 drift（之后还没有 aligned）时它的原因：重评时带上。"""
-    found = node_drift_events(m, node)
-    return card_text(found[0].get("card")) if found else None
+    """上一次偏离评审判 drift（之后还没有 aligned、节点也没有被重新打开）时它的原因：重评时带上。
+    用户回答了连续 drift 的提问之后也带上：回答只把计数清零，重评的仍是那次 drift。"""
+    for e in reversed(node_events(m, node)):
+        if e.get("kind") == "node-reopen":
+            return None
+        if e.get("kind") == "job-exit" and e.get("type") == "submit":
+            if e.get("outcome") == "aligned":
+                return None
+            if e.get("outcome") == "rework" and e.get("category") == "drift":
+                return card_text(e.get("card"))
+    return None
 
 
 def cmd_gate(args) -> int:
@@ -2769,10 +2783,11 @@ def finish_job(m: Mission, start: dict, status: str, rc: Optional[int], timed_ou
     if type_ in ("gate", "submit"):
         for cid, ok in fields.get("checks", {}).items():
             m.append("check", "orc step", node=node, id=cid, passed=ok, log=job)
-        review = fields.get("review")
-        if review and review.get("verdict") in ("aligned", "drift"):
-            m.append("review", "orc step", node=node, verdict="ALIGNED" if review["verdict"] == "aligned" else "DRIFT",
-                     reason=review.get("text", "")[:1000], stage="commit" if type_ == "gate" else "node")
+        drift = fields.get("drift") or {}
+        if type_ == "submit" and drift.get("outcome") in ("aligned", "drift") and not drift.get("skipped"):
+            # 节点做完时的偏离评审（状态页按它数 DRIFT）
+            m.append("review", "orc step", node=node, verdict="ALIGNED" if drift["outcome"] == "aligned" else "DRIFT",
+                     reason=(drift_text(drift.get("drift", [])) or "\n".join(drift.get("notes", [])))[:1000], stage="node")
         if fields.get("outcome") == "committed":
             m.append("commit", "orc step", node=node, sha=fields["sha"], files=fields.get("files", []))
         if fields.get("card"):
@@ -2945,8 +2960,9 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
             if streak >= NODE_DRIFT_STOP:
                 block_node(m, node, f"偏离评审连续 {streak} 次判 drift",
                            f"节点 {node} 的偏离评审连续 {streak} 次判 drift，按规则停下问你。最近一次：\n\n"
-                           f"{card_text(last.get('card'))}\n\n你的回答会发给执行会话，它据此修改后再做一次偏离评审。",
-                           "mediate", "executor")
+                           f"{card_text(last.get('card'))}\n\n你的回答会发给执行会话，它据此修改后再做一次偏离评审"
+                           "（评审会带上这次的原因）。",
+                           "ask-user", "executor")
                 return
             launch_executor(m, node, f"整体评审没通过，节点回到 rework。纠偏单：\n\n{card_text(last.get('card'))}\n\n"
                                      "修好后按 commit 格式结束这一轮；acceptance 写这次修的验收标准编号，没有对应的就写 []。")
@@ -2969,7 +2985,8 @@ def decide(m: Mission, node: str, last: dict, cfg: dict) -> None:
         return
     if type_ == "integrate" and outcome != "integrated":
         block_node(m, node, "集成失败", f"节点 {node} 集成到 {mission_branch(m)} 失败：\n\n{last.get('reason')}\n\n"
-                   "排除问题后回答「重试」，orc 会重新集成。", "mediate", "integrate")
+                   "排除问题后回答「重试」，orc 会重新集成。如果你改了节点的提交，回答「重试」后 orc 会先重新做整体评审"
+                   "（全部检查和偏离评审），通过了才集成评审过的那个提交。", "mediate", "integrate")
 
 
 def schedulable(tasks: Dict[str, dict], states: Dict[str, str], max_parallel: int) -> List[str]:
@@ -3295,8 +3312,9 @@ def run_drift(m: Mission, job: str, base: str, tip: str, node: Optional[str] = N
             problems = drift_problems(m, obj, node, northstar, design, base, tip)
             if not problems:
                 break
-            ask = (prompt + "\n\n## 你上一次的输出没有通过 orc 的核对\n\n" + "\n".join(f"- {p}" for p in problems)
-                   + "\n\n改正后按格式重新输出整个 JSON 对象。")
+            ask = (prompt + "\n\n## 你上一次的输出没有通过 orc 的核对\n\n上一次的输出：\n\n```\n"
+                   + (text or "").strip()[-20000:] + "\n```\n\n问题（「第 k 项」指上面 drift 列表的第 k 项）：\n\n"
+                   + "\n".join(f"- {p}" for p in problems) + "\n\n改正后按格式重新输出整个 JSON 对象。")
     except subprocess.TimeoutExpired:
         return {"outcome": "unavailable", "reason": f"偏离评审超过 {REVIEW_TIMEOUT} 秒没有结束"}
     finally:
@@ -3449,7 +3467,7 @@ def run_final(m: Mission, job: str, tip: str) -> dict:
     issues, unroutable = route_drift(m, result["drift"])
     out["review"] = {"verdict": "fail", "issues": issues}
     if unroutable:
-        return {**out, "outcome": "unavailable",
+        return {**out, "outcome": "drift-unroutable",
                 "reason": "偏离评审判 drift，但这几项定不出该打回哪个节点（证据文件不属于任何节点，或者是简要设计要求、"
                           "却没有任何节点去做的 missing），orc 不猜：\n" + drift_text(unroutable)}
     return {**out, "outcome": "rework", "issues": issues}
@@ -3462,6 +3480,19 @@ def gh(m: Mission, *args: str, check: bool = True) -> str:
     if check and r.returncode != 0:
         raise OrcError(f"gh {' '.join(args[:2])} 失败：{(r.stderr or r.stdout).strip()[:300]}。检查网络代理和 gh 登录后再运行 orc step。")
     return r.stdout.strip()
+
+
+def review_notes(m: Mission, tip: str) -> str:
+    """偏离评审的 notes（不拦）：每个节点最近一次通过的节点评审，加上这个 tip 上 mission 结束时的评审。写进 PR 正文。"""
+    rows = []
+    for node in approved_tasks(m):
+        passed = [e for e in job_exits(m, node, "submit") if e.get("outcome") == "aligned"]
+        for note in (passed[-1].get("drift") or {}).get("notes", []) if passed else []:
+            rows.append(f"- 节点 `{node}`：{note}")
+    final = mission_exit(m, "final", tip)
+    for note in ((final or {}).get("drift") or {}).get("notes", []):
+        rows.append(f"- 整个 mission：{note}")
+    return "\n".join(rows)
 
 
 def ensure_pr(m: Mission, tip: str) -> dict:
@@ -3481,8 +3512,10 @@ def ensure_pr(m: Mission, tip: str) -> dict:
     else:
         default = gh(m, "repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name")
         request = (m.dir / "request.md").read_text(encoding="utf-8").strip()
+        notes = review_notes(m, tip)
         body = (f"orc mission `{m.name}`。\n\n**请求**：{request}\n\n全部节点已集成、最终审查通过。"
-                "CI（northstar / verify 和隐藏考题）通过、orc 发布状态页后，由你合并。\n\n🤖 orc")
+                "CI（northstar / verify 和隐藏考题）通过、orc 发布状态页后，由你合并。\n\n"
+                + (f"## 评审意见\n\n偏离评审的 notes，不拦合并：\n\n{notes}\n\n" if notes else "") + "🤖 orc")
         url = gh(m, "pr", "create", "--base", default, "--head", branch, "--title", f"orc mission {m.name}：{request[:60]}",
                  "--body", body).splitlines()[-1].strip()
         pr = {"url": url, "number": int(url.rstrip("/").rsplit("/", 1)[1])}
@@ -4506,6 +4539,12 @@ def h_reviewing(m: Mission):
     outcome = final.get("outcome")
     if outcome == "rework":                  # 最终审查的模型判不通过：它已经把问题落到了节点上
         return reopen_for(m, final, "final", "最终审查")
+    if outcome == "drift-unroutable":         # 提案：证据文件不属于任何节点、或是没有节点去做的 missing，orc 不猜，问你
+        m.block("偏离评审的问题落不到节点",
+                f"mission {m.name} 结束时的偏离评审判了 drift：{final.get('reason', '')}\n\n"
+                "这些问题 orc 打回不了任何节点。回答后 orc 会在当前代码上重新做最终审查（回答不会交给评审），"
+                "代码不变时多半还是同样的结果。要放弃这个 mission 就运行 orc abandon。", "ask-user", "orc step")
+        return None, True
     if outcome != "passed":
         why = final.get("reason", "")
         qtype = "mediate" if outcome == "unroutable" else "ask-user"
@@ -4724,7 +4763,7 @@ def render_status(m: Mission, tip: str) -> str:
 
     # 最终审查、PR、CI
     def round_line(e: dict) -> str:
-        verdict = {"passed": "通过", "rework": "打回节点", "unavailable": "没能完成", "unroutable": "落不到节点",
+        verdict = {"passed": "通过", "rework": "打回节点", "unavailable": "没能完成", "unroutable": "落不到节点", "drift-unroutable": "偏离落不到节点",
                    "checks-failed": "检查没过，进入修复闭环"}.get(e.get("outcome"), e.get("outcome"))
         issues = "".join(f"<li>节点 <code>{esc(str(i.get('node')))}</code>：{esc(str(i.get('problem', '')))}</li>" for i in e.get("issues", []))
         return f"<li>第 {rounds.index(e) + 1} 轮（<code>{str(e.get('tip', ''))[:12]}</code>）：{verdict} {ref(e)}" + (f"<ul>{issues}</ul>" if issues else "") + "</li>"
