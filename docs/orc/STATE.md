@@ -324,7 +324,7 @@ pending → running → submitted → integrated
 
 ### 3. PR 和 CI（后台任务 `ci`）
 
-- **开 PR 前逐提交扫描**（2026-11-16，`proposals/2026-11-10-drift-review.md` 第 7 条决定）：推到 origin 之前，逐个扫描 mission 基线到 tip 的每个提交（不含集成的合并提交）：新增的行里有没有密钥的常见格式（私钥、AWS、GitHub、Anthropic、OpenAI、Slack、Google、Stripe），有没有超过 5 MB 的文件。偏离评审看累计 diff，最终审查和 CI 看最终代码，中间提交加进、又删掉的东西只有这一步看得到。结果记 `commit-scan` 事件（只记提交、文件和类型，不记命中的内容）。命中就停下 `ask-user`：只有回答「继续」（确认是误报）才推上去；回答别的会再扫一次、再问；不是误报就 `orc abandon` 后重开（orc 不改写历史）。
+- **开 PR 前逐提交扫描**（2026-11-16，`proposals/2026-11-10-drift-review.md` 第 7 条决定）：推到 origin 之前，逐个扫描 mission 基线到 tip 的每个提交：每个文件单独取补丁（路径不加引号），只看 hunk 之后的新增行；合并提交只看和所有父提交都不同的内容（`--cc`，用户手工解决冲突时加的），集成的合并、干净的合并没有这样的内容；子模块条目跳过。新增的行里有没有密钥的常见格式（私钥、AWS、GitHub、Anthropic、OpenAI、Slack、Google、Stripe），有没有超过 5 MB 的文件。偏离评审看累计 diff，最终审查和 CI 看最终代码，中间提交加进、又删掉的东西只有这一步看得到。结果记 `commit-scan` 事件（只记提交、文件和类型，不记命中的内容）。命中就停下 `ask-user`：只有回答「继续」（确认是误报）才推上去；回答别的会再扫一次、再问；回答「继续」确认过的（提交、文件、类型），tip 变了以后也不再问；不是误报就 `orc abandon` 后重开（orc 不改写历史）。
 
 - 产品仓库没有 `origin` 时停下（`next: error`），说明要先建远程仓库。不跳过。
 - 把 `orc/<mission>` 推到 `origin`，用 `gh` 开一个指向默认分支的 PR；已经有这个分支的 open PR 就用它。记 `pr` 事件。**合并由你来做。**

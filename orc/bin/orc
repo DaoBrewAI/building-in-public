@@ -3226,31 +3226,62 @@ SECRET_PATTERNS = [
 ]
 
 
+def scan_git(repo: Path, *args: str) -> bytes:
+    """扫描用的 git：路径不加引号（core.quotePath=false），路径参数按字面匹配，输出按字节返回。"""
+    r = subprocess.run(["git", "-c", "core.quotePath=false", "--literal-pathspecs", "-C", str(repo), *args],
+                       capture_output=True)
+    if r.returncode != 0:
+        raise OrcError(f"开 PR 前的提交扫描失败（git {' '.join(args[:2])}）：{r.stderr.decode('utf-8', 'replace').strip()[:300]}")
+    return r.stdout
+
+
+def added_lines(patch: str, parents: int) -> List[str]:
+    """一个文件的 -U0 补丁里新增的行。只看 hunk 头（@@ / 合并提交的 @@@）之后的行，不靠「+++ 」认文件头：
+    新增的行本身可能以「++ 」开头。合并提交（--cc）只算和所有父提交都不同的行（前缀每一列都是 +）。"""
+    head, plus, lines, in_hunk = "@" * (parents + 1) + " ", "+" * parents, [], False
+    for line in patch.splitlines():
+        if line.startswith(head):
+            in_hunk = True
+        elif in_hunk and line.startswith(plus):
+            lines.append(line[parents:])
+    return lines
+
+
 def scan_commits(m: Mission, base: str, tip: str) -> List[dict]:
-    """base..tip 的每个提交：新增的行里有没有密钥的常见格式，有没有超过 LARGE_FILE_BYTES 的文件。
+    """base..tip 的每个提交（含合并提交）：新增的行里有没有密钥的常见格式，有没有超过 LARGE_FILE_BYTES 的文件。
     只记位置和类型，不记命中的内容（不把密钥写进日志和问题里）。"""
     repo, found = m.repo(), []
-    # 集成的合并提交不单独扫：它带进来的改动就是节点自己的提交，已经逐个扫过
-    for sha in run_git(repo, "rev-list", "--reverse", "--no-merges", f"{base}..{tip}").split():
-        listing = run_git(repo, "diff-tree", "-r", "--no-commit-id", "--no-renames", sha)
-        for line in listing.splitlines():
-            meta, _, path = line.partition("\t")
-            parts = meta.split()
-            if len(parts) < 5 or parts[4] == "D" or parts[3].strip("0") == "":
+    for row in run_git(repo, "rev-list", "--reverse", "--parents", f"{base}..{tip}").splitlines():
+        sha, *parents = row.split()
+        if len(parents) > 1:
+            # 合并提交：只扫和所有父提交都不同的内容（用户手工解决冲突时加的）；集成的合并、干净的合并这里是空的
+            raw = scan_git(repo, "diff-tree", "-r", "-z", "--cc", "--name-only", "--no-commit-id", sha)
+            paths = [os.fsdecode(p) for p in raw.split(b"\0") if p]
+            changed = []
+            for path in paths:
+                entry = scan_git(repo, "ls-tree", "-z", sha, "--", path).split(b"\0")[0].decode("utf-8", "replace")
+                if entry:
+                    mode, _, blob = entry.split("\t")[0].split()
+                    changed.append((path, mode, blob))
+        else:
+            raw = scan_git(repo, "diff-tree", "-r", "-z", "--no-commit-id", "--no-renames", "--root", sha).split(b"\0")
+            changed = []
+            for meta, path in zip(raw[0::2], raw[1::2]):
+                parts = meta.decode().split()
+                if len(parts) >= 5 and parts[4] != "D":
+                    changed.append((os.fsdecode(path), parts[1], parts[3]))
+        for path, mode, blob in changed:
+            if mode == "160000":                 # 子模块条目：没有内容可扫
                 continue
-            size = int(run_git(repo, "cat-file", "-s", parts[3]) or 0)
+            size = int(scan_git(repo, "cat-file", "-s", blob).decode().strip() or 0)
             if size > LARGE_FILE_BYTES:
                 found.append({"commit": sha, "file": path, "kind": f"大文件（{size // 1024} KB）"})
-        patch = subprocess.run(["git", "-C", str(repo), "show", "--format=", "--no-renames", "-U0", sha],
-                               capture_output=True).stdout.decode("utf-8", "replace")
-        current = None
-        for line in patch.splitlines():
-            if line.startswith("+++ "):
-                current = line[6:] if line.startswith("+++ b/") else None
-            elif line.startswith("+") and current:
+            patch = scan_git(repo, "show", "--format=", "--no-color", "--no-ext-diff", "--no-renames", "-U0",
+                             *(["--cc"] if len(parents) > 1 else []), sha, "--", path).decode("utf-8", "replace")
+            for line in added_lines(patch, max(len(parents), 1)):
                 for kind, pattern in SECRET_PATTERNS:
                     if pattern.search(line):
-                        found.append({"commit": sha, "file": current, "kind": kind})
+                        found.append({"commit": sha, "file": path, "kind": kind})
     unique = []
     for f in found:
         if f not in unique:
@@ -3260,15 +3291,19 @@ def scan_commits(m: Mission, base: str, tip: str) -> List[dict]:
 
 def commit_scan_step(m: Mission, tip: str):
     """开 PR 前扫描一次。没命中就往下走；命中就停下问，只有用户回答「继续」（确认是误报）才推上去。"""
-    scans = [e for e in m.events() if e.get("kind") == "commit-scan" and e.get("tip") == tip]
-    if scans:
-        last = scans[-1]
-        if not last.get("findings"):
-            return None
-        answer = next((e for e in m.events() if e.get("kind") == "answer" and e.get("id") == last.get("question")), None)
-        if answer and Path(answer["file"]).is_file() and Path(answer["file"]).read_text(encoding="utf-8").strip() == "继续":
-            return None
-    findings = scan_commits(m, exec_setup(m)["base"], tip)
+    events = m.events()
+    answers = {e.get("id"): e for e in events if e.get("kind") == "answer"}
+
+    def confirmed(scan: dict) -> bool:
+        a = answers.get(scan.get("question"))
+        return bool(a) and Path(a["file"]).is_file() and Path(a["file"]).read_text(encoding="utf-8").strip() == "继续"
+    scans = [e for e in events if e.get("kind") == "commit-scan"]
+    here = [e for e in scans if e.get("tip") == tip]
+    if here and (not here[-1].get("findings") or confirmed(here[-1])):
+        return None
+    # 用户已经确认过是误报的（提交、文件、类型）不再问：修复闭环之后 tip 变了，旧提交的同一处不用再问一遍
+    ok = [f for e in scans if e.get("findings") and confirmed(e) for f in e["findings"]]
+    findings = [f for f in scan_commits(m, exec_setup(m)["base"], tip) if f not in ok]
     if not findings:
         m.append("commit-scan", "orc step", tip=tip, findings=[])
         return None

@@ -543,6 +543,63 @@ class PullRequestAndCI(AcceptCase):
             orc.LARGE_FILE_BYTES = old
         self.assertEqual([(f["file"], f["kind"]) for f in found], [("big.bin", "大文件（0 KB）")])
 
+    def test_keys_are_found_whatever_the_file_name_line_or_commit_kind(self):
+        # 评审实测漏掉的三种：非 ASCII 文件名（git 默认给路径加引号）、新增的行以「++ 」开头、合并提交里手工加的内容。
+        # 每个提交加一个密钥、之后都删掉：四个都要找到。子模块条目不让扫描出错
+        import types
+        repo = self.tmp / "scan-repo"
+        repo.mkdir()
+        g = lambda *a: subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True,
+                                      capture_output=True, text=True, env=self.env).stdout.strip()
+        g("init", "-q", "-b", "main")
+        (repo / "x.txt").write_text("x\n")
+        g("add", "."); g("commit", "-qm", "base")
+        base = g("rev-parse", "HEAD")
+        key = f"key={self.FAKE_KEY}\n"
+        (repo / "配置.py").write_text(key)
+        g("add", "."); g("commit", "-qm", "non-ascii")
+        (repo / "plus.txt").write_text("++ counter\n" + key)
+        g("add", "."); g("commit", "-qm", "plus")
+        (repo / "plain.txt").write_text(key)
+        g("add", "."); g("commit", "-qm", "plain")
+        g("checkout", "-qb", "side", base)
+        (repo / "side.txt").write_text("side\n")
+        g("add", "."); g("commit", "-qm", "side")
+        g("checkout", "-q", "main")
+        g("merge", "-q", "--no-ff", "--no-commit", "side")
+        (repo / "evil.py").write_text(key)                                   # 解决合并时手工加的
+        g("add", "."); g("commit", "-qm", "merge side")
+        g("update-index", "--add", "--cacheinfo", f"160000,{base},vendor/sub")
+        g("rm", "-q", "配置.py", "plus.txt", "plain.txt", "evil.py")
+        g("commit", "-qm", "remove keys, add submodule")
+        found = self.orc.scan_commits(types.SimpleNamespace(repo=lambda: repo), base, g("rev-parse", "HEAD"))
+        self.assertEqual(sorted(f["file"] for f in found), ["evil.py", "plain.txt", "plus.txt", "配置.py"])
+        self.assertEqual({f["kind"] for f in found}, {"AWS access key"})
+
+    def test_confirmed_findings_are_not_asked_again_after_the_tip_changes(self):
+        # 回答「继续」确认过的（提交、文件、类型），修复闭环之后 tip 变了也不再问
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": f"a\nkey={self.FAKE_KEY}\n"}, [1]), commit({"a.txt": "a\n"}, []))
+        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "多了一行", "evidence": "a.txt:2"}]}),
+                    json.dumps({"verdict": "pass", "issues": []}))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        first = self.ev("commit-scan")[-1]
+        self.answer("继续")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        orc, other = self.orc, "f" * 40                                      # 修复闭环之后的新 tip
+        with mock.patch.dict(os.environ, self.env), \
+                mock.patch.object(orc, "scan_commits", return_value=list(first["findings"])):
+            self.assertIsNone(orc.commit_scan_step(orc.Mission("m1"), other))   # 同一处，不再问
+        last = self.ev("commit-scan")[-1]
+        self.assertEqual((last["tip"], last["findings"]), (other, []))
+        new = [{**first["findings"][0], "file": "b.txt"}]
+        with mock.patch.dict(os.environ, self.env), mock.patch.object(orc, "scan_commits", return_value=new), \
+                mock.patch.object(orc.Mission, "block", return_value=Path("q.md")) as block:
+            self.assertEqual(orc.commit_scan_step(orc.Mission("m1"), "e" * 40), (None, True))   # 新的一处照样问
+        self.assertIn("`b.txt`：AWS access key", block.call_args[0][1])
+
     def test_ci_failure_blocks_and_answer_reruns_ci_only(self):
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]))
