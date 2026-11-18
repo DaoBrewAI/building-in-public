@@ -65,6 +65,15 @@ BLANK_LINE_REPRO = {"file": ".orc-repro/blank.py", "command": "python3 .orc-repr
                     "content": "import sys\nsys.exit(0 if open('a.txt').read().endswith('\\n\\n') else 1)\n"}
 
 
+
+def drift(file, why, rule="extra"):
+    """mission 结束时偏离评审的输出：一项 drift，证据是 tip 上 file 的第 1 行。orc 按 file 在签名 DAG 里的归属打回节点。"""
+    return json.dumps({"verdict": "drift", "drift": [{"rule": rule, "evidence": {"side": "tip", "file": file, "line": 1},
+                                                      "why": why}], "notes": []}, ensure_ascii=False)
+
+
+ALIGNED = json.dumps({"verdict": "aligned", "drift": [], "notes": []})
+
 class AcceptCase(ExecCase):
     def setUp(self):
         super().setUp()
@@ -110,6 +119,7 @@ class HappyPath(AcceptCase):
         self.assertFalse(any(f.startswith(".northstar") for f in call["files"]), call["files"])
         self.assertIn("+a", call["prompt"])                                # diff 在提示词里
         self.assertIn(self.git("show", "HEAD:.northstar/NORTHSTAR.md")[:20], call["prompt"])
+        self.assertIn("只写自己的一个文本文件", call["prompt"])            # 签名的简要设计（mission 结束时的偏离评审）
         # PR：推到 origin，指向默认分支；CI 等到 verify 和 exam 都通过
         self.assertEqual(subprocess.run(["git", "-C", str(self.origin), "rev-parse", "refs/heads/orc/m1"],
                                         capture_output=True, text=True).stdout.strip(), tip)
@@ -224,8 +234,7 @@ class FinalReview(AcceptCase):
         self.simple(("a", "b"))
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
         self.script("b", commit({"b.txt": "b\n"}, [1]))
-        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "违反 N1：多余空行检查", "evidence": "a.txt:1"}]}),
-                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("final", drift("a.txt", "违反 N1：多余空行检查"), ALIGNED)
         r = self.drive()
         self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
         reopen, = self.ev("node-reopen", node="a")
@@ -246,18 +255,18 @@ class FinalReview(AcceptCase):
         self.simple(("a",))
         fix = lambda n: commit({"a.txt": "a\n" + "\n" * n}, [])
         self.script("a", commit({"a.txt": "a\n"}, [1]), fix(1), fix(2), fix(3))
-        bad = json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "还是不对", "evidence": "a.txt:1"}]})
-        self.script("final", bad, bad, bad)
+        bad = drift("a.txt", "还是不对")
+        self.script("final", bad, bad)
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: mediate "), r.stdout + r.stderr)
-        self.assertIn("连续 3 次没通过", Path(self.next_line(r)[len("next: mediate "):]).read_text())
-        self.assertEqual(len(self.ev("node-reopen")), 2)                  # 打回 2 轮，第 3 次熔断
+        # 偏离评审打回 1 轮，第 2 次直接问你（11-10 定「停下问你」；林翰 11-17 定 mission 结束时也是 ask-user，不由 coordinator 答）
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的最终审查连续 2 次没通过"), r.stdout + r.stderr)
+        self.assertEqual(len(self.ev("node-reopen")), 1)
         self.assertEqual(self.state(), "blocked")
         # 回答后重新做最终审查（这次通过）
         self.answer("接受现状")
         r = self.drive()
         self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
-        self.assertEqual(len(self.calls("final")), 4)
+        self.assertEqual(len(self.calls("final")), 3)
 
     def two_nodes(self, check_a, check_b):
         tasks = [
@@ -274,8 +283,7 @@ class FinalReview(AcceptCase):
         # 最终审查打回 a，a 回「已经满足」、没有任何改动：撤回打回（不是集成时每一步都报错），在同一个提交上重新做最终审查
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({}, [1]))
-        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "少了什么", "evidence": "a.txt:1"}]}),
-                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("final", drift("a.txt", "少了什么"), ALIGNED)
         r = self.drive()
         self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
         self.assertEqual([e["node"] for e in self.ev("node-withdrawn")], ["a"])
@@ -289,8 +297,7 @@ class FinalReview(AcceptCase):
         # 之后撤回能回到 integrated
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({}, [1]))
-        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "a", "problem": "少了什么", "evidence": "a.txt:1"}]}),
-                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("final", drift("a.txt", "少了什么"), ALIGNED)
         orc, original = self.orc, self.orc.Mission.append
         crashed = []
 
@@ -470,13 +477,29 @@ class FinalReview(AcceptCase):
         self.assertEqual(len(self.ev("test-fix-withdrawn")), 1)
         self.assertIn("这个修正把测试放得太宽了", self.calls("diagnose")[1]["prompt"])   # 用户的意见交给诊断
 
-    def test_reviewer_output_that_names_an_unknown_node_blocks(self):
+    def test_final_review_by_another_model_blocks(self):
+        # 底线：最终审查的模型判断必须是配置的 review 模型做的；modelUsage 里混进 implement 的模型就不算，停下问，不放行
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]))
-        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "zzz", "problem": "p", "evidence": "e"}]}))
+        (self.fake / "model-usage-final-review").write_text(json.dumps({"claude-fable-5-2": {}, "claude-opus-5-5": {}}))
         r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的最终审查没能完成"), r.stdout)
-        self.assertIn("zzz", self.next_line(r))
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 的最终审查没能完成"), r.stdout + r.stderr)
+        self.assertIn("claude-opus-5-5", self.next_line(r))
+        final, = self.ev("job-exit", type="final")
+        self.assertEqual(final["outcome"], "unavailable")
+        (self.fake / "model-usage-final-review").unlink()
+        self.answer("重试")
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+
+    def test_drift_that_no_node_owns_blocks_instead_of_guessing(self):
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.script("final", drift("tests/orc/check_a.sh", "测试文件不归任何节点"))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user mission m1 结束时的偏离评审判了 drift"), r.stdout)
+        self.assertIn("定不出该打回哪个节点", self.next_line(r))
+        self.assertIn("orc abandon", sorted((self.mdir / "questions").glob("*.md"))[-1].read_text())
         self.assertEqual(self.ev("node-reopen"), [])
         self.answer("重试")
         r = self.drive()
@@ -484,6 +507,20 @@ class FinalReview(AcceptCase):
 
 
 class PullRequestAndCI(AcceptCase):
+    def test_drift_review_notes_go_into_the_pr_body(self):
+        # 提案「结果怎么用」：notes 写进 PR 正文的「评审意见」，不拦
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.script("drift", json.dumps({"verdict": "aligned", "drift": [], "notes": ["命名可以更统一"]}, ensure_ascii=False))
+        self.script("final", json.dumps({"verdict": "aligned", "drift": [], "notes": ["README 没提导出"]}, ensure_ascii=False))
+        r = self.drive()
+        self.assertEqual(self.next_line(r), "next: report https://claude.ai/artifact/fake-status", r.stdout + r.stderr)
+        create, = [a for a in self.gh_calls() if a[:2] == ["pr", "create"]]
+        body = create[create.index("--body") + 1]
+        self.assertIn("## 评审意见", body)
+        self.assertIn("- 节点 `a`：命名可以更统一", body)
+        self.assertIn("- 整个 mission：README 没提导出", body)
+
     def test_ci_failure_blocks_and_answer_reruns_ci_only(self):
         self.simple(("a",))
         self.script("a", commit({"a.txt": "a\n"}, [1]))
@@ -523,8 +560,7 @@ class PullRequestAndCI(AcceptCase):
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
         self.script("b", commit({"b.txt": "b\n"}, [1]),                # outside 时留下了临时文件：存成补丁再撤回
                     json.dumps({"write": {"b.tmp": "x"}, "out": {"status": "outside", "reason": "问题在 a.txt，不在 b.txt"}}))
-        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "b", "problem": "末尾少空行", "evidence": "a.txt"}]}),
-                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("final", drift("b.txt", "末尾少空行"), ALIGNED)
         self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾少一个空行", "files": ["a.txt"],
                                             "change": "加空行", "evidence": [{"file": "a.txt", "line": 1}],
                                             "repro": BLANK_LINE_REPRO}))
@@ -544,8 +580,7 @@ class PullRequestAndCI(AcceptCase):
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n\n"}, []))
         self.script("b", commit({"b.txt": "b\n"}, [1]),
                     json.dumps({"out": {"status": "question", "question": "问题好像不在 b.txt？"}}), b_reply)
-        self.script("final", json.dumps({"verdict": "fail", "issues": [{"node": "b", "problem": "末尾少空行", "evidence": "a.txt"}]}),
-                    json.dumps({"verdict": "pass", "issues": []}))
+        self.script("final", drift("b.txt", "末尾少空行"), ALIGNED)
         self.script("diagnose", json.dumps({"kind": "code", "cause": "a.txt 末尾少一个空行", "files": ["a.txt"],
                                             "change": "加空行", "evidence": [{"file": "a.txt", "line": 1}],
                                             "repro": BLANK_LINE_REPRO}))

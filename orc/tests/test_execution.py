@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """阶段 4 的契约测试：调度、执行会话、提交关口、broker、纠偏、整体评审、集成（docs/orc/STATE.md「执行」）。
 
-不调用真实模型：执行会话和「判断测试对错」用假的 claude，对齐评审用假的 northstar-review，都按脚本编排。
+不调用真实模型：执行会话、「判断测试对错」和偏离评审都用假的 claude，按脚本编排。假的 northstar-review 还装着，只用来确认 orc 不再调用它（2026-11-16 起提交关口不做对齐评审）。
 commit-broker.sh、integrate-task.sh、检查的沙箱（sandbox-exec）都是真的。
 执行会话的沙箱本身（git 只读、写不了 worktree 外、不能联网）是 Claude Code 的行为，这里只核对 orc 传给它的设置；
 实测记录见 docs/orc/proposals/2026-11-07-stop-gate-implement.md。
@@ -27,7 +27,10 @@ fake = pathlib.Path(os.environ["ORC_FAKE"])
 args = sys.argv[1:]
 prompt = sys.stdin.read()
 role = os.environ.get("ORC_ROLE")
-envelope = lambda result: print(json.dumps({"type": "result", "is_error": False, "result": result}, ensure_ascii=False))
+MODEL = args[args.index("--model") + 1] if "--model" in args else "claude-unknown-0"
+OVERRIDE = fake / f"model-usage-{os.environ.get('ORC_ROLE')}"   # 测试用：让这个角色的调用报别的模型
+USAGE = json.loads(OVERRIDE.read_text()) if OVERRIDE.exists() else {MODEL: {"inputTokens": 1}}
+envelope = lambda result: print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "result": result}, ensure_ascii=False))
 if role == "publish":
     # 假发布（阶段 5 的状态页）：记下调用，输出 claude.ai 链接
     pages = sorted(pathlib.Path(".").glob("*.html"))
@@ -36,9 +39,10 @@ if role == "publish":
         "pages": [p.name for p in pages]}, ensure_ascii=False))
     envelope(json.dumps({"url": f"https://claude.ai/artifact/fake-{pages[0].stem if pages else 'none'}"}))
     sys.exit(0)
-NAMES = {"final-review": "final", "notes": "notes", "canvas": "canvas", "phase-conclusion": "phase", "cross-review": "cross",
+NAMES = {"final-review": "final", "drift-review": "drift", "notes": "notes", "canvas": "canvas", "phase-conclusion": "phase", "cross-review": "cross",
          "diagnose": "diagnose", "repair-review": "repairreview"}
-DEFAULTS = {"final": '{"verdict": "pass", "issues": []}', "notes": "AUTO",
+DEFAULTS = {"final": '{"verdict": "aligned", "drift": [], "notes": []}', "drift": '{"verdict": "aligned", "drift": [], "notes": []}',
+            "notes": "AUTO",
             "canvas": '{"components": [{"id": "core", "name": "核心", "paths": ["*"]}]}',
             "phase": '{"items": [{"criterion": "主线跑通", "status": "met", "evidence": "PR 已合并"}]}',
             "cross": '{"verdict": "pass", "issues": [], "overrides_applied": []}',
@@ -48,6 +52,12 @@ if role in NAMES:
     # 最终审查 / 跨 mission 评审 / 画布 / phase 结论：按 script-<名字> 第 n 行，默认见 DEFAULTS。状态页说明默认 AUTO（引用提示词里列出的每个提交）
     name = NAMES[role]
     n = len(list(fake.glob(f"{name}-call-*.json"))) + 1
+    while True:                             # 几个节点的偏离评审会同时调用：用独占创建占一个编号
+        try:
+            os.close(os.open(fake / f"{name}-call-{n}.json", os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            break
+        except FileExistsError:
+            n += 1
     cwd = pathlib.Path(os.getcwd())
     (fake / f"{name}-call-{n}.json").write_text(json.dumps({"args": args, "cwd": os.getcwd(), "prompt": prompt,
         "files": sorted(str(p.relative_to(cwd)) for p in cwd.rglob("*") if p.is_file())}, ensure_ascii=False))
@@ -91,7 +101,7 @@ if step.get("sleep"):
 if "exit" in step:
     sys.exit(step["exit"])
 result = step["raw"] if "raw" in step else json.dumps(step["out"], ensure_ascii=False)
-print(json.dumps({"type": "result", "is_error": False, "session_id": session, "result": result}, ensure_ascii=False))
+print(json.dumps({"type": "result", "is_error": False, "modelUsage": USAGE, "session_id": session, "result": result}, ensure_ascii=False))
 '''
 
 FAKE_REVIEW = r'''#!/usr/bin/env python3
@@ -164,7 +174,8 @@ class ExecCase(PlanningCase):
         m = orc.create_mission("执行测试", str(self.repo), "m1")
         base = subprocess.run(["git", "-C", str(self.repo), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         plan, verify = m.dir / "plan", m.dir / "verify"
-        (plan / "design.md").write_text("# 设计\n\n每个节点写一个文本文件，内容就是节点名。\n")
+        (plan / "design.md").write_text("# 设计\n\n## 简要设计\n\n- 每个节点只写自己的一个文本文件，内容就是节点名。\n"
+                                        "- 不要新建别的文件。\n\n## 细节\n\n每个节点写一个文本文件，内容就是节点名。\n")
         (plan / "plan.md").write_text("# 计划\n每个节点一次提交。\n")
         (plan / "task-dag.json").write_text(json.dumps({"version": 1, "mission": "m1", "tasks": tasks}, ensure_ascii=False))
         for rel, body in tests.items():
@@ -274,10 +285,17 @@ class HappyPath(ExecCase):
             self.assertEqual(self.git("show", f"{tip}:{node}.txt"), node)
         self.assertEqual({e["node"]: e["to"] for e in self.ev("node-state")}, {"a": "integrated", "b": "integrated"})
         self.assertEqual(len(self.ev("commit")), 2)
-        roles = [c["role"] for c in self.calls("review")]
-        self.assertEqual(sorted(roles), ["auto", "auto", "review", "review"])   # 提交前 auto，整体评审 review
-        for c in self.calls("review"):
-            self.assertTrue(c["northstar"], "对齐评审在节点 worktree 里运行，能读到 NORTHSTAR")
+        # 不再每次提交都评审：每个节点做完时一次偏离评审（review 模型、只放行 Read、看不到 .northstar 和 .github）
+        self.assertEqual(self.calls("review"), [])
+        drifts = self.calls("drift")
+        self.assertEqual(len(drifts), 2)
+        for c in drifts:
+            self.assertIn(self.orc.resolve_models()["roles"]["review"]["model"], c["args"])
+            self.assertIn("--allowedTools=Read", c["args"])
+            self.assertFalse([f for f in c["files"] if f.startswith((".northstar", ".github"))])
+            self.assertIn("只写自己的一个文本文件", c["prompt"])            # 签名的简要设计
+            self.assertNotIn("## 细节", c["prompt"])                      # 只给简要设计，不给完整设计
+            self.assertIn("NORTHSTAR", c["prompt"])
         msg = self.git("log", "-1", "--format=%s", f"orc-task/m1/a")
         self.assertTrue(msg.startswith("[N1] a："), msg)                       # 提交说明带 N# 条款
         msg = self.git("log", "-1", "--format=%s", f"orc-task/m1/b")
@@ -378,7 +396,7 @@ class Gate(ExecCase):
         self.step()                                                   # 关口结束：拒绝，发回同一个会话
         gate, = self.ev("job-exit", type="gate")
         self.assertEqual((gate["outcome"], gate["category"]), ("rejected", "checks"))
-        self.assertEqual(self.calls("review"), [])                    # 检查不通过：不调用评审模型
+        self.assertEqual(self.calls("drift"), [])                     # 检查不通过：不调用评审模型
         self.assertEqual(self.ev("commit"), [])
         card = Path(gate["card"]).read_text()
         self.assertIn("ca", card)
@@ -389,42 +407,31 @@ class Gate(ExecCase):
         self.assertIn("--resume", second["args"])
         self.assertIn("纠偏单", second["prompt"])
 
-    def test_three_drifts_in_a_row_trip_the_breaker(self):
+    def test_three_rejections_in_a_row_trip_the_breaker(self):
+        # 提交关口连续被拒（这里是检查不过）：第 2 次撤回改动、新开会话，第 3 次熔断问人
         self.simple(("a",))
-        self.script("review", "DRIFT N1 被绕开", "DRIFT 仍然偏离", "DRIFT 第三次")
-        self.script("a", *[commit({"a.txt": "a\n"}, [1])] * 4)
+        self.script("a", *[commit({"a.txt": "wrong\n"}, [1])] * 3, commit({"a.txt": "a\n"}, [1]))
         r = self.drive()
         self.assertTrue(self.next_line(r).startswith("next: mediate "), r.stdout + r.stderr)
         self.assertEqual((self.mdir / "state").read_text().strip(), "blocked")
         self.assertTrue((self.mdir / "control" / "tasks" / "a" / "blocked").is_file())
         calls = self.calls("exec-a")
         self.assertEqual(len(calls), 3)
-        # 第 1 次：纠偏单发回同一个会话
-        self.assertIn("--resume", calls[1]["args"])
-        self.assertIn("N1 被绕开", calls[1]["prompt"])
-        # 第 2 次：改动撤回、存成补丁，新开会话（generation 2），发完整 brief 和纠偏单
-        self.assertIn("--session-id", calls[2]["args"])
+        self.assertIn("--resume", calls[1]["args"])                  # 第 1 次：纠偏单发回同一个会话
+        self.assertIn("--session-id", calls[2]["args"])              # 第 2 次：改动撤回、新开会话
         self.assertNotEqual(calls[2]["session"], calls[0]["session"])
         self.assertIn("执行规则", calls[2]["prompt"])
-        self.assertIn("仍然偏离", calls[2]["prompt"])
         self.assertTrue((self.mdir / "nodes" / "a" / "discarded-1.patch").is_file())
-        self.assertIn("+a", (self.mdir / "nodes" / "a" / "discarded-1.patch").read_text())
         self.assertEqual((self.mdir / "control" / "tasks" / "a" / "generation").read_text().strip(), "2")
-        # DRIFT 之后的复审带上上一次的原因（northstar-review 据此用 review 模型）
-        reviews = self.calls("review")
-        self.assertIsNone(reviews[0]["prev"])
-        self.assertIn("N1 被绕开", reviews[1]["prev"])
         self.assertEqual([e["count"] for e in self.ev("correction")], [1, 2, 3])
         self.assertEqual(self.ev("commit"), [])
-        # 裁决后：新开会话，带上回答，继续
-        self.answer("按设计只写 a，不要动别的")
+        self.answer("a.txt 的第一行写 a")
         r = self.drive()
         self.reached_reviewing(r)
         fourth = self.calls("exec-a")[3]
         self.assertIn("--session-id", fourth["args"])
-        self.assertIn("按设计只写 a", fourth["prompt"])
-        self.assertIn("已撤回", fourth["prompt"])                    # 熔断后重来，第 3 次被拒的改动也撤回
-        self.assertTrue((self.mdir / "nodes" / "a" / "discarded-2.patch").is_file())
+        self.assertIn("a.txt 的第一行写 a", fourth["prompt"])
+        self.assertIn("已撤回", fourth["prompt"])
 
     def test_acceptance_already_satisfied_is_confirmed_by_checks_without_a_commit(self):
         """真实运行里遇到的：第一次提交顺带满足了第二条验收标准，第二轮没有可改的东西。"""
@@ -436,45 +443,26 @@ class Gate(ExecCase):
         self.assertEqual(second["outcome"], "satisfied")
         self.assertEqual(set(second["checks"]), {"ca2", "ca"})             # 用冻结的检查确认
         self.assertEqual(len(self.ev("commit")), 1)                         # 没有新提交
-        self.assertEqual([c["role"] for c in self.calls("review")], ["auto", "review"])   # 没有 diff，不评审
+        self.assertEqual(len(self.calls("drift")), 1)                       # 节点做完时一次偏离评审
         self.assertIn("不改 worktree，`acceptance` 写它的编号", self.calls("exec-a")[0]["prompt"])   # brief 里写明了这种情况怎么交
 
     def test_one_success_resets_the_streak(self):
         self.simple(("a",), two_acceptance=True)
-        self.script("review", "DRIFT 一", "ALIGNED", "DRIFT 二", "ALIGNED")
-        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n"}, [1]),
-                    commit({"a2.txt": "a2\n"}, [2]), commit({"a2.txt": "a2\n"}, [2]))
+        self.script("a", commit({"a.txt": "x\n"}, [1]), commit({"a.txt": "a\n"}, [1]),
+                    commit({"a2.txt": "x\n"}, [2]), commit({"a2.txt": "a2\n"}, [2]))
         r = self.drive()
         self.reached_reviewing(r)
         self.assertEqual([e["count"] for e in self.ev("correction")], [1, 1])   # 中间提交成功一次，计数清零
         self.assertFalse(list((self.mdir / "nodes" / "a").glob("discarded-*.patch")))
 
-    def test_oversized_diff_is_rejected_not_truncated(self):
-        self.simple(("a",))
-        self.script("review", "LARGE")
-        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\n"}, [1]))
-        r = self.drive()
-        self.reached_reviewing(r)
-        first = self.ev("job-exit", type="gate")[0]
-        self.assertEqual((first["outcome"], first["category"]), ("rejected", "too-large"))
-        self.assertIn("拆成更小的提交", Path(first["card"]).read_text())
-        self.assertEqual(len(self.ev("commit")), 1)                  # 拆小后的那次才提交
-
-    def test_review_model_unavailable_blocks_instead_of_downgrading(self):
-        self.simple(("a",))
-        self.script("review", "UNAVAILABLE")
-        self.script("a", commit({"a.txt": "a\n"}, [1]))
-        r = self.drive()
-        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
-        self.assertIn("不降级", self.next_line(r))
-        self.assertEqual(len(self.calls("review")), 1)               # 没有换一个模型再审
-        self.assertEqual(self.calls("review")[0]["role"], "auto")
-        self.assertEqual(self.ev("commit"), [])
-        self.assertTrue((self.mdir / "control" / "tasks" / "a" / "blocked").is_file())
-        self.answer("重试")
-        r = self.drive()
-        self.reached_reviewing(r)
-        self.assertEqual(len(self.calls("exec-a")), 1)               # 重跑提交关口，不用再找执行会话
+    def test_gate_no_longer_reviews_each_commit(self):
+        # 偏离评审提案第 2 条决定：提交只靠冻结检查和底线；评审在节点做完时
+        self.simple(("a",), two_acceptance=True)
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a2.txt": "a2\n"}, [2]))
+        self.reached_reviewing(self.drive())
+        self.assertEqual([g["outcome"] for g in self.ev("job-exit", type="gate")], ["committed", "committed"])
+        self.assertTrue(all("review" not in g for g in self.ev("job-exit", type="gate")))
+        self.assertEqual(len(self.calls("drift")), 1)
 
     def test_commit_touching_frozen_tests_is_rejected(self):
         self.simple(("a",))
@@ -486,7 +474,7 @@ class Gate(ExecCase):
         self.assertEqual((first["outcome"], first["category"]), ("rejected", "tests"))
         self.assertIn("tests/orc/check_a.sh", first["reason"])
         self.assertEqual(first["checks"], {})                        # 不跑检查、不评审
-        self.assertEqual(len(self.calls("review")), 2)               # 只有第二次提交和整体评审
+        self.assertEqual(len(self.calls("drift")), 1)                # 提交关口不评审，节点做完时一次偏离评审
         tip = self.git("rev-parse", "orc/m1")
         self.assertEqual(self.git("show", f"{tip}:tests/orc/check_a.sh"), "grep -q '^a$' a.txt")
 
@@ -506,7 +494,7 @@ class Gate(ExecCase):
         gate, = self.ev("job-exit", type="gate")
         self.assertEqual((gate["outcome"], gate["category"]), ("rejected", "tests"))
         self.assertIn("哈希不一致", gate["reason"])
-        self.assertEqual(self.calls("review"), [])
+        self.assertEqual(self.calls("drift"), [])
 
     def test_files_outside_the_node_are_rejected(self):
         self.simple(("a", "b"), depends={"b": ["a"]})
@@ -936,9 +924,13 @@ class Disputes(ExecCase):
 
 
 class NodeReview(ExecCase):
+    DRIFT = json.dumps({"verdict": "drift", "drift": [{"rule": "extra", "evidence": {"side": "tip", "file": "a.txt", "line": 1},
+                                                       "why": "整体上绕开了设计"}], "notes": []}, ensure_ascii=False)
+    ALIGNED = json.dumps({"verdict": "aligned", "drift": [], "notes": ["顺带一提"]}, ensure_ascii=False)
+
     def test_node_review_drift_sends_the_node_back_to_rework(self):
         self.simple(("a",))
-        self.script("review", "ALIGNED", "DRIFT 整体上绕开了设计", "ALIGNED", "ALIGNED")
+        self.script("drift", self.DRIFT, self.ALIGNED)
         self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\nfixed\n"}, []))
         r = self.drive()
         self.reached_reviewing(r)
@@ -948,9 +940,123 @@ class NodeReview(ExecCase):
         self.assertFalse((self.mdir / "control" / "tasks" / "a" / "unresolved-rework").exists())
         second = self.calls("exec-a")[1]
         self.assertIn("整体评审没通过", second["prompt"])
-        self.assertIn("整体上绕开了设计", second["prompt"])
-        roles = [c["role"] for c in self.calls("review")]
-        self.assertEqual(roles, ["auto", "review", "auto", "review"])
+        self.assertIn("[extra] a.txt:1：整体上绕开了设计", second["prompt"])
+        drifts = self.calls("drift")
+        self.assertEqual(len(drifts), 2)
+        self.assertIn("整体上绕开了设计", drifts[1]["prompt"])           # 重评带上上一次的原因
+        self.assertIn('"id": "a"', drifts[0]["prompt"])                  # 节点评审带节点的 DAG 条目
+        # 集成的就是偏离评审看过的那个提交
+        reviewed = submits[1]["head"]
+        self.assertEqual((self.mdir / "nodes" / "a" / "verification.sha").read_text().strip(), reviewed)
+        self.assertIn("偏离评审 aligned", (self.mdir / "control" / "tasks" / "a" / "coordinator-verification.md").read_text())
+
+    def test_second_drift_in_a_row_stops_and_asks(self):
+        # 11-10 定：第二次还是 drift 就停下问你（ask-user，不是 coordinator 自己答）；回答发给执行会话，之后计数清零
+        self.simple(("a",))
+        self.script("drift", self.DRIFT, self.DRIFT, self.ALIGNED)
+        self.script("a", commit({"a.txt": "a\n"}, [1]), commit({"a.txt": "a\nb\n"}, []), commit({"a.txt": "a\nc\n"}, []))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 节点 a 的偏离评审连续 2 次判 drift"), r.stdout + r.stderr)
+        self.assertEqual(len(self.calls("exec-a")), 2)
+        self.answer("这个节点只写 a.txt 的第一行，别的都不要")
+        r = self.drive()
+        self.reached_reviewing(r)
+        self.assertIn("只写 a.txt 的第一行", self.calls("exec-a")[2]["prompt"])
+        self.assertEqual([s["outcome"] for s in self.ev("job-exit", type="submit")], ["rework", "rework", "aligned"])
+        self.assertIn("整体上绕开了设计", self.calls("drift")[2]["prompt"])      # 回答之后的重评也带上一次的原因
+        # 状态页按 review 事件数 DRIFT
+        self.assertEqual([e["verdict"] for e in self.ev("review", node="a")], ["DRIFT", "DRIFT", "ALIGNED"])
+        self.assertEqual({e["stage"] for e in self.ev("review", node="a")}, {"node"})
+
+    BAD = json.dumps({"verdict": "drift", "drift": [{"rule": "N1", "evidence": {"side": "tip", "file": "a.txt", "line": 99},
+                                                     "why": "x"}]})
+
+    def test_bad_evidence_is_sent_back_to_be_rewritten(self):
+        # orc 核对证据的文件和行：不对就发回重写一次
+        self.simple(("a",))
+        self.script("drift", self.BAD, self.ALIGNED)
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        self.reached_reviewing(self.drive())
+        drifts = self.calls("drift")
+        self.assertEqual(len(drifts), 2)
+        self.assertIn("a.txt 在 tip 上只有 1 行，没有第 99 行", drifts[1]["prompt"])
+        self.assertEqual([s["outcome"] for s in self.ev("job-exit", type="submit")], ["aligned"])
+
+    def test_output_failing_the_checks_twice_blocks(self):
+        # 第二次还不合格：不放行、不降级，停下问；回答「重试」重新评审
+        self.simple(("a",))
+        nope = json.dumps({"verdict": "drift", "drift": [{"rule": "N99", "evidence": {"file": "nope.txt", "line": 1}, "why": "x"}]})
+        self.script("drift", self.BAD, nope)
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user 节点 a 的整体评审没能完成"), r.stdout + r.stderr)
+        question = sorted((self.mdir / "questions").glob("*.md"))[-1].read_text()
+        self.assertIn("连续 2 次没有通过核对", question)
+        self.assertIn("N99 不在 NORTHSTAR 里", question)
+        self.answer("重试")
+        self.reached_reviewing(self.drive())
+        self.assertEqual(len(self.calls("drift")), 3)
+
+    def test_head_changed_after_review_is_reviewed_again_before_integration(self):
+        # 偏离评审之后节点的 HEAD 又变了（测试修正后同步、集成失败后改了提交）：不集成，回到整体评审，集成新评审过的提交
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        orc, original = self.orc, self.orc.launch_integrate
+        changed = []
+
+        def change_then_integrate(m, node):
+            if not changed:
+                wt = self.wt(node)
+                (wt / "a.txt").write_text("a\n\n")
+                subprocess.run(["git", "-C", str(wt), "-c", "core.hooksPath=/dev/null", "commit", "-qam", "[N1] a：评审之后的提交"],
+                               check=True, env=self.env)
+                changed.append(subprocess.run(["git", "-C", str(wt), "rev-parse", "HEAD"], capture_output=True,
+                                              text=True).stdout.strip())
+            return original(m, node)
+        orc.launch_integrate = change_then_integrate
+        try:
+            with mock.patch.dict(os.environ, self.env):
+                for _ in range(40):
+                    nxt = orc.step(orc.Mission("m1"))
+                    if changed or not str(nxt).startswith("wait"):
+                        break
+                    self.run_orc("wait", "--mission", "m1", "--timeout", "60")
+        finally:
+            orc.launch_integrate = original
+        self.assertTrue(changed)
+        deferred, = self.ev("integrate-deferred", node="a")
+        self.assertEqual(deferred["head"], changed[0])
+        self.reached_reviewing(self.drive())
+        submits = self.ev("job-exit", type="submit")
+        self.assertEqual([s["outcome"] for s in submits], ["aligned", "aligned"])
+        self.assertEqual(submits[1]["head"], changed[0])
+        self.assertEqual(len(self.calls("drift")), 2)
+        self.assertEqual((self.mdir / "nodes" / "a" / "verification.sha").read_text().strip(), changed[0])
+        self.assertEqual(self.git("show", "orc/m1:a.txt"), "a")      # 集成的是第二次评审过的提交（多一个空行）
+        self.assertIn("\n\n", subprocess.run(["git", "-C", str(self.repo), "show", "orc/m1:a.txt"],
+                                               capture_output=True, text=True).stdout)
+
+    def test_review_crash_blocks_instead_of_downgrading(self):
+        self.simple(("a",))
+        self.script("drift", "crash")
+        self.script("a", commit({"a.txt": "a\n"}, [1]))
+        r = self.drive()
+        self.assertTrue(self.next_line(r).startswith("next: ask-user "), r.stdout + r.stderr)
+        self.assertIn("不降级", self.next_line(r))
+        self.assertEqual(len(self.calls("drift")), 1)                # 没有换一个模型再审
+        self.answer("重试")
+        r = self.drive()
+        self.reached_reviewing(r)
+        self.assertEqual(len(self.calls("exec-a")), 1)               # 重做整体评审，不用再找执行会话
+
+    def test_large_diff_goes_by_file_list_and_read(self):
+        self.simple(("a",))
+        self.script("a", commit({"a.txt": "a\n" + "x" * 70000 + "\n"}, [1]))
+        self.reached_reviewing(self.drive())
+        prompt = self.calls("drift")[0]["prompt"]
+        self.assertIn("超过 60000", prompt)
+        self.assertNotIn("x" * 1000, prompt)
+        self.assertIn("a.txt", self.calls("drift")[0]["files"])       # 代码副本里有，评审用 Read 看
 
 
 class Recheck(ExecCase):

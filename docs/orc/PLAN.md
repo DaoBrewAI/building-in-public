@@ -18,12 +18,12 @@
 | 模型 | **2026-11-07 改**（见 `proposals/2026-11-07-claude-implement.md`）：实现和规划用 Claude Opus（目前 `claude-opus-5-5`）；重要、复杂的评审用 Claude 当前最强（目前 `claude-fable-5-1`，不降级，不能和实现用同一个模型），简单评审用 Opus。分级规则写在代码里。按"最强"由用户手动更新，名字只写在 `config/models.toml` |
 | 子任务 | **2026-11-07 改**：`claude -p`（Claude Code 无界面模式）后台运行，每个任务一个独立 worktree；开沙箱，主仓库 `.git` 设 denyWrite |
 | 并发 | 第一版就支持并行：DAG 里声明文件互不重叠、前置都已集成的节点同时跑；集成按顺序加锁 |
-| 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单。**2026-11-07 改**（见 `proposals/2026-11-07-commit-gate.md`）：对齐评审在 broker 之前的提交关口里做（锁外），broker 只提交评审过的字节（`diff_sha256` 绑定），复用的 broker 脚本不改 |
+| 提交 | 子任务一律通过 commit broker 提交（执行会话的沙箱对主仓库 `.git` denyWrite，git 只读，已实测）；broker 里由 Claude 做对齐评审，偏离就拒绝并发纠偏单。**2026-11-07 改**（见 `proposals/2026-11-07-commit-gate.md`）：对齐评审在 broker 之前的提交关口里做（锁外），broker 只提交评审过的字节（`diff_sha256` 绑定），复用的 broker 脚本不改。**2026-11-16 改**（见 `proposals/2026-11-10-drift-review.md`）：提交关口只跑冻结检查和底线，不再做对齐评审；方向在节点做完时和 mission 结束时由偏离评审判断（orc 直接调用 `claude -p`，不经过 `northstar-review`）；broker 的 `diff_sha256` 绑定检查过的字节，集成的是偏离评审看过的提交（`integrate-task.sh` 核对 `verification.sha`） |
 | 验证 | **2026-11-07 加**（见 `proposals/2026-11-07-tests-before-implement.md`）：验收测试和检查在设计之后、实现之前，由一个独立的会话写好（`review` 角色的模型，和执行用的不同；看不到规划过程和计划）。每个检查都要先在当前代码上实际跑一遍：测新行为的必须失败。测试随设计、计划一起冻结签名；执行阶段只能读、不能改，只有这些检查算数 |
 | 给人看的页面 | **2026-11-07 改**（见 `proposals/2026-11-07-review-page-artifacts.md`）：计划审阅页和状态页都发布成仅本人可见的 Claude Artifact，手机和电脑都能看。原来是 OpenAI Sites。**2026-11-07 加**（见 `proposals/2026-11-07-cross-mission-review.md`）：另有一个全产品的汇总页，也是 Artifact，链接不变，每完成一个 mission 更新一次 |
 | 产品设计和 phase | **2026-11-07 加**（见 `proposals/2026-11-07-cross-mission-review.md`）：四层，产品设计文档 → NORTHSTAR → phase → mission。orc 从产品设计文档起草画布（组件、连线、组件对应的目录），写成 `.northstar/architecture.json`，用户签名后 agent 改不了；DAG 节点的组件只能从画布里选。orc 按 phase 文档里的依赖启动 mission。每个 mission 合进主线前做一次跨 mission 评审（`review` 模型，不降级）：默认以已合并的为准，冲突就退回重做；只有签名设计里「推翻的已有决定」一节写明的才放行。mission 的 `scope` 和 `forbid` 由信任层硬拦截，不进 NORTHSTAR |
 | 签名 | 单台 Mac，Secretive + Touch ID；你说 go 之后用 `northstar approve-mission` 签名 |
-| 默认参数 | 每次提交最多 8 个文件；同一节点连续偏离 3 次熔断；并发上限写在配置里 |
+| 默认参数 | 每次提交最多 8 个文件（只管 agent 自己直接提交，见 `align.sh`；orc 的提交路径不受它限制）；提交关口同一节点连续被拒 3 次熔断；偏离评审：节点连续第 2 次 drift 停下问，mission 结束时打回 1 轮、第 2 次问（**2026-11-16 改**，见 `proposals/2026-11-10-drift-review.md`）；并发上限写在配置里 |
 
 ## 文件夹里有什么
 
