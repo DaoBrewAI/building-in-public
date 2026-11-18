@@ -1,6 +1,6 @@
 # 提案：连续偏离交给 Fable 5.2 仲裁，人只在最后拍板
 
-状态：**草案（第 2 版）**。第 1 版（`0d42309`）经 Fable 5.2 评审（云端评审会话），要改 5 处、应改 4 处、「要你定的」漏了 4 条，这一版都改了。等复查和林翰定。定了以后在偏离评审的第 3 个实现 PR（#25）里一起实现，#25 等它。
+状态：**草案（第 2 版）**。第 1 版（`0d42309`）经 Fable 5.2 评审，要改 5 处、应改 4 处、「要你定的」漏了 4 条，第 2 版（`07bd9f7`）都改了；复查结论是可以交给林翰定，交之前补的 2 处也补了。等林翰定。定了以后在偏离评审的第 3 个实现 PR（#25）里一起实现，#25 等它。
 
 ## 起因
 
@@ -19,7 +19,7 @@
 - **「一串」从哪里开始**（计数清零）：只有这三件事清零：
   1. 偏离评审判 `aligned`（或仲裁 `overrule`）；
   2. 节点被重新打开（`node-reopen`）；
-  3. 你回答了**这一串的**问题（连续偏离、`escalate`、仲裁出错的提问），见「你回答之后」。
+  3. 你回答了**这一串的**问题（连续偏离、`escalate`、仲裁出错的提问）。回答之后不再从「第 2 次 drift 起」数，而是直接仲裁，见「你回答之后」。
   - 其他回答**不清零**：执行会话输出格式不对、提交连续被拒、集成失败这些 `mediate` 由 coordinator 回答，插在两次 drift 之间也不会让计数重来。#25 现在的 `node_drift_events` 遇到任何 `node-unblocked` 都断开，要改成只认上面第 3 种（`node-blocked` 记 `resume: "arbiter"`，只有这种的 `node-unblocked` 清零）。
 - **不在范围内**：跨 mission 评审的熔断（仍是 `mediate`）、定不出节点的 drift（`drift-unroutable`，仍问你）、执行会话格式不对、集成失败等其他 `mediate`。
 
@@ -78,7 +78,12 @@
 
 三种停下都会问你：`escalate`、2 次仲裁之后还是 `drift`、仲裁出错（输出两次不合格、模型不对、超时）。回答之后：
 
-- **直接仲裁一次**，不是清零后再等两轮评审：head 没变，就在当前 head 上对最近一次评审的 drift 再仲裁；head 变了（不该发生），照旧回到整体评审。这次仲裁开始新的一串，上限仍是 2 次。
+- **直接仲裁一次**，不是清零后再等两轮评审。这次仲裁算新一串的第 1 次，上限仍是 2 次：回答 → 仲裁 1 → `fix` → drift → 仲裁 2 → `fix` → drift → 问你。回答之后的 drift 每一次都直接仲裁，不再先自动打回。
+- **只跑仲裁，不重跑检查和偏离评审**，所以开始前先核对：
+  - 节点：HEAD 就是最近一次评审的 `head`，worktree 干净；mission 结束时：tip 就是最近一次最终审查的 tip。
+  - 不是就改跑整体评审（节点）或最终审查（mission 结束）。这会发生：测试修正签名后，`finalize_test_fix` 会把停着等回答的节点也 `sync_to_tip`。
+  - 检查不重跑的理由：同一个 head 上的冻结检查已经在那次评审的任务里全过了。
+- mission 结束时，现在没通过的最终审查结果被回答后会作废重跑（`mission_exit`）；改成只跑仲裁，并按上面核对 tip。
 - **回答是给仲裁的材料，不是放行令**。回答是 coordinator 用 `orc answer` 写进来的，没有签名；仲裁把它当放行依据，就等于 coordinator 能绕过方向这道关。所以仲裁仍然要引用 NORTHSTAR、简要设计或验收标准才能 `overrule`；回答只能帮仲裁判断那些条款怎么理解。
 - **回答不能改签了名的东西**：要改目标或范围，就 `orc abandon` 后重开（SKILL 第 7 条）。问题里会写明这一点。
 - 回答不再直接发给执行会话；仲裁判 `fix` 时，修改说明会照常进纠偏单。
@@ -87,7 +92,9 @@
 ### 底线不变
 
 - 仲裁不能改测试、NORTHSTAR、签名设计、DAG，不能放宽文件范围。冻结检查在评审之前跑，仍然必须全过。
-- 集成的仍是评审（或仲裁）看过的那个提交：仲裁和偏离评审在同一个后台任务、同一个 head 上跑，`overrule` 记成带这个 head 的 `aligned`；`verification.sha` 写这个 head，`integrate-task.sh` 在集成锁里核对。
+- 集成的仍是评审（或仲裁）看过的那个提交：
+  - 第 2 次 drift 起的仲裁和偏离评审在同一个后台任务、同一个 head 上跑；你回答之后的仲裁是单独的任务，开始前核对 head 就是那次评审的 head（见「你回答之后」）。
+  - 两种 `overrule` 都记成带这个 head 的通过结果；`launch_integrate` 现在只认 `submit` 任务的 `aligned`，要也认这种结果，用它的 head 写 `verification.sha`，仍由 `integrate-task.sh` 在集成锁里核对。
 - 仲裁用的模型和执行用的模型不同（`review` ≠ `implement`，`resolve_models` 已经检查）。
 
 ### 你在最后拍板
@@ -117,7 +124,9 @@
 ## 实现要点
 
 - 仲裁在整体评审（`run_submit`）和最终审查（`run_final`）的后台任务里，紧接着偏离评审同步跑，结果并进同一个 `job-exit`：`outcome` 是 `aligned`（overrule）、`rework`（fix，`category` 是 `arbiter`）或新的 `escalate`。
-- 你回答之后的那次仲裁：新的后台任务类型，只跑仲裁，用最近一次评审的结果和当前 head；head 变了就改跑整体评审。
+- 你回答之后的那次仲裁：新的后台任务类型，只跑仲裁，用最近一次评审的结果；开始前核对 head 和 worktree，变了就改跑整体评审（或最终审查）。`launch_integrate` 和集成调度也认它的 `overrule`。
+- 节点被 `overrule` 后 HEAD 变了、重评（`integrate-deferred`）时，也带上本节点被 overrule 的条目（`prior_node_drift` 现在遇到 `aligned` 就返回空）。
+- mission 结束时 `overrule` 的 `ref` 不能是 `acceptance:N`（没有「本节点」），沿用偏离评审的核对。
 - `node_drift_events` 只在 `aligned`、`node-reopen`、`resume` 是 `arbiter` 的 `node-unblocked` 处断开；`prior_node_drift` 也认 `arbiter` 纠偏单。
 - `ensure_pr` 找到已有 PR 时用 `gh pr edit --body` 重写正文。
 - 新模板 `orc/templates/arbiter-brief.md`；新常量 `ARBITER_ROUNDS = 2`；`NODE_DRIFT_STOP` 和 `FINAL_DRIFT_ROUNDS` 的含义改成「从第几次 drift 起仲裁」。
